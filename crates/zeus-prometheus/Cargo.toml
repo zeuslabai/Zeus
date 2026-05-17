@@ -1,0 +1,73 @@
+[package]
+name = "zeus-prometheus"
+description = "Brain/Orchestration engine for Zeus - Planner, Executor, Heartbeat"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+sha2 = "0.10"
+zeus-core = { workspace = true }
+zeus-agent = { workspace = true }
+zeus-session = { workspace = true }
+zeus-llm = { workspace = true }
+zeus-memory = { workspace = true }
+zeus-mnemosyne = { workspace = true }
+zeus-nous = { workspace = true }
+zeus-orchestra = { workspace = true }
+zeus-talos = { workspace = true }
+zeus-templates = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+humantime = { workspace = true }
+hostname = "0.4"
+
+# Scheduling
+cron = { workspace = true }
+
+# Database
+rusqlite = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# OpenTelemetry
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+
+# IDs
+uuid = { version = "1.0", features = ["v4"] }
+rand = "0.8"
+serde_yaml.workspace = true
+toml = { workspace = true }
+ulid = { workspace = true }
+
+# Paths
+dirs = { workspace = true }
+
+# Packaging
+zip = { workspace = true }
+
+# HTTP client
+reqwest = { workspace = true }
+
+# Regex (acceptance checks)
+regex = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+tempfile = { workspace = true }

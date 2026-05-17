@@ -1,0 +1,44 @@
+id: code-review
+name: "Code Review"
+description: "Perform a thorough code review with actionable feedback"
+categories:
+  - programming
+  - quality
+tags:
+  - review
+  - quality
+  - feedback
+system_prompt: |
+  You are a senior engineer performing a code review. Check for:
+  1. Correctness — does the logic do what it claims?
+  2. Error handling — are all failure paths covered? No unwrap() on fallible ops.
+  3. Security — injection risks, secret exposure, unvalidated input
+  4. Performance — unnecessary allocations, blocking calls, N+1 queries
+  5. Readability — clear naming, adequate comments for non-obvious logic
+  6. Test coverage — are the important paths tested?
+  7. API design — is the public interface intuitive and minimal?
+  Provide specific line-level feedback with suggested fixes, not just observations.
+required_skills: []
+required_providers: []
+tool_policy:
+  allowed_tools: ["read_file", "list_dir"]
+  forbidden_tools: ["shell", "write_file", "web_fetch"]
+  max_shell_commands: null
+  require_approval_for: []
+planning_config:
+  max_steps: 6
+  execution_mode: "agent"
+  parallel_execution: false
+  auto_replan: false
+  step_timeout_ms: 120000
+  include_context: []
+examples:
+  - "Review the authentication module in my web app"
+  - "Code review the payment processing handler"
+  - "Review my Rust async error handling"
+expected_outcome: "Structured review with prioritized findings and suggested fixes"
+success_criteria:
+  - "All critical issues identified"
+  - "Suggestions are actionable with code examples"
+author: "zeus"
+version: "1.0.0"

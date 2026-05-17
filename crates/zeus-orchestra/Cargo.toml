@@ -1,0 +1,30 @@
+[package]
+name = "zeus-orchestra"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Multi-agent collaboration and delegation for Zeus"
+
+[dependencies]
+zeus-core = { path = "../zeus-core" }
+tokio = { workspace = true, features = ["full"] }
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+cron.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+dashmap = "6.1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+criterion = { workspace = true }
+serde_json = { workspace = true }
+
+[[bench]]
+name = "orchestra_benchmarks"
+harness = false

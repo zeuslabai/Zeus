@@ -1,0 +1,14 @@
+Zeus is an autonomous AI assistant written in Rust with persistent memory,
+8 core tools, unified LLM provider support (11 providers including Anthropic,
+OpenAI, Ollama, and more), multi-channel chat (Telegram, Discord, Slack,
+Email, Matrix, and more), cognitive engine, security sandboxing, and a REST
+API with 105+ endpoints.
+
+Features:
+  - File-based and SQLite-backed memory with FTS5 and vector search
+  - 8 core tools: read/write/edit files, list dirs, shell, web fetch, spawn, message
+  - TUI with 10 screens, REST API with WebSocket streaming
+  - Cognitive engine with intent recognition and learning
+  - Security sandbox with command filtering and approval system
+  - Session management with replay, branching, and audit trails
+  - Cross-session pattern recognition and proactive memory retrieval

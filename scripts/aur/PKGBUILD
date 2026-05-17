@@ -1,0 +1,47 @@
+# Maintainer: Zeus Team <hello@zeuslab.ai>
+# AUR package: zeus
+# Builds from source using the Rust toolchain
+
+pkgname=zeus
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Autonomous AI assistant with 327 tools and 11 LLM providers — TUI, API server, and multi-channel chat"
+arch=('x86_64' 'aarch64')
+url="https://zeuslab.ai"
+license=('MIT' 'Apache-2.0')
+depends=('openssl' 'sqlite' 'ca-certificates')
+makedepends=('rust' 'cargo' 'git')
+optdepends=(
+    'ollama: local LLM inference'
+    'curl: HTTP tool support'
+)
+source=("${pkgname}-${pkgver}.tar.gz::https://github.com/zeuslabai/Zeus/archive/v${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "Zeus-${pkgver}"
+    export RUSTFLAGS="-C target-cpu=native"
+    cargo build --release --bin zeus
+}
+
+package() {
+    cd "Zeus-${pkgver}"
+
+    # Binary
+    install -Dm755 "target/release/zeus" "${pkgdir}/usr/bin/zeus"
+
+    # Shell completions
+    if [ -d "scripts/completions" ]; then
+        install -Dm644 "scripts/completions/zeus.bash" "${pkgdir}/usr/share/bash-completion/completions/zeus" 2>/dev/null || true
+        install -Dm644 "scripts/completions/zeus.zsh" "${pkgdir}/usr/share/zsh/site-functions/_zeus" 2>/dev/null || true
+        install -Dm644 "scripts/completions/zeus.fish" "${pkgdir}/usr/share/fish/vendor_completions.d/zeus.fish" 2>/dev/null || true
+    fi
+
+    # systemd user service
+    install -Dm644 "scripts/systemd/zeus-gateway.service" \
+        "${pkgdir}/usr/lib/systemd/user/zeus-gateway.service"
+
+    # License
+    install -Dm644 "LICENSE-MIT" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-MIT" 2>/dev/null || true
+    install -Dm644 "LICENSE-APACHE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-APACHE" 2>/dev/null || true
+}

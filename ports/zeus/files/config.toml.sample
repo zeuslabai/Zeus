@@ -1,0 +1,42 @@
+# Zeus configuration
+# See https://github.com/zeuslabai/Zeus for full documentation.
+
+# LLM model in provider/model format
+model = "anthropic/claude-sonnet-4-20250514"
+
+# Data directories
+workspace = "/var/db/zeus/workspace"
+sessions = "/var/db/zeus/sessions"
+
+# Maximum agent loop iterations per request
+max_iterations = 20
+
+# API server configuration
+[api]
+host = "127.0.0.1"
+port = 8080
+cors = false
+# auth_token = "your-secret-token"
+
+# TUI settings (not used in daemon mode)
+[tui]
+theme = "dark"
+vim_mode = false
+
+# Mnemosyne advanced memory
+[mnemosyne]
+db_path = "/var/db/zeus/mnemosyne.db"
+enable_fts = true
+# enable_embeddings = false
+
+# Security
+[aegis]
+level = "standard"
+
+# Notifications
+[hermes]
+default_channel = "console"
+
+# Cognitive engine
+[nous]
+enable_learning = true

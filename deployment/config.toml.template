@@ -1,0 +1,64 @@
+# Zeus Configuration Template
+# Copy to ~/.zeus/config.toml and customize for your node
+#
+# Variables to replace:
+#   {{MODEL}}       — LLM model string (e.g. "ollama/glm-4.7-flash:latest")
+#   {{OLLAMA_URL}}  — Ollama server URL (e.g. "https://ollama.novaxai.ai")
+#   {{HOME}}        — User home directory
+#
+# API keys and bot tokens go in ~/.zeus/.env (not here).
+
+model = "{{MODEL}}"
+workspace = "{{HOME}}/.zeus/workspace"
+sessions = "{{HOME}}/.zeus/sessions"
+max_iterations = 20
+max_subagent_iterations = 15
+onboarding_complete = true
+
+[tui]
+theme = "dark"
+vim_mode = false
+
+[auth]
+use_oauth = false
+
+[ollama]
+url = "{{OLLAMA_URL}}"
+
+# ── Memory (Mnemosyne) ─────────────────────────────────────
+[mnemosyne]
+db_path = "{{HOME}}/.zeus/memory.db"
+enable_fts = true
+
+# ── Talos (macOS Automation) ────────────────────────────────
+[talos]
+enable_applescript = true
+
+# ── MCP Server ──────────────────────────────────────────────
+[mcp_server]
+enable_talos = true
+enable_agents = false
+enable_mnemosyne = true
+
+# ── Gateway ─────────────────────────────────────────────────
+[gateway]
+host = "127.0.0.1"
+port = 8080
+enable_mcp = true
+mcp_port = 3002
+enable_channels = true
+enable_heartbeat = false
+enable_cron = false
+enable_api = true
+
+# ── Telegram Relay (Bot API) ───────────────────────────────
+# Tokens loaded from TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID in ~/.zeus/.env
+[telegram_relay]
+
+# ── Nous (Cognitive Engine) ─────────────────────────────────
+[nous]
+enable_learning = true
+
+# ── Hermes (Notifications) ─────────────────────────────────
+[hermes]
+default_channel = "console"

@@ -1,0 +1,39 @@
+[package]
+name = "zeus-nous"
+description = "The Mind of Zeus - Intent inference, reasoning, learning, and meta-cognition"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zeus-core.workspace = true
+zeus-llm.workspace = true
+zeus-mnemosyne.workspace = true
+
+# Async
+tokio.workspace = true
+async-trait.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Time
+chrono.workspace = true
+
+# UUID
+ulid.workspace = true
+
+# Regex for pattern matching
+regex.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+tempfile.workspace = true

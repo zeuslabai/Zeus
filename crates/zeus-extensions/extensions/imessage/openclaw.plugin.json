@@ -1,0 +1,15 @@
+{
+  "id": "imessage",
+  "name": "iMessage (BlueBubbles)",
+  "description": "iMessage channel adapter via BlueBubbles server API",
+  "version": "0.1.0",
+  "channels": ["imessage"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "server_url": { "type": "string", "default": "http://localhost:1234" },
+      "password": { "type": "string", "description": "BlueBubbles server password" }
+    },
+    "required": ["password"]
+  }
+}

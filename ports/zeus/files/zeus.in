@@ -1,0 +1,63 @@
+#!/bin/sh
+
+# PROVIDE: zeus
+# REQUIRE: LOGIN NETWORKING
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="zeus"
+rcvar="${name}_enable"
+
+load_rc_config $name
+
+: ${zeus_enable:="NO"}
+: ${zeus_user:="%%ZEUS_USER%%"}
+: ${zeus_group:="%%ZEUS_GROUP%%"}
+: ${zeus_config:="%%PREFIX%%/etc/zeus/config.toml"}
+: ${zeus_logfile:="/var/log/zeus.log"}
+: ${zeus_flags:="gateway"}
+
+pidfile="/var/run/${name}.pid"
+command="%%PREFIX%%/bin/zeus"
+command_args="${zeus_flags} --config ${zeus_config} >> ${zeus_logfile} 2>&1 & echo \$! > ${pidfile}"
+
+start_cmd="${name}_start"
+stop_cmd="${name}_stop"
+status_cmd="${name}_status"
+
+zeus_start()
+{
+	if [ -f "${pidfile}" ] && kill -0 $(cat "${pidfile}") 2>/dev/null; then
+		echo "${name} is already running."
+		return 1
+	fi
+
+	echo "Starting ${name}."
+	install -o ${zeus_user} -g ${zeus_group} /dev/null ${pidfile}
+	su -m ${zeus_user} -c "${command} ${zeus_flags} >> ${zeus_logfile} 2>&1 & echo \$! > ${pidfile}"
+}
+
+zeus_stop()
+{
+	if [ ! -f "${pidfile}" ]; then
+		echo "${name} is not running."
+		return 1
+	fi
+
+	echo "Stopping ${name}."
+	kill $(cat "${pidfile}") 2>/dev/null
+	rm -f "${pidfile}"
+}
+
+zeus_status()
+{
+	if [ -f "${pidfile}" ] && kill -0 $(cat "${pidfile}") 2>/dev/null; then
+		echo "${name} is running as pid $(cat ${pidfile})."
+	else
+		echo "${name} is not running."
+		return 1
+	fi
+}
+
+run_rc_command "$1"

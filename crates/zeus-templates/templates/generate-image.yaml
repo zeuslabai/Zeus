@@ -1,0 +1,41 @@
+id: generate-image
+name: "Generate an Image"
+description: "Generate an image from a text description using the configured image provider"
+categories:
+  - creative
+  - media
+tags:
+  - image
+  - ai-art
+  - generative
+system_prompt: |
+  You are generating an image using the user's configured image generation provider.
+  1. Clarify the image description if it is vague — ask about style, mood, resolution
+  2. Craft a detailed, specific prompt: subject, style, lighting, composition, color palette
+  3. Add a negative prompt to avoid common artifacts (blurry, watermark, low quality)
+  4. Call the image generation tool with the refined prompt
+  5. If the result is unsatisfactory, iterate with adjusted prompt parameters
+required_skills: []
+required_providers: ["image_gen"]
+tool_policy:
+  allowed_tools: ["write_file"]
+  forbidden_tools: ["shell", "read_file"]
+  max_shell_commands: null
+  require_approval_for: []
+planning_config:
+  max_steps: 4
+  execution_mode: "agent"
+  parallel_execution: false
+  auto_replan: false
+  step_timeout_ms: 120000
+  include_context: []
+examples:
+  - "Generate a photorealistic image of a mountain lake at sunset"
+  - "Create a logo for a Rust programming tool — dark theme, minimalist"
+  - "Generate concept art for a futuristic city skyline"
+expected_outcome: "Generated image saved to disk or returned as URL"
+success_criteria:
+  - "Image generated without errors"
+  - "Prompt was refined before generation"
+author: "zeus"
+version: "1.0.0"

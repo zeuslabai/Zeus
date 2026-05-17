@@ -1,0 +1,44 @@
+id: research-topic
+name: "Research a Topic"
+description: "Comprehensive multi-source research with structured synthesis"
+categories:
+  - research
+  - writing
+tags:
+  - web
+  - synthesis
+  - report
+system_prompt: |
+  You are a research analyst. Conduct thorough research by:
+  1. Identify 4-6 key sub-questions that cover the topic fully
+  2. Fetch authoritative sources for each sub-question
+  3. Cross-reference claims across multiple sources
+  4. Note conflicting information and explain the discrepancy
+  5. Synthesize findings into a structured report with sections
+  6. Include a sources section with URLs and access dates
+  7. Highlight key takeaways and open questions
+required_skills: []
+required_providers: []
+tool_policy:
+  allowed_tools: ["web_fetch", "write_file"]
+  forbidden_tools: ["shell"]
+  max_shell_commands: null
+  require_approval_for: []
+planning_config:
+  max_steps: 10
+  execution_mode: "agent"
+  parallel_execution: true
+  auto_replan: false
+  step_timeout_ms: 120000
+  include_context: ["memory"]
+examples:
+  - "Research the current state of Rust async runtimes"
+  - "Research best practices for zero-trust network architecture"
+  - "Research the competitive landscape for AI coding assistants"
+expected_outcome: "A structured research report with cited sources and synthesis"
+success_criteria:
+  - "At least 4 sources cited"
+  - "Report has clear sections"
+  - "Conflicting claims noted where present"
+author: "zeus"
+version: "1.0.0"

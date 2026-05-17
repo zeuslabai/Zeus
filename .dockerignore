@@ -1,0 +1,63 @@
+# Build artifacts
+target/
+*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# macOS
+.DS_Store
+._*
+
+# Environment / Secrets (never bake into image)
+.env
+.env.*
+*.pem
+*.key
+*.p12
+credentials.json
+secrets.toml
+
+# Zeus runtime data (mounted as volume, not baked in)
+.zeus/
+sessions/
+memory/
+
+# Native app sources (not needed for server build)
+apps/ZeusDesktop/
+apps/ZeusMobile/
+apps/ZeusUI/
+
+# Web frontend build artifacts (built separately if needed)
+apps/ZeusWeb/dist/
+apps/ZeusWeb/target/
+apps/ZeusWeb/node_modules/
+
+# Documentation
+docs/
+
+# Scripts not needed in build
+scripts/freebsd/
+scripts/homebrew/
+
+# Test artifacts
+*.profraw
+lcov.info
+coverage/
+
+# Bundle files
+*.bundle
+*-files.tar.gz
+
+# XCFramework (macOS only)
+*.xcframework/
+build/
+DerivedData/
