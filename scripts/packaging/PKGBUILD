@@ -1,0 +1,82 @@
+# Maintainer: Zeus Team <team@zeuslab.ai>
+pkgname=zeus
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Autonomous AI assistant with 327 tools and 11 LLM providers"
+arch=('x86_64' 'aarch64')
+url="https://zeuslab.ai"
+license=('MIT' 'Apache-2.0')
+depends=('openssl' 'sqlite' 'glibc' 'gcc-libs')
+optdepends=('curl: update checks and downloads'
+            'ca-certificates: TLS certificate verification')
+makedepends=('rust' 'cargo' 'pkgconf' 'openssl' 'sqlite')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/zeuslabai/Zeus/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')  # Replace with actual hash for release builds
+
+# ── Build from source ────────────────────────────────────────────────────────
+
+build() {
+    cd "Zeus-$pkgver"
+    cargo build --release --bin zeus
+}
+
+# ── Generate shell completions during check ──────────────────────────────────
+
+check() {
+    cd "Zeus-$pkgver"
+    mkdir -p completions
+    ./target/release/zeus completion bash > completions/zeus.bash
+    ./target/release/zeus completion zsh > completions/_zeus
+    ./target/release/zeus completion fish > completions/zeus.fish
+}
+
+# ── Install binary, systemd service, and completions ─────────────────────────
+
+package() {
+    cd "Zeus-$pkgver"
+
+    # Binary
+    install -Dm755 "target/release/zeus" "$pkgdir/usr/bin/zeus"
+
+    # Strip debug symbols
+    strip "$pkgdir/usr/bin/zeus" 2>/dev/null || true
+
+    # Systemd service (patch ExecStart to /usr/bin for Arch convention)
+    install -Dm644 "scripts/systemd/zeus-gateway.service" "$pkgdir/usr/lib/systemd/system/zeus-gateway.service"
+    sed -i 's|/usr/local/bin/zeus|/usr/bin/zeus|g' "$pkgdir/usr/lib/systemd/system/zeus-gateway.service"
+
+    # Shell completions
+    install -Dm644 "completions/zeus.bash" "$pkgdir/usr/share/bash-completion/completions/zeus"
+    install -Dm644 "completions/_zeus" "$pkgdir/usr/share/zsh/site-functions/_zeus"
+    install -Dm644 "completions/zeus.fish" "$pkgdir/usr/share/fish/vendor_completions.d/zeus.fish"
+
+    # License
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE" 2>/dev/null || true
+}
+
+# ── Post-install hook ────────────────────────────────────────────────────────
+
+post_install() {
+    # Create zeus system user for gateway service
+    getent group zeus >/dev/null 2>&1 || groupadd --system zeus
+    getent passwd zeus >/dev/null 2>&1 || useradd --system --gid zeus --create-home --home-dir /home/zeus zeus
+    mkdir -p /home/zeus/.zeus
+    chown -R zeus:zeus /home/zeus/.zeus
+
+    echo ""
+    echo "Zeus installed successfully!"
+    echo ""
+    echo "  Quick start:    zeus"
+    echo "  Setup wizard:   zeus setup"
+    echo "  API gateway:    zeus gateway"
+    echo "  Start service:  systemctl enable --now zeus-gateway"
+    echo ""
+}
+
+post_remove() {
+    # Stop and disable service
+    systemctl stop zeus-gateway 2>/dev/null || true
+    systemctl disable zeus-gateway 2>/dev/null || true
+
+    echo "Zeus removed. Config and data preserved at /home/zeus/.zeus"
+}

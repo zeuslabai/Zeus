@@ -1,0 +1,105 @@
+name: Smoke Test
+
+on:
+  pull_request:
+    branches: [main, dev]
+  push:
+    branches: [main, dev]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # Fast smoke test - catches basic issues in ~2-3 minutes
+  smoke:
+    name: Quick Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: smoke-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Check compilation (no build)
+        run: cargo check --workspace
+
+      - name: Run clippy
+        run: cargo clippy --workspace -- -D warnings
+
+      - name: Quick unit tests
+        run: cargo test --workspace --lib -- --test-threads=4
+
+  # Verify critical binaries compile
+  build-smoke:
+    name: Build Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: smoke
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: build-smoke-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build zeus binary
+        run: cargo build --release --bin zeus
+
+      - name: Verify binary exists
+        run: |
+          test -f target/release/zeus
+          file target/release/zeus
+          ./target/release/zeus --help || true
+
+  # macOS smoke test (catches platform-specific issues)
+  smoke-macos:
+    name: Smoke Test (macOS)
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: macos-smoke-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Check compilation
+        run: cargo check --workspace
+
+      - name: Quick tests
+        run: cargo test --workspace --lib -- --test-threads=4
+
+      - name: Build binary
+        run: cargo build --release --bin zeus

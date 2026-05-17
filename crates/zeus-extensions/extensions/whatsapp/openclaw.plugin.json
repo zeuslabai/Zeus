@@ -1,0 +1,17 @@
+{
+  "id": "whatsapp",
+  "name": "WhatsApp Cloud API",
+  "description": "WhatsApp Business Cloud API channel adapter via Meta Graph API",
+  "version": "0.1.0",
+  "channels": ["whatsapp"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "access_token": { "type": "string", "description": "Meta Graph API access token" },
+      "phone_number_id": { "type": "string", "description": "WhatsApp Business phone number ID" },
+      "verify_token": { "type": "string", "description": "Webhook verification token" },
+      "webhook_port": { "type": "number", "default": 9100 }
+    },
+    "required": ["access_token", "phone_number_id"]
+  }
+}

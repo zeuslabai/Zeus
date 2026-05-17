@@ -1,0 +1,79 @@
+#!/bin/sh
+
+# PROVIDE: zeus_gateway
+# REQUIRE: LOGIN DAEMON NETWORKING
+# KEYWORD: shutdown
+#
+# Add the following lines to /etc/rc.conf to enable zeus_gateway:
+#
+#   zeus_gateway_enable="YES"
+#   zeus_gateway_port="3001"              # optional, default 3001
+#   zeus_gateway_host="0.0.0.0"           # optional, default 0.0.0.0
+#   zeus_gateway_user="zeus"              # optional, default zeus
+#   zeus_gateway_logfile="/var/log/zeus-gateway.log"       # optional
+#   zeus_gateway_anthropic_key="sk-..."   # optional, API key
+#
+
+. /etc/rc.subr
+
+name="zeus_gateway"
+rcvar="${name}_enable"
+
+load_rc_config $name
+
+: ${zeus_gateway_enable:="NO"}
+: ${zeus_gateway_port:="3001"}
+: ${zeus_gateway_host:="0.0.0.0"}
+: ${zeus_gateway_user:="zeus"}
+: ${zeus_gateway_logfile:="/var/log/zeus-gateway.log"}
+: ${zeus_gateway_pidfile:="/var/run/${name}.pid"}
+: ${zeus_gateway_anthropic_key:=""}
+
+pidfile="${zeus_gateway_pidfile}"
+procname="/usr/local/bin/zeus"
+command="/usr/sbin/daemon"
+
+start_cmd="${name}_start"
+
+stop_postcmd="${name}_poststop"
+
+zeus_gateway_start()
+{
+    # Ensure log directory exists
+    install -d -o ${zeus_gateway_user} -g wheel -m 0755 /var/log
+    install -d -o ${zeus_gateway_user} -g wheel -m 0750 /var/run
+
+    # Touch log file and pidfile with correct ownership (daemon creates pidfile as root)
+    touch "${zeus_gateway_logfile}"
+    chown ${zeus_gateway_user}:wheel "${zeus_gateway_logfile}"
+    touch "${pidfile}"
+    chown ${zeus_gateway_user}:wheel "${pidfile}"
+
+    # Load env vars from .env files (FreeBSD env doesn't support -f flag)
+    _env_args="HOME=/home/${zeus_gateway_user}"
+    for envf in "/home/${zeus_gateway_user}/.zeus/.env" "/usr/local/etc/zeus/.env"; do
+        if [ -f "${envf}" ]; then
+            while IFS= read -r _line; do
+                case "$_line" in
+                    \#*|"") continue ;;
+                    *=*) _env_args="$_env_args $_line" ;;
+                esac
+            done < "${envf}"
+        fi
+    done
+    [ -n "${zeus_gateway_anthropic_key}" ] && _env_args="$_env_args ANTHROPIC_API_KEY=${zeus_gateway_anthropic_key}"
+
+    echo "Starting ${name}."
+    /usr/sbin/daemon -f -p ${pidfile} -o ${zeus_gateway_logfile} \
+        -u ${zeus_gateway_user} \
+        /usr/bin/env ${_env_args} \
+        ${procname} \
+        gateway --host ${zeus_gateway_host} --port ${zeus_gateway_port}
+}
+
+zeus_gateway_poststop()
+{
+    rm -f "${pidfile}"
+}
+
+run_rc_command "$1"

@@ -1,0 +1,48 @@
+[package]
+name = "zeus-skills"
+description = "OpenClaw skill compatibility layer for Zeus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zeus-core.workspace = true
+zeus-aegis.workspace = true
+chrono.workspace = true
+
+# Async runtime
+tokio.workspace = true
+async-trait.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+toml.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# HTTP client
+reqwest.workspace = true
+
+# WASM runtime
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+
+# Dynamic loading
+libloading = { workspace = true }
+
+# Plugin verification (P23-1)
+sha2 = { workspace = true }
+notify = { workspace = true }
+
+# Paths
+dirs = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+tempfile.workspace = true

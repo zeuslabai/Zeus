@@ -1,0 +1,83 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Secrets (never commit)
+*.pem
+*.key
+*.p12
+credentials.json
+secrets.toml
+
+# Zeus data
+.zeus/
+sessions/
+memory/
+*.db
+
+# Logs
+*.log
+logs/
+
+# Build artifacts
+*.so
+*.dylib
+*.dll
+
+# Test artifacts
+*.profraw
+lcov.info
+coverage/
+
+# Documentation build
+/docs/book/
+
+# macOS metadata
+._*
+.DS_Store
+
+# ZeusWeb build artifacts
+apps/ZeusWeb/dist/
+apps/ZeusWeb/target/
+apps/ZeusWeb/package-lock.json
+apps/ZeusWeb/package.json
+apps/ZeusWeb/wasm-opt-wrapper.sh
+
+# Bundle files
+*.bundle
+*-files.tar.gz
+
+# Node modules
+node_modules/
+
+# XCFramework binaries (built locally via scripts/build-zeus-ffi.sh)
+*.xcframework/
+
+# Xcode build
+build/
+DerivedData/
+*.xcuserdata
+apps/ZeusUI/.build/
+apps/ZeusUI/.swiftpm/
+
+# Claude Code dev tooling (operator-local, not for public release)
+.claude/
+CLAUDE.md

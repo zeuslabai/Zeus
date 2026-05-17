@@ -1,0 +1,49 @@
+[package]
+name = "zeus-mnemosyne"
+description = "Advanced memory system with SQLite and FTS5 search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zeus-core.workspace = true
+
+# Async
+tokio.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Database
+rusqlite.workspace = true
+
+# Time
+chrono.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# HTTP (for Ollama embedding provider)
+reqwest.workspace = true
+
+# Pattern matching (for entity extraction)
+regex = "1"
+
+# Hashing (for content-based embedding cache)
+sha2.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# File watching
+notify.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+tempfile.workspace = true
+
+[[bin]]
+name = "mnemosyne-cleanup"
+path = "src/bin/mnemosyne_cleanup.rs"

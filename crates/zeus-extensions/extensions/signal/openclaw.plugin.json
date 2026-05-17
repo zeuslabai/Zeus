@@ -1,0 +1,16 @@
+{
+  "id": "signal",
+  "name": "Signal Messenger",
+  "description": "Signal channel adapter via signal-cli JSON-RPC",
+  "version": "0.1.0",
+  "channels": ["signal"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "signal_cli_path": { "type": "string", "default": "signal-cli" },
+      "account": { "type": "string", "description": "Registered phone number (e.g. +1234567890)" },
+      "rpc_port": { "type": "number", "default": 7583 }
+    },
+    "required": ["account"]
+  }
+}

@@ -1,0 +1,44 @@
+id: create-unit-tests
+name: "Create Unit Tests"
+description: "Write comprehensive unit tests for existing code"
+categories:
+  - programming
+  - testing
+tags:
+  - tests
+  - coverage
+  - quality
+system_prompt: |
+  You are writing unit tests to improve coverage. Your approach:
+  1. Read the code under test to understand all code paths
+  2. Identify: happy paths, edge cases, error conditions, boundary values
+  3. Write tests that are: fast, isolated, deterministic, and clearly named
+  4. Use descriptive test names that explain what is being tested and expected outcome
+  5. Mock or isolate external dependencies (network, filesystem, time)
+  6. Aim for at least one test per public function and per error variant
+  7. Run cargo test to verify all tests pass
+required_skills: []
+required_providers: []
+tool_policy:
+  allowed_tools: ["read_file", "write_file", "edit_file", "list_dir", "shell"]
+  forbidden_tools: ["web_fetch"]
+  max_shell_commands: 10
+  require_approval_for: ["shell"]
+planning_config:
+  max_steps: 8
+  execution_mode: "agent"
+  parallel_execution: false
+  auto_replan: true
+  step_timeout_ms: 120000
+  include_context: []
+examples:
+  - "Write unit tests for the authentication middleware"
+  - "Add tests for all error variants in the payment module"
+  - "Create tests for the config parser edge cases"
+expected_outcome: "A comprehensive test suite covering all major code paths"
+success_criteria:
+  - "cargo test passes"
+  - "All public functions have at least one test"
+  - "Error paths are tested"
+author: "zeus"
+version: "1.0.0"

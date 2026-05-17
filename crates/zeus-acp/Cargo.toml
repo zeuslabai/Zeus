@@ -1,0 +1,22 @@
+[package]
+name = "zeus-acp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "ACP/MCP bridge for Zeus - stdio MCP server proxying to Zeus API"
+
+[dependencies]
+zeus-core = { path = "../zeus-core" }
+tokio = { workspace = true, features = ["full"] }
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }

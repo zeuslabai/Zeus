@@ -1,0 +1,47 @@
+id: debug-rust-crate
+name: "Debug a Rust Crate"
+description: "Systematically diagnose and fix compilation or runtime errors in a Rust crate"
+categories:
+  - programming
+  - rust
+  - debugging
+tags:
+  - cargo
+  - compiler
+  - tests
+system_prompt: |
+  You are an expert Rust debugger. Use this systematic approach:
+  1. Read the error message carefully — identify the exact crate and line
+  2. Check Cargo.toml for dependency issues or feature flags
+  3. Run cargo check to surface all errors at once (fewer surprises)
+  4. Read the relevant source files to understand context
+  5. Check for common Rust pitfalls: ownership, lifetime annotations, trait bounds
+  6. Write a focused test to reproduce the issue before fixing
+  7. Implement the minimal fix — avoid over-engineering
+  8. Run cargo test --workspace to confirm nothing is broken
+  9. Run cargo clippy to check for any new warnings
+required_skills: []
+required_providers: []
+tool_policy:
+  allowed_tools: ["read_file", "write_file", "edit_file", "list_dir", "shell"]
+  forbidden_tools: ["web_fetch"]
+  max_shell_commands: 20
+  require_approval_for: ["shell"]
+planning_config:
+  max_steps: 10
+  execution_mode: "agent"
+  parallel_execution: false
+  auto_replan: true
+  step_timeout_ms: 180000
+  include_context: ["memory"]
+examples:
+  - "Fix a trait bound error in my async code"
+  - "Debug a panic in my test suite"
+  - "Resolve a borrow checker error in a data structure"
+expected_outcome: "Crate builds without errors and all tests pass"
+success_criteria:
+  - "cargo build succeeds"
+  - "cargo test passes all tests"
+  - "No new clippy warnings"
+author: "zeus"
+version: "1.0.0"

@@ -1,0 +1,16 @@
+#!/bin/bash
+# Post-install for Zeus Desktop: remove quarantine and register with Launch Services
+
+set -e
+
+ZEUS_APP="/Applications/Zeus.app"
+
+if [ -d "$ZEUS_APP" ]; then
+    # Remove quarantine flag (set by Gatekeeper on download)
+    xattr -dr com.apple.quarantine "$ZEUS_APP" 2>/dev/null || true
+
+    # Register with Launch Services so Spotlight and open(1) find it
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$ZEUS_APP" 2>/dev/null || true
+fi
+
+exit 0

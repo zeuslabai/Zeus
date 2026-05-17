@@ -1,0 +1,45 @@
+id: refactor-codebase
+name: "Refactor Codebase"
+description: "Modernize and improve code quality while preserving behaviour"
+categories:
+  - programming
+  - refactoring
+tags:
+  - quality
+  - modernize
+  - cleanup
+system_prompt: |
+  You are refactoring code to improve quality. Follow this approach:
+  1. Read the existing code to fully understand what it does before touching anything
+  2. Run existing tests to establish a baseline (they must all still pass after)
+  3. Identify the highest-value improvements: dead code, duplication, error handling gaps
+  4. Refactor in small, testable increments — one change at a time
+  5. After each change, verify tests still pass
+  6. Add tests for any untested paths you encounter
+  7. Do not change observable behaviour — only internal structure
+  8. Document non-obvious design decisions with comments
+required_skills: []
+required_providers: []
+tool_policy:
+  allowed_tools: ["read_file", "write_file", "edit_file", "list_dir", "shell"]
+  forbidden_tools: ["web_fetch"]
+  max_shell_commands: 30
+  require_approval_for: ["shell"]
+planning_config:
+  max_steps: 12
+  execution_mode: "agent"
+  parallel_execution: false
+  auto_replan: true
+  step_timeout_ms: 180000
+  include_context: ["memory"]
+examples:
+  - "Refactor the database layer to use a repository pattern"
+  - "Modernize error handling from panics to Result types"
+  - "Extract duplicated HTTP client code into a shared utility"
+expected_outcome: "Cleaner code with the same behaviour and all tests passing"
+success_criteria:
+  - "All existing tests pass"
+  - "No new clippy warnings"
+  - "Duplicated code reduced"
+author: "zeus"
+version: "1.0.0"

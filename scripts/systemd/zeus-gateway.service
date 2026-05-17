@@ -1,0 +1,33 @@
+[Unit]
+Description=Zeus AI Gateway
+Documentation=https://zeuslab.ai
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zeus
+Group=zeus
+ExecStart=/usr/local/bin/zeus gateway --host 0.0.0.0
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# Workspace and config
+Environment=HOME=/home/zeus
+WorkingDirectory=/home/zeus
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/zeus/.zeus
+PrivateTmp=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=zeus-gateway
+
+[Install]
+WantedBy=multi-user.target

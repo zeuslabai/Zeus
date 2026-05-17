@@ -1,0 +1,328 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  # Extract version from tag
+  version:
+    name: Get Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - name: Get version from tag
+        id: get_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+  # Build Linux amd64 binary
+  build-linux-amd64:
+    name: Build Linux (amd64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: version
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-amd64-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp target/release/zeus dist/zeus-linux-amd64
+          chmod +x dist/zeus-linux-amd64
+          cd dist
+          tar czf zeus-linux-amd64.tar.gz zeus-linux-amd64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeus-linux-amd64
+          path: dist/zeus-linux-amd64.tar.gz
+
+  # Build Linux arm64 binary (cross-compile)
+  build-linux-arm64:
+    name: Build Linux (arm64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: version
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Install cross-compilation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-arm64-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release (cross)
+        run: |
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          cargo build --release --target aarch64-unknown-linux-gnu
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp target/aarch64-unknown-linux-gnu/release/zeus dist/zeus-linux-arm64
+          chmod +x dist/zeus-linux-arm64
+          cd dist
+          tar czf zeus-linux-arm64.tar.gz zeus-linux-arm64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeus-linux-arm64
+          path: dist/zeus-linux-arm64.tar.gz
+
+  # Build macOS Intel binary
+  build-macos-intel:
+    name: Build macOS (Intel)
+    runs-on: macos-13
+    timeout-minutes: 45
+    needs: version
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-intel-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp target/x86_64-apple-darwin/release/zeus dist/zeus-macos-intel
+          chmod +x dist/zeus-macos-intel
+          cd dist
+          tar czf zeus-macos-intel.tar.gz zeus-macos-intel
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeus-macos-intel
+          path: dist/zeus-macos-intel.tar.gz
+
+  # Build macOS ARM (Apple Silicon) binary
+  build-macos-arm:
+    name: Build macOS (ARM)
+    runs-on: macos-14
+    timeout-minutes: 45
+    needs: version
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-arm-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp target/aarch64-apple-darwin/release/zeus dist/zeus-macos-arm
+          chmod +x dist/zeus-macos-arm
+          cd dist
+          tar czf zeus-macos-arm.tar.gz zeus-macos-arm
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeus-macos-arm
+          path: dist/zeus-macos-arm.tar.gz
+
+  # Build FreeBSD binary
+  build-freebsd:
+    name: Build FreeBSD
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: version
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build on FreeBSD
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          mem: 6144
+          prepare: |
+            pkg install -y rust cargo pkgconf openssl sqlite3
+          run: |
+            cargo build --release
+            mkdir -p dist
+            cp target/release/zeus dist/zeus-freebsd-amd64
+            chmod +x dist/zeus-freebsd-amd64
+            cd dist
+            tar czf zeus-freebsd-amd64.tar.gz zeus-freebsd-amd64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeus-freebsd-amd64
+          path: dist/zeus-freebsd-amd64.tar.gz
+
+  # Build and push versioned container images
+  build-containers:
+    name: Build Container Images
+    runs-on: ubuntu-latest
+    needs: version
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ needs.version.outputs.version }}
+            ghcr.io/${{ github.repository }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ needs.version.outputs.version }}
+
+  # Generate changelog and create GitHub Release
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs:
+      - version
+      - build-linux-amd64
+      - build-linux-arm64
+      - build-macos-intel
+      - build-macos-arm
+      - build-freebsd
+      - build-containers
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          VERSION=${{ needs.version.outputs.version }}
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          
+          if [ -z "$PREV_TAG" ]; then
+            # First release - get all commits
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges | head -50)
+          else
+            # Get commits since last tag
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges ${PREV_TAG}..HEAD)
+          fi
+          
+          # Create release notes
+          echo "## Changes in $VERSION" > release_notes.md
+          echo "" >> release_notes.md
+          echo "$CHANGELOG" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "## Container Images" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "- \`ghcr.io/${{ github.repository }}:$VERSION\`" >> release_notes.md
+          echo "- \`ghcr.io/${{ github.repository }}:latest\`" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "## Installation" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "Download the appropriate binary for your platform and extract it:" >> release_notes.md
+          echo '```bash' >> release_notes.md
+          echo "tar xzf zeus-<platform>-<arch>.tar.gz" >> release_notes.md
+          echo 'sudo mv zeus-<platform>-<arch> /usr/local/bin/zeus' >> release_notes.md
+          echo '```' >> release_notes.md
+          
+          cat release_notes.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ needs.version.outputs.version }}
+          body_path: release_notes.md
+          files: |
+            artifacts/zeus-linux-amd64/zeus-linux-amd64.tar.gz
+            artifacts/zeus-linux-arm64/zeus-linux-arm64.tar.gz
+            artifacts/zeus-macos-intel/zeus-macos-intel.tar.gz
+            artifacts/zeus-macos-arm/zeus-macos-arm.tar.gz
+            artifacts/zeus-freebsd-amd64/zeus-freebsd-amd64.tar.gz
+          draft: false
+          prerelease: ${{ contains(needs.version.outputs.version, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

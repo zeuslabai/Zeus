@@ -1,0 +1,55 @@
+[package]
+name = "zeus-talos"
+description = "Native macOS/cross-platform automation tools for Zeus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zeus-core.workspace = true
+
+# Async runtime
+tokio.workspace = true
+async-trait.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+# System info
+sysinfo.workspace = true
+
+# Time
+chrono.workspace = true
+
+# Paths
+dirs.workspace = true
+
+# HTTP
+reqwest.workspace = true
+urlencoding.workspace = true
+
+# Regex
+regex.workspace = true
+
+# Glob
+glob.workspace = true
+
+# Database
+rusqlite = { workspace = true }
+
+# IDs
+uuid = { workspace = true }
+
+# Scheduling
+cron = { workspace = true }
+
+# Encoding
+base64.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+tempfile.workspace = true

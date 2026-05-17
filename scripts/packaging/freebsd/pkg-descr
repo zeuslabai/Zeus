@@ -1,0 +1,7 @@
+Zeus is a local-first AI assistant featuring a cognitive engine (Nous),
+multi-channel chat (Telegram, Discord, Slack, Email, iMessage, WhatsApp,
+Signal, Matrix), 5 frontends (TUI, Web, macOS, iOS, visionOS), browser
+automation, voice calls, and security sandboxing.
+
+Run 'zeus' for the TUI, 'zeus gateway' for the API server,
+or 'zeus setup' for guided first-run configuration.
