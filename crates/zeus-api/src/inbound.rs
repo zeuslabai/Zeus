@@ -310,6 +310,34 @@ async fn process_message(
     // harvested, otherwise the lighter text-only path).
     let response = {
         let mut agent = agent_arc.write().await;
+
+        // ── Per-channel session routing ──────────────────────────────────
+        // Without this, every channel bound to the same agent_id (e.g. the
+        // "default" agent) funnels into ONE session file, cross-contaminating
+        // conversation history between distinct channels. Derive a
+        // deterministic per-channel session id and swap it in so each channel
+        // keeps its own history (surviving gateway restarts via resume).
+        {
+            let key = if user_id.is_empty() {
+                zeus_session::ChannelKey::new(channel_type.clone(), chat_id.clone())
+            } else {
+                zeus_session::ChannelKey::dm(
+                    channel_type.clone(),
+                    chat_id.clone(),
+                    user_id.clone(),
+                )
+            };
+            let session_id = zeus_session::derive_session_id(&key);
+            if session_id != agent.session().id {
+                if let Some(sessions_dir) = agent.session().path().parent() {
+                    let sessions_dir = sessions_dir.to_path_buf();
+                    let channel_session =
+                        zeus_session::Session::resume_or_create(&sessions_dir, &session_id).await;
+                    agent.set_session(channel_session);
+                }
+            }
+        }
+
         let result = if core_attachments.is_empty() {
             agent.run(&prompt).await
         } else {
@@ -966,6 +994,39 @@ mod tests {
         assert_eq!(cfg.max_message_len, 50_000);
         assert!(cfg.send_typing);
         assert!(cfg.log_to_athena);
+    }
+
+    // ── Per-channel session routing contract ─────────────────────────────
+    // These lock the derivation used by `process_message` to swap a
+    // per-channel session in before `agent.run()`. Two distinct channels on
+    // the same agent MUST resolve to distinct session ids (no cross-channel
+    // history pollution), and DMs must fold the user_id into the key.
+
+    #[test]
+    fn test_inbound_session_routing_distinct_channels() {
+        let a = zeus_session::derive_session_id(&zeus_session::ChannelKey::new(
+            "discord", "1024483997306339439",
+        ));
+        let b = zeus_session::derive_session_id(&zeus_session::ChannelKey::new(
+            "discord", "1503740515147845752",
+        ));
+        assert_ne!(a, b, "two discord channels must not share a session");
+        assert_eq!(a, "agent:discord:1024483997306339439");
+    }
+
+    #[test]
+    fn test_inbound_session_routing_group_vs_dm() {
+        // Group: no user_id → channel-scoped session shared by participants.
+        let group = zeus_session::derive_session_id(&zeus_session::ChannelKey::new(
+            "discord", "999",
+        ));
+        // DM: user_id folded in → per-user session even on same chat_id.
+        let dm = zeus_session::derive_session_id(&zeus_session::ChannelKey::dm(
+            "discord", "999", "42",
+        ));
+        assert_eq!(group, "agent:discord:999");
+        assert_eq!(dm, "agent:discord:999:42");
+        assert_ne!(group, dm);
     }
 
     #[test]

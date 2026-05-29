@@ -26,7 +26,7 @@ async fn create_test_agent() -> (Agent, TempDir) {
     let session = Session::new(&sessions_path);
 
     let llm = LlmClient::from_config(&config).unwrap();
-    let agent = Agent::new(config, llm, workspace, session);
+    let agent = Agent::new(config, llm, workspace, session, None);
 
     (agent, temp)
 }
