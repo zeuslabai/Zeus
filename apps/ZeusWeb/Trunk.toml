@@ -8,8 +8,14 @@ filehash = true
 [build.wasm_opt]
 level = "z"  # optimize for size
 
+# Tailwind v4 — compile utilities from .rs view! macros before build (npm-free standalone CLI via npx)
+[[hooks]]
+stage = "pre_build"
+command = "npx"
+command_arguments = ["@tailwindcss/cli", "-i", "tailwind.css", "-o", "dist/tailwind.css", "--minify"]
+
 [watch]
-ignore = ["dist", "target"]
+ignore = ["dist", "target", "node_modules"]
 
 [serve]
 address = "0.0.0.0"

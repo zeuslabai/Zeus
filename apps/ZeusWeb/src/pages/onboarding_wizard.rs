@@ -1175,11 +1175,11 @@ fn StepIdentity(config: RwSignal<OnboardConfig>) -> impl IntoView {
                 </FadeIn>
             </div>
 
-            // Name input
-            <div class="z-mb16">
-                <label class="z-orb-field-label">"Your Name"</label>
+            // Name input — TAILWIND MIGRATION PROTOTYPE (proof-of-pattern)
+            <div class="mb-4">
+                <label class="block mb-2 font-orbitron text-[10px] tracking-[3px] uppercase text-[rgba(255,245,240,0.7)]">"Your Name"</label>
                 <input
-                    style="width: 100%; padding: 12px 16px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,60,20,0.1); border-radius: 10px; color: rgba(255,245,240,0.9); font-family: 'Rajdhani', sans-serif; font-size: 15px; outline: none; box-sizing: border-box; transition: all 0.3s;"
+                    class="w-full box-border px-4 py-3 bg-z-surface border border-z-border rounded-[10px] text-z-text font-rajdhani text-[15px] outline-none transition-all duration-300 focus:border-z-border-active"
                     type="text"
                     placeholder="e.g. Miguel"
                     prop:value=move || config.get().user_name.clone()

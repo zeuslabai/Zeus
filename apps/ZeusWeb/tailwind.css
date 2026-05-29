@@ -1,0 +1,36 @@
+/* ═══════════════════════════════════════════════════════════
+   ZEUS — Tailwind v4 entrypoint (Ember Theme)
+   Migration prototype: design tokens ported from input.css :root
+   into Tailwind v4 @theme, so utilities like text-z-accent /
+   bg-z-surface / font-mono-orbitron resolve to the design system.
+   ═══════════════════════════════════════════════════════════ */
+
+@import "tailwindcss";
+
+/* Scan Leptos view! macro class strings in .rs sources */
+@source "./src/**/*.rs";
+
+/* ─── Design tokens → Tailwind theme variables ──────────────
+   Exposes utilities: bg-z-bg, text-z-accent, border-z-border,
+   font-orbitron, font-rajdhani, etc. */
+@theme {
+  --color-z-bg: #050508;
+  --color-z-surface: rgba(255, 255, 255, 0.03);
+  --color-z-surface-hover: rgba(255, 255, 255, 0.06);
+  --color-z-border: rgba(255, 60, 20, 0.1);
+  --color-z-border-hover: rgba(255, 60, 20, 0.25);
+  --color-z-border-active: rgba(255, 60, 20, 0.35);
+  --color-z-accent: #ff3c14;
+  --color-z-accent-dim: rgba(255, 60, 20, 0.6);
+  --color-z-accent-glow: rgba(255, 60, 20, 0.15);
+  --color-z-text: rgba(255, 245, 240, 0.9);
+  --color-z-text-dim: rgba(255, 245, 240, 0.45);
+  --color-z-text-muted: rgba(255, 245, 240, 0.25);
+  --color-z-green: #22c55e;
+  --color-z-yellow: #eab308;
+  --color-z-red: #ef4444;
+  --color-z-blue: #3b82f6;
+
+  --font-orbitron: 'Orbitron', monospace;
+  --font-rajdhani: 'Rajdhani', sans-serif;
+}
