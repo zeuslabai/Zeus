@@ -12,7 +12,7 @@ level = "z"  # optimize for size
 [[hooks]]
 stage = "pre_build"
 command = "npx"
-command_arguments = ["@tailwindcss/cli", "-i", "tailwind.css", "-o", "dist/tailwind.css", "--minify"]
+command_arguments = ["@tailwindcss/cli", "-i", "tailwind.css", "-o", "tailwind-out.css", "--minify"]
 
 [watch]
 ignore = ["dist", "target", "node_modules"]
