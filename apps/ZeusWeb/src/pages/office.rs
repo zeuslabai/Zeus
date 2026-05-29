@@ -924,27 +924,27 @@ pub fn OfficePage() -> impl IntoView {
                         view! {
                             <div style="display: flex; gap: 24px; align-items: center;">
                                 <div>
-                                    <div class="z-orb-micro-label">"FLEET"</div>
+                                    <div class="font-orbitron text-[8px] tracking-[2px] text-[#445566]">"FLEET"</div>
                                     <div style="font-size: 20px; font-weight: 800; color: #e0e8f0;\
                                         font-family: 'Orbitron', monospace;">{total}</div>
                                 </div>
                                 <div>
-                                    <div class="z-orb-micro-label">"ONLINE"</div>
+                                    <div class="font-orbitron text-[8px] tracking-[2px] text-[#445566]">"ONLINE"</div>
                                     <div style="font-size: 20px; font-weight: 800; color: #00ff88;\
                                         font-family: 'Orbitron', monospace; text-shadow: 0 0 10px rgba(0,255,136,0.4);">{online}</div>
                                 </div>
                                 <div>
-                                    <div class="z-orb-micro-label">"BUSY"</div>
+                                    <div class="font-orbitron text-[8px] tracking-[2px] text-[#445566]">"BUSY"</div>
                                     <div style="font-size: 20px; font-weight: 800; color: #ffcc00;\
                                         font-family: 'Orbitron', monospace; text-shadow: 0 0 10px rgba(255,204,0,0.4);">{busy}</div>
                                 </div>
                                 <div>
-                                    <div class="z-orb-micro-label">"OFFLINE"</div>
+                                    <div class="font-orbitron text-[8px] tracking-[2px] text-[#445566]">"OFFLINE"</div>
                                     <div style="font-size: 20px; font-weight: 800; color: #ff4466;\
                                         font-family: 'Orbitron', monospace;">{offline}</div>
                                 </div>
                                 <div style="margin-left: auto;">
-                                    <div class="z-orb-micro-label">"AVG LOAD"</div>
+                                    <div class="font-orbitron text-[8px] tracking-[2px] text-[#445566]">"AVG LOAD"</div>
                                     <div style="font-size: 20px; font-weight: 800; color: #00ccff;\
                                         font-family: 'Orbitron', monospace; text-shadow: 0 0 10px rgba(0,204,255,0.3);">{format!("{:.0}%", avg_load)}</div>
                                 </div>
