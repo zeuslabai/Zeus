@@ -660,7 +660,7 @@ pub fn OnboardingWizardPage() -> impl IntoView {
                     let step_info = &STEPS[s];
                     view! {
                         <div style="padding: 18px 32px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,60,20,0.1); flex-shrink: 0;">
-                            <div class="z-row-gap14">
+                            <div class="flex items-center gap-3.5">
                                 <SentientOrb size=32 mode={step_info.orb_mode.to_string()} intensity={step_info.orb_intensity} />
                                 <div>
                                     <div style="font-family: 'Orbitron', monospace; font-size: 11px; letter-spacing: 4px; color: rgba(255,245,240,0.9); font-weight: 900;">
@@ -907,13 +907,13 @@ fn StepOnboardingMode(config: RwSignal<OnboardConfig>) -> impl IntoView {
     ];
 
     view! {
-        <div class="z-fade-in">
+        <div class="opacity-0 animate-z-fade-in">
             <div style="margin-bottom: 28px;">
-                <div class="z-raj-title-22">
+                <div class="font-rajdhani text-[22px] font-semibold text-z-text">
                     <TypeWriter text="How would you like to set up Zeus?" speed_ms=40 />
                 </div>
                 <FadeIn delay_ms=800>
-                    <p class="z-step-body">
+                    <p class="text-sm text-z-text/70 mt-2.5 leading-[1.7]">
                         "Choose your awakening protocol. QuickStart walks you through everything step by step."
                     </p>
                 </FadeIn>
@@ -940,7 +940,7 @@ fn StepOnboardingMode(config: RwSignal<OnboardConfig>) -> impl IntoView {
                                 config.update(|c| c.onboarding_mode = id_click.clone());
                             }
                         >
-                            <div class="z-row-gap14">
+                            <div class="flex items-center gap-3.5">
                                 <div style=move || {
                                     let selected = config.get().onboarding_mode == id_radio;
                                     format!(
@@ -995,13 +995,13 @@ fn StepQuickStartConfig(config: RwSignal<OnboardConfig>) -> impl IntoView {
     let hint_style = "font-size: 11px; color: rgba(255,245,240,0.35); margin-top: 4px; margin-left: 4px; font-style: italic;";
 
     view! {
-        <div class="z-fade-in">
+        <div class="opacity-0 animate-z-fade-in">
             <div style="margin-bottom: 28px;">
-                <div class="z-raj-title-22">
+                <div class="font-rajdhani text-[22px] font-semibold text-z-text">
                     <TypeWriter text="Zeus Gateway — API & Web Server" speed_ms=40 />
                 </div>
                 <FadeIn delay_ms=800>
-                    <p class="z-step-body">
+                    <p class="text-sm text-z-text/70 mt-2.5 leading-[1.7]">
                         "These settings control the Zeus HTTP API and web frontend. Review the defaults below, or edit as needed."
                     </p>
                 </FadeIn>
@@ -1163,13 +1163,13 @@ fn StepIdentity(config: RwSignal<OnboardConfig>) -> impl IntoView {
     });
 
     view! {
-        <div class="z-fade-in">
+        <div class="opacity-0 animate-z-fade-in">
             <div style="margin-bottom: 28px;">
-                <div class="z-raj-title-22">
+                <div class="font-rajdhani text-[22px] font-semibold text-z-text">
                     <TypeWriter text="Who am I serving?" speed_ms=40 />
                 </div>
                 <FadeIn delay_ms=1000>
-                    <p class="z-step-body">
+                    <p class="text-sm text-z-text/70 mt-2.5 leading-[1.7]">
                         "Zeus adapts to your identity. This shapes the system prompt, workspace structure, and how Zeus communicates with you across all channels."
                     </p>
                 </FadeIn>
@@ -1188,7 +1188,7 @@ fn StepIdentity(config: RwSignal<OnboardConfig>) -> impl IntoView {
             </div>
 
             // Role input
-            <div class="z-mb16">
+            <div class="mb-4">
                 <label class="onboarding-input-label">"Role / Title"</label>
                 <input
                     class="onboarding-input"
@@ -1200,8 +1200,8 @@ fn StepIdentity(config: RwSignal<OnboardConfig>) -> impl IntoView {
             </div>
 
             // Org input
-            <div class="z-mb16">
-                <label class="z-orb-field-label">"Organization"</label>
+            <div class="mb-4">
+                <label class="font-orbitron text-[10px] tracking-[3px] text-z-text/70 block mb-2 uppercase">"Organization"</label>
                 <input
                     style="width: 100%; padding: 12px 16px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,60,20,0.1); border-radius: 10px; color: rgba(255,245,240,0.9); font-family: 'Rajdhani', sans-serif; font-size: 15px; outline: none; box-sizing: border-box; transition: all 0.3s;"
                     type="text"
@@ -1212,8 +1212,8 @@ fn StepIdentity(config: RwSignal<OnboardConfig>) -> impl IntoView {
             </div>
 
             // Gateway URL
-            <div class="z-mb16">
-                <label class="z-orb-field-label">"Gateway URL"</label>
+            <div class="mb-4">
+                <label class="font-orbitron text-[10px] tracking-[3px] text-z-text/70 block mb-2 uppercase">"Gateway URL"</label>
                 <input
                     style="width: 100%; padding: 12px 16px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,60,20,0.1); border-radius: 10px; color: rgba(255,245,240,0.9); font-family: 'Rajdhani', sans-serif; font-size: 15px; outline: none; box-sizing: border-box; transition: all 0.3s;"
                     type="text"
@@ -1229,7 +1229,7 @@ fn StepIdentity(config: RwSignal<OnboardConfig>) -> impl IntoView {
             // Personality cards (2x2 grid)
             <div style="margin-top: 8px;">
                 <label style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px; color: rgba(255,245,240,0.7); display: block; margin-bottom: 12px; text-transform: uppercase;">"Zeus Personality"</label>
-                <div class="z-grid-2col">
+                <div class="grid grid-cols-2 gap-2.5">
                     {move || personalities.get().into_iter().map(|p| {
                         let pid = p.id.clone();
                         let pid_c1 = pid.clone();
@@ -1326,13 +1326,13 @@ fn StepIntelligence(config: RwSignal<OnboardConfig>, providers_data: RwSignal<Ve
     });
 
     view! {
-        <div class="z-fade-in">
-            <div class="z-mb20">
-                <div class="z-orb-title-22">
+        <div class="opacity-0 animate-z-fade-in">
+            <div class="mb-5">
+                <div class="font-orbitron text-[22px] font-semibold text-z-text">
                     <TypeWriter text="Choose your intelligence sources" speed_ms=40 />
                 </div>
                 <FadeIn delay_ms=1000>
-                    <p class="z-step-body">
+                    <p class="text-sm text-z-text/70 mt-2.5 leading-[1.7]">
                         "Zeus connects to multiple LLM providers through a unified interface. Enable the ones you have API keys for."
                     </p>
                     <Show when=move || !detected.get().is_empty()>
@@ -1343,7 +1343,7 @@ fn StepIntelligence(config: RwSignal<OnboardConfig>, providers_data: RwSignal<Ve
                 </FadeIn>
             </div>
 
-            <div class="z-grid-2col">
+            <div class="grid grid-cols-2 gap-2.5">
                 {providers_data.get().iter().map(|p| {
                     let pid = p.id.clone();
                     let pid_c1 = pid.clone();
@@ -1396,7 +1396,7 @@ fn StepIntelligence(config: RwSignal<OnboardConfig>, providers_data: RwSignal<Ve
                                 <div style={format!("width: 36px; height: 36px; border-radius: 10px; background: {}12; border: 1px solid {}30; display: flex; align-items: center; justify-content: center; font-family: 'Orbitron', monospace; font-size: 10px; font-weight: 900; color: {};",  color, color, color)}>
                                     {abbr}
                                 </div>
-                                <div class="z-flex1">
+                                <div class="flex-1">
                                     <div style="display: flex; align-items: center; gap: 6px;">
                                         // Fix #3a: provider name color is dynamic (selected=bright, unselected=dim)
                                         <span style=move || format!("font-size: 14px; font-weight: 700; color: {};",
@@ -1566,7 +1566,7 @@ fn StepIntelligence(config: RwSignal<OnboardConfig>, providers_data: RwSignal<Ve
                                 "margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(255,60,20,0.1); display: {};",
                                 if config.get().providers.contains(&pid_c9) && is_local { "block" } else { "none" }
                             )>
-                                <label class="z-orb-field-label">"OLLAMA ENDPOINT URL"</label>
+                                <label class="font-orbitron text-[10px] tracking-[3px] text-z-text/70 block mb-2 uppercase">"OLLAMA ENDPOINT URL"</label>
                                 <div style="display: flex; align-items: center; gap: 8px;">
                                     <input
                                         style="flex: 1; padding: 12px 16px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,60,20,0.1); border-radius: 10px; color: rgba(255,245,240,0.9); font-family: 'Orbitron', monospace; font-size: 12px; outline: none; box-sizing: border-box; transition: all 0.3s;"
@@ -1687,18 +1687,18 @@ fn StepModel(config: RwSignal<OnboardConfig>, providers_data: RwSignal<Vec<DynPr
     });
 
     view! {
-        <div class="z-fade-in">
-            <div class="z-mb20">
-                <div class="z-orb-title-22">
+        <div class="opacity-0 animate-z-fade-in">
+            <div class="mb-5">
+                <div class="font-orbitron text-[22px] font-semibold text-z-text">
                     <TypeWriter text="Select your default model" speed_ms=40 />
                 </div>
-                <p class="z-fade-in" style="font-size: 13px; color: rgba(255,245,240,0.7); margin-top: 8px; line-height: 1.7;">
+                <p class="opacity-0 animate-z-fade-in" style="font-size: 13px; color: rgba(255,245,240,0.7); margin-top: 8px; line-height: 1.7;">
                     "This is the primary brain Zeus will use. Switch per-session or per-agent anytime via "
                     <code style="font-family: 'Orbitron', monospace; font-size: 11px; color: rgba(255,60,20,0.6); background: rgba(255,255,255,0.03); padding: 1px 6px; border-radius: 3px;">"/model"</code>
                 </p>
             </div>
 
-            <div class="z-fade-in z-col-gap6">
+            <div class="opacity-0 animate-z-fade-in flex flex-col gap-1.5">
                 {move || {
                     let enabled = config.get().providers.clone();
                     let provs = providers_data.get();
@@ -1740,7 +1740,7 @@ fn StepModel(config: RwSignal<OnboardConfig>, providers_data: RwSignal<Vec<DynPr
                         }.into_any()
                     } else {
                         view! {
-                            <div class="z-col-gap6">
+                            <div class="flex flex-col gap-1.5">
                                 {models.into_iter().map(|(full, provider_name, color, _pid): (String, String, String, String)| {
                                     let full_c = full.clone();
                                     let full_c2 = full.clone();
@@ -1749,7 +1749,7 @@ fn StepModel(config: RwSignal<OnboardConfig>, providers_data: RwSignal<Vec<DynPr
                                     let color_c = color.clone();
                                     view! {
                                         <div
-                                            class=move || if config.get().default_model == full_c { "zselect-card selected z-row-gap14" } else { "zselect-card z-row-gap14" }
+                                            class=move || if config.get().default_model == full_c { "zselect-card selected flex items-center gap-3.5" } else { "zselect-card flex items-center gap-3.5" }
                                             on:click={
                                                 let full = full.clone();
                                                 move |_| config.update(|c| c.default_model = full.clone())
@@ -1786,7 +1786,7 @@ fn StepModel(config: RwSignal<OnboardConfig>, providers_data: RwSignal<Vec<DynPr
 
             // Fallback models section
             <div style="margin-top: 28px; padding-top: 20px; border-top: 1px solid rgba(255,60,20,0.1);">
-                <div class="z-orb-accent-label">"FALLBACK MODELS"</div>
+                <div class="font-orbitron text-[10px] tracking-[3px] text-z-accent/80 mb-3 font-bold">"FALLBACK MODELS"</div>
                 <p style="font-size: 11px; color: rgba(255,245,240,0.5); margin-bottom: 12px; line-height: 1.5;">
                     "If the primary model fails, Zeus tries these in order. Format: " <code style="color: rgba(255,60,20,0.6);">"provider/model-name"</code>
                 </p>
@@ -1855,17 +1855,17 @@ fn StepChannels(config: RwSignal<OnboardConfig>, channels_data: RwSignal<Vec<Dyn
     let wa_qr: RwSignal<Option<String>> = RwSignal::new(None);
     let wa_qr_busy: RwSignal<bool> = RwSignal::new(false);
     view! {
-        <div class="z-fade-in">
-            <div class="z-mb20">
-                <div class="z-orb-title-22">
+        <div class="opacity-0 animate-z-fade-in">
+            <div class="mb-5">
+                <div class="font-orbitron text-[22px] font-semibold text-z-text">
                     <TypeWriter text="Extend your senses" speed_ms=40 />
                 </div>
-                <p class="z-step-body">
+                <p class="text-sm text-z-text/70 mt-2.5 leading-[1.7]">
                     "Zeus can communicate across 8 messaging platforms simultaneously. Enable the ones you want now."
                 </p>
             </div>
 
-            <div class="z-grid-2col">
+            <div class="grid grid-cols-2 gap-2.5">
                 {channels_data.get().iter().map(|ch| {
                     let cid = ch.id.clone();
                     let cid_c1 = cid.clone();
@@ -1897,7 +1897,7 @@ fn StepChannels(config: RwSignal<OnboardConfig>, channels_data: RwSignal<Vec<Dyn
                                 })
                             }
                         >
-                            <div class="z-row-gap14">
+                            <div class="flex items-center gap-3.5">
                                 <div style=move || format!(
                                     "width: 46px; height: 46px; border-radius: 12px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-family: 'Orbitron', monospace; font-size: 14px; font-weight: 900; transition: all 0.3s; border: 1px solid {}; background: {}; color: {};",
                                     if config.get().channels.contains(&cid_c2) { "rgba(255,60,20,0.25)" } else { "rgba(255,60,20,0.1)" },
@@ -1907,7 +1907,7 @@ fn StepChannels(config: RwSignal<OnboardConfig>, channels_data: RwSignal<Vec<Dyn
                                 )>
                                     {icon_text}
                                 </div>
-                                <div class="z-flex1">
+                                <div class="flex-1">
                                     // Fix #6: channel name color is dynamic
                                     <div style=move || format!("font-size: 15px; font-weight: 700; color: {};",
                                         if config.get().channels.contains(&cid_c5) { "rgba(255,245,240,0.9)" } else { "rgba(255,245,240,0.7)" })>
@@ -2219,12 +2219,12 @@ fn StepChannels(config: RwSignal<OnboardConfig>, channels_data: RwSignal<Vec<Dyn
 #[component]
 fn StepSecurity(config: RwSignal<OnboardConfig>) -> impl IntoView {
     view! {
-        <div class="z-fade-in">
-            <div class="z-mb20">
-                <div class="z-orb-title-22">
+        <div class="opacity-0 animate-z-fade-in">
+            <div class="mb-5">
+                <div class="font-orbitron text-[22px] font-semibold text-z-text">
                     <TypeWriter text="Define your armor" speed_ms=40 />
                 </div>
-                <p class="z-step-body">
+                <p class="text-sm text-z-text/70 mt-2.5 leading-[1.7]">
                     "Zeus executes tools on your machine. Choose a security level that matches your trust and risk tolerance."
                 </p>
             </div>
@@ -2266,7 +2266,7 @@ fn StepSecurity(config: RwSignal<OnboardConfig>) -> impl IntoView {
                                         <div style="width: 10px; height: 10px; border-radius: 5px; background: #ff3c14;" />
                                     </Show>
                                 </div>
-                                <div class="z-flex1">
+                                <div class="flex-1">
                                     <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
                                         <span style=move || format!("font-family: 'Orbitron', monospace; font-size: 15px; font-weight: 900; letter-spacing: 5px; color: {};", 
                                             if config.get().security_level == lid_c4 { "rgba(255,245,240,0.9)" } else { "rgba(255,245,240,0.7)" })>
@@ -2306,12 +2306,12 @@ fn StepSecurity(config: RwSignal<OnboardConfig>) -> impl IntoView {
 #[component]
 fn StepFeatures(config: RwSignal<OnboardConfig>) -> impl IntoView {
     view! {
-        <div class="z-fade-in">
-            <div class="z-mb20">
-                <div class="z-orb-title-22">
+        <div class="opacity-0 animate-z-fade-in">
+            <div class="mb-5">
+                <div class="font-orbitron text-[22px] font-semibold text-z-text">
                     <TypeWriter text="Unlock abilities" speed_ms=40 />
                 </div>
-                <p class="z-step-body">
+                <p class="text-sm text-z-text/70 mt-2.5 leading-[1.7]">
                     "Zeus ships with a modular subsystem architecture. Enable the capabilities you need."
                 </p>
             </div>
@@ -2358,7 +2358,7 @@ fn StepFeatures(config: RwSignal<OnboardConfig>) -> impl IntoView {
                                     if config.get().features.contains(&fid_c2b) { "translateX(20px)" } else { "translateX(0)" }
                                 ) />
                             </div>
-                            <div class="z-flex1">
+                            <div class="flex-1">
                                 <div style=move || format!("font-size: 15px; font-weight: 700; color: {};",
                                     if config.get().features.contains(&fid_c3) { "rgba(255,245,240,0.9)" } else { "rgba(255,245,240,0.7)" })>{name}</div>
                                 <div style=move || format!("font-size: 12px; color: {}; margin-top: 2px;",
@@ -2389,22 +2389,22 @@ fn StepFeatures(config: RwSignal<OnboardConfig>) -> impl IntoView {
 #[component]
 fn StepServices(config: RwSignal<OnboardConfig>) -> impl IntoView {
     view! {
-        <div class="z-fade-in">
+        <div class="opacity-0 animate-z-fade-in">
             <div style="margin-bottom: 24px;">
-                <div class="z-orb-title-22">
+                <div class="font-orbitron text-[22px] font-semibold text-z-text">
                     <TypeWriter text="Connect services" speed_ms=40 />
                 </div>
-                <p class="z-step-body">
+                <p class="text-sm text-z-text/70 mt-2.5 leading-[1.7]">
                     "Optional: connect image generation, voice, and video services. All skippable — configure later in Settings."
                 </p>
             </div>
 
             // Image Generation
-            <div class="z-mb20">
-                <div class="z-orb-accent-label">
+            <div class="mb-5">
+                <div class="font-orbitron text-[10px] tracking-[3px] text-z-accent/80 mb-3 font-bold">
                     "IMAGE GENERATION"
                 </div>
-                <div class="z-col-gap6">
+                <div class="flex flex-col gap-1.5">
                     {["fooocus", "automatic1111", "comfyui", "openai", "openai_compatible"].iter().map(|pid| {
                         let (name, desc, def_url, needs_key) = match *pid {
                             "fooocus"            => ("Fooocus",           "Local Stable Diffusion UI (recommended)",  "http://localhost:8888", false),
@@ -2479,7 +2479,7 @@ fn StepServices(config: RwSignal<OnboardConfig>) -> impl IntoView {
                                                                     placeholder={du3}
                                                                     prop:value=move || if config.get().image_gen_provider == pu2 { config.get().image_gen_url } else { String::new() }
                                                                     on:input=move |e| { let v = event_target_value(&e); config.update(|c| c.image_gen_url = v); }
-                                                                    class="z-input-field"
+                                                                    class="w-full box-border bg-white/[0.04] border border-z-accent/15 rounded-lg px-3.5 py-[9px] text-[13px] text-z-text font-rajdhani outline-none"
                                                                 />
                                                             </div>
                                                         }.into_any()
@@ -2496,7 +2496,7 @@ fn StepServices(config: RwSignal<OnboardConfig>) -> impl IntoView {
                                                                     placeholder="sk-..."
                                                                     prop:value=move || if config.get().image_gen_provider == pk2 { config.get().image_gen_api_key.clone() } else { String::new() }
                                                                     on:input=move |e| { let v = event_target_value(&e); config.update(|c| c.image_gen_api_key = v); }
-                                                                    class="z-input-field"
+                                                                    class="w-full box-border bg-white/[0.04] border border-z-accent/15 rounded-lg px-3.5 py-[9px] text-[13px] text-z-text font-rajdhani outline-none"
                                                                 />
                                                             </div>
                                                         }.into_any()
@@ -2517,69 +2517,69 @@ fn StepServices(config: RwSignal<OnboardConfig>) -> impl IntoView {
             </div>
 
             // Voice STT / TTS
-            <div class="z-mb20">
-                <div class="z-orb-accent-label">
+            <div class="mb-5">
+                <div class="font-orbitron text-[10px] tracking-[3px] text-z-accent/80 mb-3 font-bold">
                     "VOICE — STT / TTS"
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,60,20,0.1);">
                     <div>
-                        <div class="z-row-between-base">
-                            <div class="z-fs13-bold">"Piper TTS URL"</div>
-                            <div class="z-fs11-dim35">"Text-to-speech engine"</div>
+                        <div class="flex justify-between items-baseline mb-1">
+                            <div class="text-[13px] font-bold text-z-text/80">"Piper TTS URL"</div>
+                            <div class="text-[11px] text-z-text/35">"Text-to-speech engine"</div>
                         </div>
                         <input
                             type="text"
                             placeholder="http://localhost:8104"
                             prop:value=move || config.get().piper_url
                             on:input=move |e| { let v = event_target_value(&e); config.update(|c| c.piper_url = v); }
-                            class="z-input-field"
+                            class="w-full box-border bg-white/[0.04] border border-z-accent/15 rounded-lg px-3.5 py-[9px] text-[13px] text-z-text font-rajdhani outline-none"
                         />
                     </div>
                     <div>
-                        <div class="z-row-between-base">
-                            <div class="z-fs13-bold">"Whisper STT URL"</div>
-                            <div class="z-fs11-dim35">"Speech-to-text engine"</div>
+                        <div class="flex justify-between items-baseline mb-1">
+                            <div class="text-[13px] font-bold text-z-text/80">"Whisper STT URL"</div>
+                            <div class="text-[11px] text-z-text/35">"Speech-to-text engine"</div>
                         </div>
                         <input
                             type="text"
                             placeholder="http://localhost:9000"
                             prop:value=move || config.get().whisper_url
                             on:input=move |e| { let v = event_target_value(&e); config.update(|c| c.whisper_url = v); }
-                            class="z-input-field"
+                            class="w-full box-border bg-white/[0.04] border border-z-accent/15 rounded-lg px-3.5 py-[9px] text-[13px] text-z-text font-rajdhani outline-none"
                         />
                     </div>
                     <div>
-                        <div class="z-row-between-base">
-                            <div class="z-fs13-bold">"ElevenLabs API Key"</div>
-                            <div class="z-fs11-dim35">"Premium cloud TTS (optional — overrides Piper)"</div>
+                        <div class="flex justify-between items-baseline mb-1">
+                            <div class="text-[13px] font-bold text-z-text/80">"ElevenLabs API Key"</div>
+                            <div class="text-[11px] text-z-text/35">"Premium cloud TTS (optional — overrides Piper)"</div>
                         </div>
                         <input
                             type="password"
                             placeholder="sk_..."
                             prop:value=move || config.get().elevenlabs_api_key
                             on:input=move |e| { let v = event_target_value(&e); config.update(|c| c.elevenlabs_api_key = v); }
-                            class="z-input-field"
+                            class="w-full box-border bg-white/[0.04] border border-z-accent/15 rounded-lg px-3.5 py-[9px] text-[13px] text-z-text font-rajdhani outline-none"
                         />
                     </div>
                 </div>
             </div>
 
             // Video Generation
-            <div class="z-mb16">
-                <div class="z-orb-accent-label">
+            <div class="mb-4">
+                <div class="font-orbitron text-[10px] tracking-[3px] text-z-accent/80 mb-3 font-bold">
                     "VIDEO GENERATION"
                 </div>
                 <div style="padding: 16px 18px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,60,20,0.1);">
-                    <div class="z-row-between-base">
-                        <div class="z-fs13-bold">"ComfyUI / Video Gen URL"</div>
-                        <div class="z-fs11-dim35">"Wan2.1, CogVideo, AnimateDiff..."</div>
+                    <div class="flex justify-between items-baseline mb-1">
+                        <div class="text-[13px] font-bold text-z-text/80">"ComfyUI / Video Gen URL"</div>
+                        <div class="text-[11px] text-z-text/35">"Wan2.1, CogVideo, AnimateDiff..."</div>
                     </div>
                     <input
                         type="text"
                         placeholder="http://localhost:8188"
                         prop:value=move || config.get().video_url
                         on:input=move |e| { let v = event_target_value(&e); config.update(|c| c.video_url = v); }
-                        class="z-input-field"
+                        class="w-full box-border bg-white/[0.04] border border-z-accent/15 rounded-lg px-3.5 py-[9px] text-[13px] text-z-text font-rajdhani outline-none"
                     />
                 </div>
             </div>
@@ -2610,19 +2610,19 @@ fn StepServices(config: RwSignal<OnboardConfig>) -> impl IntoView {
 #[component]
 fn StepOrchestration(config: RwSignal<OnboardConfig>) -> impl IntoView {
     view! {
-        <div class="z-fade-in">
-            <div class="z-mb20">
-                <div class="z-orb-title-22">
+        <div class="opacity-0 animate-z-fade-in">
+            <div class="mb-5">
+                <div class="font-orbitron text-[22px] font-semibold text-z-text">
                     <TypeWriter text="Configure orchestration" speed_ms=40 />
                 </div>
-                <p class="z-step-body">
+                <p class="text-sm text-z-text/70 mt-2.5 leading-[1.7]">
                     "Prometheus orchestrates complex tasks. Nous provides cognitive intelligence — intent recognition and learning."
                 </p>
             </div>
 
             // Orchestration mode radios
-            <div class="z-mb20">
-                <div class="z-orb-accent-label">
+            <div class="mb-5">
+                <div class="font-orbitron text-[10px] tracking-[3px] text-z-accent/80 mb-3 font-bold">
                     "ORCHESTRATION MODE"
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 8px;">
@@ -2658,7 +2658,7 @@ fn StepOrchestration(config: RwSignal<OnboardConfig>) -> impl IntoView {
                                             <div style="width: 10px; height: 10px; border-radius: 5px; background: #ff3c14;" />
                                         </Show>
                                     </div>
-                                    <div class="z-flex1">
+                                    <div class="flex-1">
                                         <div style=move || format!("font-size: 15px; font-weight: 700; color: {};",
                                             if config.get().orchestration_mode == id_c4 { "rgba(255,245,240,0.9)" } else { "rgba(255,245,240,0.7)" })>
                                             {*name}
@@ -2674,29 +2674,29 @@ fn StepOrchestration(config: RwSignal<OnboardConfig>) -> impl IntoView {
 
             // Custom: heartbeat interval (only shown when custom)
             <Show when=move || config.get().orchestration_mode == "custom">
-                <div class="z-mb20">
-                    <div class="z-orb-accent-label">
+                <div class="mb-5">
+                    <div class="font-orbitron text-[10px] tracking-[3px] text-z-accent/80 mb-3 font-bold">
                         "HEARTBEAT INTERVAL"
                     </div>
                     <div style="padding: 16px 18px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,60,20,0.1);">
-                        <div class="z-row-between-base">
-                            <div class="z-fs13-bold">"Interval (seconds)"</div>
-                            <div class="z-fs11-dim35">"How often Prometheus checks for proactive tasks"</div>
+                        <div class="flex justify-between items-baseline mb-1">
+                            <div class="text-[13px] font-bold text-z-text/80">"Interval (seconds)"</div>
+                            <div class="text-[11px] text-z-text/35">"How often Prometheus checks for proactive tasks"</div>
                         </div>
                         <input
                             type="text"
                             placeholder="300"
                             prop:value=move || config.get().heartbeat_interval.clone()
                             on:input=move |e| { let v = event_target_value(&e); config.update(|c| c.heartbeat_interval = v); }
-                            class="z-input-field"
+                            class="w-full box-border bg-white/[0.04] border border-z-accent/15 rounded-lg px-3.5 py-[9px] text-[13px] text-z-text font-rajdhani outline-none"
                         />
                     </div>
                 </div>
             </Show>
 
             // Nous toggles
-            <div class="z-mb20">
-                <div class="z-orb-accent-label">
+            <div class="mb-5">
+                <div class="font-orbitron text-[10px] tracking-[3px] text-z-accent/80 mb-3 font-bold">
                     "COGNITIVE ENGINE (NOUS)"
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 8px;">
@@ -2719,7 +2719,7 @@ fn StepOrchestration(config: RwSignal<OnboardConfig>) -> impl IntoView {
                                 if config.get().nous_intent { "translateX(20px)" } else { "translateX(0)" }
                             ) />
                         </div>
-                        <div class="z-flex1">
+                        <div class="flex-1">
                             <div style=move || format!("font-size: 15px; font-weight: 700; color: {};",
                                 if config.get().nous_intent { "rgba(255,245,240,0.9)" } else { "rgba(255,245,240,0.7)" })>"Intent Recognition"</div>
                             <div style=move || format!("font-size: 12px; color: {}; margin-top: 2px;",
@@ -2745,7 +2745,7 @@ fn StepOrchestration(config: RwSignal<OnboardConfig>) -> impl IntoView {
                                 if config.get().nous_learning { "translateX(20px)" } else { "translateX(0)" }
                             ) />
                         </div>
-                        <div class="z-flex1">
+                        <div class="flex-1">
                             <div style=move || format!("font-size: 15px; font-weight: 700; color: {};",
                                 if config.get().nous_learning { "rgba(255,245,240,0.9)" } else { "rgba(255,245,240,0.7)" })>"Learning from Interactions"</div>
                             <div style=move || format!("font-size: 12px; color: {}; margin-top: 2px;",
@@ -2756,8 +2756,8 @@ fn StepOrchestration(config: RwSignal<OnboardConfig>) -> impl IntoView {
             </div>
 
             // Notifications (Hermes)
-            <div class="z-mb20">
-                <div class="z-orb-accent-label">
+            <div class="mb-5">
+                <div class="font-orbitron text-[10px] tracking-[3px] text-z-accent/80 mb-3 font-bold">
                     "NOTIFICATIONS"
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 8px;">
@@ -2808,8 +2808,8 @@ fn StepOrchestration(config: RwSignal<OnboardConfig>) -> impl IntoView {
             </div>
 
             // LLM Council toggle
-            <div class="z-mb20" style="margin-top: 16px;">
-                <div class="z-orb-accent-label">"LLM COUNCIL"</div>
+            <div class="mb-5" style="margin-top: 16px;">
+                <div class="font-orbitron text-[10px] tracking-[3px] text-z-accent/80 mb-3 font-bold">"LLM COUNCIL"</div>
                 <div
                     style=move || format!(
                         "display: flex; align-items: center; gap: 12px; padding: 14px 18px; background: {}; border: 1px solid rgba(255,60,20,0.1); border-radius: 12px; cursor: pointer; transition: all 0.3s;",
@@ -2855,8 +2855,8 @@ fn StepOrchestration(config: RwSignal<OnboardConfig>) -> impl IntoView {
             </div>
 
             // Gateway settings
-            <div class="z-mb20" style="margin-top: 24px; padding-top: 16px; border-top: 1px solid rgba(255,60,20,0.1);">
-                <div class="z-orb-accent-label">
+            <div class="mb-5" style="margin-top: 24px; padding-top: 16px; border-top: 1px solid rgba(255,60,20,0.1);">
+                <div class="font-orbitron text-[10px] tracking-[3px] text-z-accent/80 mb-3 font-bold">
                     "GATEWAY"
                 </div>
                 <div style="display: flex; gap: 16px; flex-wrap: wrap;">
@@ -2913,12 +2913,12 @@ fn StepOrchestration(config: RwSignal<OnboardConfig>) -> impl IntoView {
 #[component]
 fn StepMemory(config: RwSignal<OnboardConfig>) -> impl IntoView {
     view! {
-        <div class="z-fade-in">
-            <div class="z-mb20">
-                <div class="z-orb-title-22">
+        <div class="opacity-0 animate-z-fade-in">
+            <div class="mb-5">
+                <div class="font-orbitron text-[22px] font-semibold text-z-text">
                     <TypeWriter text="Configure memory" speed_ms=40 />
                 </div>
-                <p class="z-step-body">
+                <p class="text-sm text-z-text/70 mt-2.5 leading-[1.7]">
                     "Mnemosyne gives Zeus long-term memory. Choose which storage backends to enable."
                 </p>
             </div>
@@ -2943,7 +2943,7 @@ fn StepMemory(config: RwSignal<OnboardConfig>) -> impl IntoView {
                             if config.get().memory_fts { "translateX(20px)" } else { "translateX(0)" }
                         ) />
                     </div>
-                    <div class="z-flex1">
+                    <div class="flex-1">
                         <div style=move || format!("font-size: 15px; font-weight: 700; color: {};",
                             if config.get().memory_fts { "rgba(255,245,240,0.9)" } else { "rgba(255,245,240,0.7)" })>"Full-Text Search (FTS5)"</div>
                         <div style=move || format!("font-size: 12px; color: {}; margin-top: 2px;",
@@ -2972,7 +2972,7 @@ fn StepMemory(config: RwSignal<OnboardConfig>) -> impl IntoView {
                             if config.get().memory_embeddings { "translateX(20px)" } else { "translateX(0)" }
                         ) />
                     </div>
-                    <div class="z-flex1">
+                    <div class="flex-1">
                         <div style=move || format!("font-size: 15px; font-weight: 700; color: {};",
                             if config.get().memory_embeddings { "rgba(255,245,240,0.9)" } else { "rgba(255,245,240,0.7)" })>"Vector Embeddings"</div>
                         <div style=move || format!("font-size: 12px; color: {}; margin-top: 2px;",
@@ -3052,12 +3052,12 @@ fn StepSkills(config: RwSignal<OnboardConfig>) -> impl IntoView {
     });
 
     view! {
-        <div class="z-fade-in">
-            <div class="z-mb20">
-                <div class="z-orb-title-22">
+        <div class="opacity-0 animate-z-fade-in">
+            <div class="mb-5">
+                <div class="font-orbitron text-[22px] font-semibold text-z-text">
                     <TypeWriter text="Select skills" speed_ms=40 />
                 </div>
-                <p class="z-step-body">
+                <p class="text-sm text-z-text/70 mt-2.5 leading-[1.7]">
                     "Skills are reusable reasoning patterns that enhance Zeus. Select built-in skills or browse community skills later."
                 </p>
             </div>
@@ -3091,7 +3091,7 @@ fn StepSkills(config: RwSignal<OnboardConfig>) -> impl IntoView {
                                     if is_enabled { "translateX(20px)" } else { "translateX(0)" }
                                 ) />
                             </div>
-                            <div class="z-flex1">
+                            <div class="flex-1">
                                 <div style=move || format!("font-size: 15px; font-weight: 700; color: {};",
                                     if is_enabled { "rgba(255,245,240,0.9)" } else { "rgba(255,245,240,0.7)" })>{name_c.clone()}</div>
                                 <div style=move || format!("font-size: 12px; color: {}; margin-top: 2px;",
