@@ -302,6 +302,7 @@ mod tests {
                 valid_from: None,
                 valid_to: None,
                 superseded_by: None,
+                verified: true,
             },
             SearchResult {
                 id: 2,
@@ -316,6 +317,7 @@ mod tests {
                 valid_from: None,
                 valid_to: None,
                 superseded_by: None,
+                verified: true,
             },
         ];
 

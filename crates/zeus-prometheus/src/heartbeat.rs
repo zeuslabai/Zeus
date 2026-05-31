@@ -27,7 +27,25 @@ use crate::tool_executor::ToolExecutor;
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Runtime configuration for the heartbeat loop.
+/// Controls how much heartbeat output is posted to Discord.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DiscordVerbosity {
+    /// Never post anything to Discord.
+    Silent,
+    /// Post only failures.
+    Failures,
+    /// Post failures + substantive output (non-trivial, non-empty). Default.
+    Meaningful,
+    /// Post everything including routine filler.
+    All,
+}
+
+impl Default for DiscordVerbosity {
+    fn default() -> Self {
+        DiscordVerbosity::Meaningful
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HeartbeatConfig {
     /// Hour (0–23, local time) at which quiet hours begin. Default: 23.
@@ -79,6 +97,13 @@ pub struct HeartbeatConfig {
     /// on every adaptive heartbeat tick. Default: 3600 (1h).
     #[serde(default = "default_plan_resume_interval")]
     pub plan_resume_interval_secs: u64,
+    /// How much heartbeat output to post to Discord.
+    /// - `Silent`: never post.
+    /// - `Failures`: only post failures.
+    /// - `Meaningful` (default): post failures + substantive output.
+    /// - `All`: post everything including routine filler.
+    #[serde(default)]
+    pub discord_verbosity: DiscordVerbosity,
 }
 
 fn default_timeout_secs() -> u64 { 300 } // 5 min — coding tasks need time
@@ -140,6 +165,7 @@ impl Default for HeartbeatConfig {
             event_driven_only: true,
             safety_net_interval_secs: 3600,
             plan_resume_interval_secs: 3600,
+            discord_verbosity: DiscordVerbosity::Meaningful,
         }
     }
 }
@@ -705,8 +731,14 @@ impl Heartbeat {
             let _ = self.workspace.note(&note).await;
 
             // S69: Deliver results to Discord/channels if configured
-            if let Some(ref tx) = self.result_tx {
-                let _ = tx.try_send(note);
+            // #119: honor discord_verbosity — only post if at least one result is post-worthy
+            let any_post_worthy = meaningful.iter().any(|r| {
+                should_post_to_discord(r, self.config.discord_verbosity)
+            });
+            if any_post_worthy {
+                if let Some(ref tx) = self.result_tx {
+                    let _ = tx.try_send(note);
+                }
             }
 
             // S69: Persist to dedicated heartbeat session
@@ -754,6 +786,7 @@ pub fn spawn_watchdog(
     result_tx: Option<tokio::sync::mpsc::Sender<String>>,
     period_secs: u64,
     stall_threshold_secs: u64,
+    discord_verbosity: DiscordVerbosity,
 ) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(period_secs));
@@ -787,8 +820,11 @@ pub fn spawn_watchdog(
                             .unwrap_or_else(|| "never".to_string())
                     );
                     warn!("Watchdog alert fired: no heartbeat tick in 10+ min, task in_progress");
-                    if let Some(ref tx) = result_tx {
-                        let _ = tx.try_send(warning);
+                    // Watchdog alerts are warnings — post unless verbosity is Silent.
+                    if discord_verbosity != DiscordVerbosity::Silent {
+                        if let Some(ref tx) = result_tx {
+                            let _ = tx.try_send(warning);
+                        }
                     }
                 }
             }
@@ -829,7 +865,7 @@ async fn heartbeat_loop(
     // Watchdog: background task that fires when no heartbeat tick is received
     // for 600+ seconds (10 min) AND CURRENT TASK is "in_progress".
     // Posts a system warning to Discord via result_tx.
-    spawn_watchdog(state_path.clone(), workspace.clone(), result_tx.clone(), 600, 600);
+    spawn_watchdog(state_path.clone(), workspace.clone(), result_tx.clone(), 600, 600, config.discord_verbosity);
 
     // Fix B (Dispatch 24): Watchdog fast-pulse.
     // Pure liveness signal — decoupled from wake events. Updates
@@ -1119,9 +1155,11 @@ async fn heartbeat_loop(
                                     info!("Heartbeat task completed: {}", task.name);
                                     state.last_output.insert(task.name.clone(), result.output.clone());
                                     state.last_output_at.insert(task.name.clone(), now_unix);
-                                    if let Some(ref tx) = result_tx {
-                                        let note = format!("[Heartbeat] {}: {}", task.name, result.output);
-                                        let _ = tx.try_send(note);
+                                    if should_post_to_discord(&result, config.discord_verbosity) {
+                                        if let Some(ref tx) = result_tx {
+                                            let note = format!("[Heartbeat] {}: {}", task.name, result.output);
+                                            let _ = tx.try_send(note);
+                                        }
                                     }
                                 }
                             } else {
@@ -1135,9 +1173,11 @@ async fn heartbeat_loop(
                                 }
                                 
                                 error!("Heartbeat task FAILED: {} — {}", task.name, result.output);
-                                if let Some(ref tx) = result_tx {
-                                    let note = format!("[Heartbeat FAIL] {}: {}", task.name, result.output);
-                                    let _ = tx.try_send(note);
+                                if should_post_to_discord(&result, config.discord_verbosity) {
+                                    if let Some(ref tx) = result_tx {
+                                        let note = format!("[Heartbeat FAIL] {}: {}", task.name, result.output);
+                                        let _ = tx.try_send(note);
+                                    }
                                 }
                             }
                         }
@@ -1242,9 +1282,11 @@ async fn heartbeat_loop(
                                                 info!("Heartbeat task completed: {}", task);
                                                 state.last_output.insert(task.clone(), result.output.clone());
                                                 state.last_output_at.insert(task.clone(), now_unix);
-                                                if let Some(ref tx) = result_tx {
-                                                    let note = format!("[Heartbeat] {}: {}", task, result.output);
-                                                    let _ = tx.try_send(note);
+                                                if should_post_to_discord(&result, config.discord_verbosity) {
+                                                    if let Some(ref tx) = result_tx {
+                                                        let note = format!("[Heartbeat] {}: {}", task, result.output);
+                                                        let _ = tx.try_send(note);
+                                                    }
                                                 }
                                             }
                                         } else {
@@ -1258,9 +1300,11 @@ async fn heartbeat_loop(
                                             }
                                             
                                             error!("Heartbeat task FAILED: {} — {}", task, result.output);
-                                            if let Some(ref tx) = result_tx {
-                                                let note = format!("[Heartbeat FAIL] {}: {}", task, result.output);
-                                                let _ = tx.try_send(note);
+                                            if should_post_to_discord(&result, config.discord_verbosity) {
+                                                if let Some(ref tx) = result_tx {
+                                                    let note = format!("[Heartbeat FAIL] {}: {}", task, result.output);
+                                                    let _ = tx.try_send(note);
+                                                }
                                             }
                                         }
                                     }
@@ -1757,11 +1801,11 @@ async fn execute_heartbeat_task(
         }
     }
 
-    // Hit max iterations
+    // Hit max iterations — no-signal completion, treat as silent.
     TaskResult {
         task: task.to_string(),
         success: true,
-        silent: false,
+        silent: true,
         output: format!("Completed after {} tool iterations", max_iterations),
     }
 }
@@ -1779,6 +1823,38 @@ pub struct TaskResult {
     /// needed and the result should be silently discarded (no log, no note).
     pub silent: bool,
     pub output: String,
+}
+
+/// Post-worthiness policy: decide whether a `TaskResult` should be posted to
+/// Discord given the configured verbosity level.
+///
+/// | Verbosity | silent=true | fail | substantive | routine filler |
+/// |-----------|-------------|------|-------------|----------------|
+/// | Silent    | ✗           | ✗    | ✗           | ✗              |
+/// | Failures  | ✗           | ✓    | ✗           | ✗              |
+/// | Meaningful| ✗           | ✓    | ✓           | ✗              |
+/// | All       | ✓           | ✓    | ✓           | ✓              |
+pub fn should_post_to_discord(result: &TaskResult, verbosity: DiscordVerbosity) -> bool {
+    match verbosity {
+        DiscordVerbosity::Silent => false,
+        DiscordVerbosity::Failures => !result.success,
+        DiscordVerbosity::Meaningful => {
+            if !result.success {
+                return true;
+            }
+            // Substantive = non-empty and not trivial filler
+            if result.output.trim().is_empty() {
+                return false;
+            }
+            // Treat max-iter filler as non-substantive regardless of silent flag
+            let is_max_iter_filler = result
+                .output
+                .starts_with("Completed after")
+                && result.output.contains("tool iterations");
+            !result.silent && !is_max_iter_filler
+        }
+        DiscordVerbosity::All => true,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2914,5 +2990,110 @@ mod tests {
             cfg.plan_resume_interval_secs, 3600,
             "default plan_resume_interval_secs must be 1h to match preflight gate cadence"
         );
+    }
+
+    // --- should_post_to_discord (#119) ---
+
+    #[test]
+    fn test_should_post_silent_verbosity_never_posts() {
+        let result = TaskResult {
+            task: "anything".to_string(),
+            success: true,
+            silent: false,
+            output: "substantive output".to_string(),
+        };
+        assert!(!should_post_to_discord(&result, DiscordVerbosity::Silent));
+
+        let fail = TaskResult {
+            task: "anything".to_string(),
+            success: false,
+            silent: false,
+            output: "error".to_string(),
+        };
+        assert!(!should_post_to_discord(&fail, DiscordVerbosity::Silent));
+    }
+
+    #[test]
+    fn test_should_post_failures_verbosity_posts_only_fails() {
+        let ok = TaskResult {
+            task: "ok".to_string(),
+            success: true,
+            silent: false,
+            output: "done".to_string(),
+        };
+        assert!(!should_post_to_discord(&ok, DiscordVerbosity::Failures));
+
+        let fail = TaskResult {
+            task: "fail".to_string(),
+            success: false,
+            silent: false,
+            output: "boom".to_string(),
+        };
+        assert!(should_post_to_discord(&fail, DiscordVerbosity::Failures));
+    }
+
+    #[test]
+    fn test_should_post_meaningful_verbosity_posts_fail_and_substantive() {
+        let fail = TaskResult {
+            task: "fail".to_string(),
+            success: false,
+            silent: false,
+            output: "boom".to_string(),
+        };
+        assert!(should_post_to_discord(&fail, DiscordVerbosity::Meaningful));
+
+        let substantive = TaskResult {
+            task: "sub".to_string(),
+            success: true,
+            silent: false,
+            output: "real work done".to_string(),
+        };
+        assert!(should_post_to_discord(&substantive, DiscordVerbosity::Meaningful));
+
+        let silent_ok = TaskResult {
+            task: "noop".to_string(),
+            success: true,
+            silent: true,
+            output: String::new(),
+        };
+        assert!(!should_post_to_discord(&silent_ok, DiscordVerbosity::Meaningful));
+    }
+
+    #[test]
+    fn test_should_post_meaningful_suppresses_max_iter_filler() {
+        let max_iter = TaskResult {
+            task: "hourly".to_string(),
+            success: true,
+            silent: true, // corrected by #119
+            output: "Completed after 5 tool iterations".to_string(),
+        };
+        assert!(!should_post_to_discord(&max_iter, DiscordVerbosity::Meaningful));
+        assert!(!should_post_to_discord(&max_iter, DiscordVerbosity::Failures));
+        assert!(should_post_to_discord(&max_iter, DiscordVerbosity::All));
+    }
+
+    #[test]
+    fn test_should_post_all_verbosity_posts_everything() {
+        let silent = TaskResult {
+            task: "noop".to_string(),
+            success: true,
+            silent: true,
+            output: String::new(),
+        };
+        assert!(should_post_to_discord(&silent, DiscordVerbosity::All));
+
+        let max_iter = TaskResult {
+            task: "hourly".to_string(),
+            success: true,
+            silent: true,
+            output: "Completed after 5 tool iterations".to_string(),
+        };
+        assert!(should_post_to_discord(&max_iter, DiscordVerbosity::All));
+    }
+
+    #[test]
+    fn test_heartbeat_config_default_discord_verbosity_is_meaningful() {
+        let cfg = HeartbeatConfig::default();
+        assert_eq!(cfg.discord_verbosity, DiscordVerbosity::Meaningful);
     }
 }
