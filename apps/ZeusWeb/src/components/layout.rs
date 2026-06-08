@@ -448,14 +448,14 @@ pub fn Shell() -> impl IntoView {
             // Mobile hamburger button (shown on small screens via media query)
             <button
                 class="zeus-mobile-hamburger"
-                style="display: none; position: fixed; top: 12px; left: 12px; z-index: 200; width: 36px; height: 36px; border-radius: 8px; background: rgba(255,60,20,0.15); border: 1px solid rgba(255,60,20,0.3); color: rgba(255,245,240,0.9); font-size: 18px; cursor: pointer; align-items: center; justify-content: center;"
+                style="position: fixed; top: 12px; left: 12px; z-index: 200; width: 36px; height: 36px; border-radius: 8px; background: rgba(255,60,20,0.15); border: 1px solid rgba(255,60,20,0.3); color: rgba(255,245,240,0.9); font-size: 18px; cursor: pointer; align-items: center; justify-content: center;"
                 on:click=move |_| mobile_nav.update(|v| *v = !*v)
             >"\u{2630}"</button>
 
             // Mobile overlay (only visible when nav open on mobile)
             <Show when=move || mobile_nav.get()>
                 <div
-                    style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 99;"
+                    style="position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 99;"
                     class="zeus-mobile-overlay"
                     on:click=move |_| mobile_nav.set(false)
                 />

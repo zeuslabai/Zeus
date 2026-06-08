@@ -1274,19 +1274,27 @@ div[style*="rgba(234,179,8,0.04)"]:hover {
 
 .zeus-mobile-hamburger {
   display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
 }
 
 .zeus-mobile-overlay {
   display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
 }
 
 @media (max-width: 768px) {
   .zeus-mobile-hamburger {
     display: flex !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
   }
 
   .zeus-mobile-overlay {
     display: block !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
   }
 
   .zeus-sidebar-wrapper {
