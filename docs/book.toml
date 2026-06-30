@@ -1,0 +1,16 @@
+[book]
+title = "Zeus Documentation"
+authors = ["Zeus Contributors"]
+language = "en"
+src = "src"
+description = "Full documentation for Zeus — autonomous AI assistant"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/zeus-ai/zeus"
+edit-url-template = "https://github.com/zeus-ai/zeus/edit/main/docs/src/{path}"
+no-section-label = false

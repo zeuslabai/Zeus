@@ -1,0 +1,60 @@
+#!/bin/bash
+# Post-install for Zeus CLI: copy from staging to ~/.local/bin/, codesign, set permissions
+
+set -e
+
+CONSOLE_USER=$(/usr/bin/stat -f "%Su" /dev/console)
+USER_HOME=$(eval echo ~"$CONSOLE_USER")
+
+if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ]; then
+    echo "Warning: Could not determine console user, skipping CLI install"
+    exit 0
+fi
+
+INSTALL_DIR="$USER_HOME/.local/bin"
+STAGING_DIR="/usr/local/share/zeus/bin"
+
+mkdir -p "$INSTALL_DIR"
+
+# Copy zeus binary
+if [ -f "$STAGING_DIR/zeus" ]; then
+    cp -f "$STAGING_DIR/zeus" "$INSTALL_DIR/zeus"
+    chmod 755 "$INSTALL_DIR/zeus"
+    chown "$CONSOLE_USER" "$INSTALL_DIR/zeus"
+    # Ad-hoc codesign if not already signed
+    if ! codesign -v "$INSTALL_DIR/zeus" 2>/dev/null; then
+        codesign -s - --force "$INSTALL_DIR/zeus" 2>/dev/null || true
+    fi
+fi
+
+# Copy zeus-setup binary
+if [ -f "$STAGING_DIR/zeus-setup" ]; then
+    cp -f "$STAGING_DIR/zeus-setup" "$INSTALL_DIR/zeus-setup"
+    chmod 755 "$INSTALL_DIR/zeus-setup"
+    chown "$CONSOLE_USER" "$INSTALL_DIR/zeus-setup"
+    if ! codesign -v "$INSTALL_DIR/zeus-setup" 2>/dev/null; then
+        codesign -s - --force "$INSTALL_DIR/zeus-setup" 2>/dev/null || true
+    fi
+fi
+
+# Ensure ~/.local/bin ownership
+chown "$CONSOLE_USER" "$INSTALL_DIR"
+
+# Check if ~/.local/bin is in PATH, hint if not
+SHELL_RC=""
+if [ -f "$USER_HOME/.zshrc" ]; then
+    SHELL_RC="$USER_HOME/.zshrc"
+elif [ -f "$USER_HOME/.bashrc" ]; then
+    SHELL_RC="$USER_HOME/.bashrc"
+fi
+
+if [ -n "$SHELL_RC" ]; then
+    if ! grep -q '\.local/bin' "$SHELL_RC" 2>/dev/null; then
+        echo "" >> "$SHELL_RC"
+        echo '# Zeus — added by installer' >> "$SHELL_RC"
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
+        chown "$CONSOLE_USER" "$SHELL_RC"
+    fi
+fi
+
+exit 0

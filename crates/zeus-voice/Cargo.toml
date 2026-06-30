@@ -1,0 +1,49 @@
+[package]
+name = "zeus-voice"
+description = "Voice call system for Zeus - Twilio integration with real-time audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zeus-core.workspace = true
+
+# Async
+tokio.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+
+# HTTP/WebSocket
+reqwest.workspace = true
+tokio-tungstenite.workspace = true
+axum = { version = "0.7", features = ["ws"] }
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+
+# Time/IDs
+chrono.workspace = true
+uuid.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Error handling
+anyhow.workspace = true
+thiserror.workspace = true
+
+# URL encoding for Twilio params
+urlencoding.workspace = true
+
+# Form deserialization for Twilio webhooks
+serde_urlencoded = "0.7"
+
+# Cross-platform audio I/O (microphone + speaker) — not available on FreeBSD
+[target.'cfg(not(target_os = "freebsd"))'.dependencies]
+cpal = "0.15"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+temp-env = "0.3"

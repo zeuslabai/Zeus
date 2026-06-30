@@ -1,0 +1,35 @@
+#!/bin/bash
+# Post-install for Zeus Gateway: fix plist paths, copy to user LaunchAgents, load
+
+set -e
+
+PLIST_SRC="/usr/local/share/zeus/launchd/ai.zeus.gateway.plist"
+LABEL="ai.zeus.gateway"
+
+# Determine the console user (the real user, not root running the installer)
+CONSOLE_USER=$(/usr/bin/stat -f "%Su" /dev/console)
+USER_HOME=$(eval echo ~"$CONSOLE_USER")
+LAUNCH_AGENTS="$USER_HOME/Library/LaunchAgents"
+
+if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ]; then
+    echo "Warning: Could not determine console user, skipping gateway setup"
+    exit 0
+fi
+
+# Create LaunchAgents directory if needed
+mkdir -p "$LAUNCH_AGENTS"
+
+# Copy plist and substitute placeholders with actual user paths
+if [ -f "$PLIST_SRC" ]; then
+    sed -e "s|__ZEUS_BIN__|$USER_HOME/.local/bin/zeus|g" \
+        -e "s|__HOME__|$USER_HOME|g" \
+        "$PLIST_SRC" > "$LAUNCH_AGENTS/$LABEL.plist"
+    chown "$CONSOLE_USER" "$LAUNCH_AGENTS/$LABEL.plist"
+
+    # Unload if already loaded, then load
+    CONSOLE_UID=$(id -u "$CONSOLE_USER")
+    launchctl bootout "gui/$CONSOLE_UID/$LABEL" 2>/dev/null || true
+    launchctl bootstrap "gui/$CONSOLE_UID" "$LAUNCH_AGENTS/$LABEL.plist" 2>/dev/null || true
+fi
+
+exit 0

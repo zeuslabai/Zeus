@@ -1,0 +1,13 @@
+# Disable bulk-memory target feature for wasm32 builds.
+# Rust 1.84+ emits memory.copy/memory.fill by default, but wasm-opt (Binaryen)
+# doesn't enable bulk-memory support by default, causing validation errors.
+# This ensures compatibility with Trunk's bundled wasm-opt.
+#
+# ⚠️  LOAD-BEARING WORKAROUND — do not remove without reading this:
+# Pinned against Trunk 0.21.1 (trunk --version). If you upgrade Trunk, verify
+# that the bundled wasm-opt version still lacks bulk-memory support before
+# removing this flag. Upgrading Trunk without updating this config will cause
+# silent wasm-opt validation failures at bundle time.
+# See: https://github.com/trunk-rs/trunk/issues (search "bulk-memory")
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=-bulk-memory"]

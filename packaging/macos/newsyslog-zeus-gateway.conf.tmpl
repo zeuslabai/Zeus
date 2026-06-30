@@ -1,0 +1,17 @@
+# newsyslog(8) rotation config for Zeus Gateway (macOS)
+# Installed by scripts/install.sh into /etc/newsyslog.d/com.zeus.gateway.conf
+#
+# Format: logfile owner:group mode count size when flags [pid_file] [sig_num]
+#   count  = keep 5 archived generations
+#   size   = rotate when log exceeds threshold (KB)
+#   flags  = J = bzip2 compress, Z = gzip compress
+#   Z      = gzip (newsyslog default, widely supported)
+#
+# Thresholds tuned for gateway I/O patterns:
+#   - stdout is chatty (API requests, SSE streams) → 50 MB
+#   - stderr is rare (panics, errors) → 10 MB
+#
+# Regression fence: if you change log paths in the plist template,
+# update this file AND the install.sh cleanup stanza.
+__LOG_DIR__/zeus-gateway.out.log  __USER__:admin  644  5  51200  *  Z
+__LOG_DIR__/zeus-gateway.err.log  __USER__:admin  644  5  10240  *  Z

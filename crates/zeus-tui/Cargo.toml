@@ -1,0 +1,43 @@
+[package]
+name = "zeus-tui"
+version = "0.1.0"
+edition = "2024"
+description = "Zeus TUI — terminal interface with onboarding, chat, and multi-screen navigation"
+
+[dependencies]
+zeus-core = { path = "../zeus-core" }
+zeus-auth = { path = "../zeus-auth" }
+zeus-llm = { path = "../zeus-llm" }
+zeus-council = { path = "../zeus-council" }
+zeus-wallet = { path = "../zeus-wallet" }
+zeus-economy = { path = "../zeus-economy" }
+anyhow = "1"
+ratatui = "0.30"
+pulldown-cmark = { workspace = true }
+crossterm = "0.28"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+reqwest = { version = "0.12", features = ["json", "stream", "blocking"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+unicode-width = "0.2"
+dirs = "6"
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+zeus-pantheon-server = { path = "../zeus-pantheon-server" }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+libc.workspace = true
+qrcode = "0.14"
+scopeguard = "1"
+# Direct dep for /clear-state goals.db pending-queue purge (#173-b phase-2b).
+# Already in the build graph transitively via zeus-economy (workspace rusqlite) —
+# this only promotes it to a direct, usable dep; no new crate compiled.
+rusqlite.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

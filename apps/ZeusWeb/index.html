@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#050508" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>ZEUS — Cognitive AI Platform</title>
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <link data-trunk rel="css" href="input.css" />
+    <link data-trunk rel="rust" data-bin="zeus-web" data-wasm-opt="0" />
+</head>
+<body>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
+// Initialize Mermaid with dark ember theme
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'dark',
+  themeVariables: {
+    primaryColor: '#ff3c14',
+    primaryTextColor: 'rgba(255,245,240,0.9)',
+    primaryBorderColor: '#ff3c14',
+    lineColor: 'rgba(255,245,240,0.25)',
+    secondaryColor: 'rgba(255,255,255,0.03)',
+    tertiaryColor: '#050508',
+    background: '#050508',
+    mainBkg: 'rgba(255,255,255,0.03)',
+    nodeBorder: 'rgba(255,60,20,0.35)',
+    clusterBkg: 'rgba(255,60,20,0.06)',
+    titleColor: 'rgba(255,245,240,0.9)',
+    edgeLabelBackground: 'rgba(255,255,255,0.03)',
+    nodeTextColor: 'rgba(255,245,240,0.9)',
+  },
+  flowchart: { curve: 'basis', padding: 15 },
+  sequence: { mirrorActors: false },
+  fontFamily: 'Orbitron, monospace',
+  fontSize: 13,
+});
+
+// Render all pending mermaid/chart blocks in the DOM
+window.zeusRenderVisuals = async function() {
+  // Mermaid blocks
+  var mermaidEls = document.querySelectorAll('.zeus-mermaid[data-pending]');
+  for (var i = 0; i < mermaidEls.length; i++) {
+    var el = mermaidEls[i];
+    el.removeAttribute('data-pending');
+    var code = el.getAttribute('data-code');
+    if (!code) continue;
+    var id = 'zmerm-' + Date.now() + '-' + i;
+    try {
+      var result = await mermaid.render(id, code);
+      el.innerHTML = result.svg;
+    } catch (e) {
+      el.innerHTML = '<pre style="color:#ef4444;font-size:12px">Mermaid error: ' + e.message + '</pre>';
+    }
+  }
+
+  // Chart.js blocks
+  var chartEls = document.querySelectorAll('.zeus-chart[data-pending]');
+  for (var j = 0; j < chartEls.length; j++) {
+    var el2 = chartEls[j];
+    el2.removeAttribute('data-pending');
+    var configText = el2.getAttribute('data-config');
+    if (!configText) continue;
+    try {
+      var config = JSON.parse(configText);
+      if (!config.options) config.options = {};
+      if (!config.options.plugins) config.options.plugins = {};
+      if (!config.options.plugins.legend) config.options.plugins.legend = {};
+      if (!config.options.plugins.legend.labels) config.options.plugins.legend.labels = {};
+      config.options.plugins.legend.labels.color = config.options.plugins.legend.labels.color || 'rgba(255,245,240,0.9)';
+      config.options.plugins.legend.labels.font = config.options.plugins.legend.labels.font || { family: 'Orbitron', size: 11 };
+      if (!config.options.scales) config.options.scales = {};
+      var neonColors = ['#ff3c14','#22c55e','#3b82f6','#eab308','#ef4444','#a855f7','#06b6d4','#f97316'];
+      if (config.data && config.data.datasets) {
+        config.data.datasets.forEach(function(ds, idx) {
+          if (!ds.backgroundColor) {
+            var chartType = ds.type || config.type;
+            if (chartType === 'pie' || chartType === 'doughnut' || chartType === 'polarArea') {
+              ds.backgroundColor = neonColors.slice(0, (config.data.labels || []).length);
+              ds.borderColor = 'rgba(5,5,8,0.8)';
+            } else {
+              ds.backgroundColor = neonColors[idx % neonColors.length] + '80';
+              ds.borderColor = neonColors[idx % neonColors.length];
+            }
+          }
+          if (ds.borderWidth === undefined) ds.borderWidth = 2;
+        });
+      }
+      var ctype = config.type;
+      if (ctype === 'bar' || ctype === 'line' || ctype === 'scatter' || ctype === 'bubble' || ctype === 'radar') {
+        ['x','y','r'].forEach(function(axis) {
+          if (!config.options.scales[axis]) config.options.scales[axis] = {};
+          if (!config.options.scales[axis].ticks) config.options.scales[axis].ticks = {};
+          config.options.scales[axis].ticks.color = config.options.scales[axis].ticks.color || 'rgba(255,245,240,0.25)';
+          if (!config.options.scales[axis].grid) config.options.scales[axis].grid = {};
+          config.options.scales[axis].grid.color = config.options.scales[axis].grid.color || 'rgba(255,255,255,0.06)';
+        });
+      }
+      config.options.responsive = true;
+      config.options.maintainAspectRatio = true;
+      var canvas = document.createElement('canvas');
+      el2.appendChild(canvas);
+      new Chart(canvas, config);
+    } catch (e) {
+      el2.innerHTML = '<pre style="color:#ef4444;font-size:12px">Chart error: ' + e.message + '</pre>';
+    }
+  }
+};
+
+// Prometheus Plan Execution
+window.zeusExecutePlan = function(btn) {
+  var planDiv = btn.closest('.zeus-plan');
+  if (!planDiv) return;
+  var planId = planDiv.getAttribute('data-plan-id');
+  var goal = planDiv.getAttribute('data-goal');
+  var stepsRaw = planDiv.getAttribute('data-steps');
+  var steps = [];
+  try { steps = JSON.parse(stepsRaw); } catch(e) {}
+  btn.disabled = true;
+  btn.textContent = '\u26A1 Executing...';
+  btn.classList.add('executing');
+  var ws = window.__zeusWs;
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'prometheus_watch', plan_id: planId, goal: goal, steps: steps }));
+  } else {
+    btn.textContent = '\u274C No connection';
+    btn.classList.remove('executing');
+    btn.classList.add('failed');
+  }
+};
+
+window.zeusUpdatePlanNode = function(planId, stepId, status) {
+  var planDiv = document.querySelector('.zeus-plan[data-plan-id="' + planId + '"]');
+  if (!planDiv) return;
+  var colors = {
+    pending: { fill: 'rgba(255,255,255,0.03)', stroke: 'rgba(255,60,20,0.1)' },
+    running: { fill: 'rgba(255,60,20,0.08)', stroke: '#ff3c14' },
+    completed: { fill: 'rgba(34,197,94,0.1)', stroke: '#22c55e' },
+    failed: { fill: 'rgba(239,68,68,0.1)', stroke: '#ef4444' }
+  };
+  var c = colors[status] || colors.pending;
+  var svg = planDiv.querySelector('svg');
+  if (!svg) return;
+  var nodes = svg.querySelectorAll('g.node');
+  for (var i = 0; i < nodes.length; i++) {
+    var nid = nodes[i].id || '';
+    if (nid.indexOf('-S' + stepId + '-') !== -1) {
+      var shape = nodes[i].querySelector('rect, polygon, circle, path.basic');
+      if (shape) {
+        shape.style.fill = c.fill;
+        shape.style.stroke = c.stroke;
+        shape.style.strokeWidth = (status === 'running') ? '3px' : '2px';
+      }
+      if (status === 'running') nodes[i].classList.add('zeus-node-running');
+      else nodes[i].classList.remove('zeus-node-running');
+      break;
+    }
+  }
+  var btn = planDiv.querySelector('.zeus-plan-execute');
+  if (btn && status === 'running') {
+    btn.textContent = '\u26A1 Step ' + stepId + ' running...';
+  }
+};
+
+window.zeusCompletePlan = function(planId) {
+  var planDiv = document.querySelector('.zeus-plan[data-plan-id="' + planId + '"]');
+  if (!planDiv) return;
+  var btn = planDiv.querySelector('.zeus-plan-execute');
+  if (btn) {
+    btn.textContent = '\u2713 Plan Complete';
+    btn.disabled = true;
+    btn.classList.remove('executing');
+    btn.classList.add('completed');
+  }
+};
+</script>
+<!-- Zeus Office — Phaser.js Pixel Art Visualization (S62) -->
+<script src="/office-game/phaser-3.80.1.min.js" defer></script>
+<script src="/office-game/layout.js" defer></script>
+<script src="/office-game/game.js" defer></script>
+</body>
+</html>

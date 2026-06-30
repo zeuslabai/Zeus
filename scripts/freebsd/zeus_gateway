@@ -1,0 +1,93 @@
+#!/bin/sh
+
+# PROVIDE: zeus_gateway
+# REQUIRE: LOGIN DAEMON NETWORKING
+# KEYWORD: shutdown
+#
+# Add the following lines to /etc/rc.conf to enable zeus_gateway:
+#
+#   zeus_gateway_enable="YES"
+#   zeus_gateway_port="8080"              # optional, default 8080
+#   zeus_gateway_host="0.0.0.0"           # optional, default 0.0.0.0
+#   zeus_gateway_user="zeus"              # optional, default zeus
+#   zeus_gateway_home="/home/zeus"        # optional, default /home/${zeus_gateway_user}
+#   zeus_gateway_logfile="/var/log/zeus_gateway.log"       # optional
+#   zeus_gateway_anthropic_key="sk-..."   # optional, API key
+#
+
+. /etc/rc.subr
+
+name="zeus_gateway"
+rcvar="${name}_enable"
+
+load_rc_config $name
+
+: ${zeus_gateway_enable:="NO"}
+: ${zeus_gateway_port:="8080"}
+: ${zeus_gateway_host:="0.0.0.0"}
+: ${zeus_gateway_user:="zeus"}
+: ${zeus_gateway_home:="/home/${zeus_gateway_user}"}
+: ${zeus_gateway_logfile:="/var/log/zeus_gateway.log"}
+: ${zeus_gateway_pidfile:="${zeus_gateway_home}/.zeus/gateway.pid"}
+: ${zeus_gateway_newsyslog_conf:="/usr/local/etc/newsyslog.conf.d/zeus_gateway.conf"}
+: ${zeus_gateway_anthropic_key:=""}
+
+pidfile="${zeus_gateway_pidfile}"
+procname="/usr/local/bin/zeus"
+command="/usr/sbin/daemon"
+
+start_precmd="${name}_prestart"
+start_cmd="${name}_start"
+stop_postcmd="${name}_poststop"
+
+zeus_gateway_prestart()
+{
+    # The gateway itself writes ${ZEUS_HOME}/gateway.pid. Make rc.subr use
+    # that same file so `service zeus_gateway status` tracks the live process.
+    install -d -o ${zeus_gateway_user} -g wheel -m 0755 "${zeus_gateway_home}/.zeus"
+    install -d -o ${zeus_gateway_user} -g wheel -m 0755 "${zeus_gateway_home}/.zeus/logs"
+
+    # Durable service log sink. daemon(8) redirects stdout/stderr here; newsyslog
+    # rotates it when available (standard on FreeBSD base systems).
+    install -d -o root -g wheel -m 0755 "$(dirname "${zeus_gateway_logfile}")"
+    touch "${zeus_gateway_logfile}"
+    chown ${zeus_gateway_user}:wheel "${zeus_gateway_logfile}"
+    chmod 0640 "${zeus_gateway_logfile}"
+
+    if [ -d "$(dirname "${zeus_gateway_newsyslog_conf}")" ]; then
+        cat > "${zeus_gateway_newsyslog_conf}" << NEWSYSLOG_EOF
+${zeus_gateway_logfile} ${zeus_gateway_user}:wheel 640 7 10240 * JC
+NEWSYSLOG_EOF
+        chmod 0644 "${zeus_gateway_newsyslog_conf}"
+    fi
+}
+
+zeus_gateway_start()
+{
+    _env_args="HOME=${zeus_gateway_home} ZEUS_HOME=${zeus_gateway_home}/.zeus"
+    for envf in "${zeus_gateway_home}/.zeus/.env" "/usr/local/etc/zeus/.env"; do
+        if [ -f "${envf}" ]; then
+            while IFS= read -r _line; do
+                case "$_line" in
+                    \#*|"") continue ;;
+                    *=*) _env_args="$_env_args $_line" ;;
+                esac
+            done < "${envf}"
+        fi
+    done
+    [ -n "${zeus_gateway_anthropic_key}" ] && _env_args="$_env_args ANTHROPIC_API_KEY=${zeus_gateway_anthropic_key}"
+
+    echo "Starting ${name}."
+    /usr/sbin/daemon -f -p "${pidfile}" -o "${zeus_gateway_logfile}" \
+        -u "${zeus_gateway_user}" \
+        /usr/bin/env ${_env_args} \
+        "${procname}" \
+        gateway --host "${zeus_gateway_host}" --port "${zeus_gateway_port}"
+}
+
+zeus_gateway_poststop()
+{
+    rm -f "${pidfile}"
+}
+
+run_rc_command "$1"

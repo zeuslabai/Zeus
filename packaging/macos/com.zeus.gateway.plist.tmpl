@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Zeus Gateway — system LaunchDaemon (macOS)
+
+  Loaded into the `system` domain via `launchctl bootstrap`, so the gateway
+  runs independently of any GUI login session. Drops privileges to the
+  install user via UserName so workspace paths (`$HOME/.zeus`) resolve
+  to the correct location.
+
+  Placeholders (substituted at install time by scripts/install.sh):
+    __USER__         — install user (drops root via UserName)
+    __INSTALL_DIR__  — directory containing the `zeus` binary
+    __LOG_DIR__      — directory for stdout/stderr logs (must be writable by __USER__)
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.zeus.gateway</string>
+
+    <key>UserName</key>
+    <string>__USER__</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__INSTALL_DIR__/zeus</string>
+        <string>gateway</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/zeus-gateway.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/zeus-gateway.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

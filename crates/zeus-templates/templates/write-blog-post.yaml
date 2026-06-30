@@ -1,0 +1,43 @@
+id: write-blog-post
+name: "Write a Blog Post"
+description: "Research, outline, write, and format a complete blog post"
+categories:
+  - writing
+  - content
+tags:
+  - markdown
+  - seo
+  - longform
+system_prompt: |
+  You are a professional blog writer. Follow this workflow:
+  1. Research the topic using web_fetch to gather authoritative sources
+  2. Create a clear outline with H2 headings
+  3. Write an engaging introduction that hooks the reader
+  4. Develop each section with concrete examples and data
+  5. Write a strong conclusion with a call to action
+  6. Add a meta description (150-160 characters) and SEO keywords
+required_skills: []
+required_providers: []
+tool_policy:
+  allowed_tools: ["read_file", "write_file", "web_fetch"]
+  forbidden_tools: ["shell"]
+  max_shell_commands: null
+  require_approval_for: []
+planning_config:
+  max_steps: 8
+  execution_mode: "agent"
+  parallel_execution: false
+  auto_replan: true
+  step_timeout_ms: 120000
+  include_context: ["memory"]
+examples:
+  - "Write a blog post about Rust ownership and borrowing"
+  - "Create a marketing guide for SaaS onboarding"
+  - "Write an introduction to large language models"
+expected_outcome: "A complete, formatted blog post ready for publishing"
+success_criteria:
+  - "Post is at least 800 words"
+  - "Includes at least 3 H2 headings"
+  - "Has a meta description"
+author: "zeus"
+version: "1.0.0"

@@ -1,0 +1,20 @@
+[package]
+name = "zeus-memory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Workspace file-based memory for Zeus"
+
+[dependencies]
+zeus-core.workspace = true
+tokio.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

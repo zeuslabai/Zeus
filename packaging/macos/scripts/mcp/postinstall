@@ -1,0 +1,82 @@
+#!/bin/bash
+# Post-install for MCP: configure Claude Code and Claude Desktop MCP integration
+# Ensures HOME and ZEUS_HOME are passed so zeus can find ~/.zeus/.env
+
+set -e
+
+CONSOLE_USER=$(/usr/bin/stat -f "%Su" /dev/console)
+USER_HOME=$(eval echo ~"$CONSOLE_USER")
+
+if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ]; then
+    echo "Warning: Could not determine console user, skipping MCP setup"
+    exit 0
+fi
+
+ZEUS_BIN="$USER_HOME/.local/bin/zeus"
+if [ ! -f "$ZEUS_BIN" ]; then
+    echo "Warning: zeus binary not found at $ZEUS_BIN, skipping MCP setup"
+    exit 0
+fi
+
+# ── Claude Code (~/.claude.json) ──────────────────────────────────────
+CLAUDE_CODE_CONFIG="$USER_HOME/.claude.json"
+
+if [ -f "$CLAUDE_CODE_CONFIG" ]; then
+    # Check if zeus MCP already configured
+    if grep -q '"zeus"' "$CLAUDE_CODE_CONFIG" 2>/dev/null; then
+        echo "Claude Code MCP already configured"
+    else
+        echo "Note: Run 'zeus-setup mcp --code' to configure Claude Code MCP integration"
+    fi
+else
+    # Create a new claude.json with zeus MCP + env vars for .env loading
+    cat > "$CLAUDE_CODE_CONFIG" << MCPEOF
+{
+  "mcpServers": {
+    "zeus": {
+      "command": "$ZEUS_BIN",
+      "args": ["mcp", "stdio"],
+      "env": {
+        "HOME": "$USER_HOME",
+        "ZEUS_HOME": "$USER_HOME/.zeus"
+      }
+    }
+  }
+}
+MCPEOF
+    chown "$CONSOLE_USER" "$CLAUDE_CODE_CONFIG"
+    echo "Created Claude Code MCP config"
+fi
+
+# ── Claude Desktop ────────────────────────────────────────────────────
+CLAUDE_DESKTOP_DIR="$USER_HOME/Library/Application Support/Claude"
+CLAUDE_DESKTOP_CONFIG="$CLAUDE_DESKTOP_DIR/claude_desktop_config.json"
+
+if [ -d "$CLAUDE_DESKTOP_DIR" ]; then
+    if [ -f "$CLAUDE_DESKTOP_CONFIG" ]; then
+        if grep -q '"zeus"' "$CLAUDE_DESKTOP_CONFIG" 2>/dev/null; then
+            echo "Claude Desktop MCP already configured"
+        else
+            echo "Note: Run 'zeus-setup mcp --desktop' to configure Claude Desktop MCP"
+        fi
+    else
+        cat > "$CLAUDE_DESKTOP_CONFIG" << DESKTOPEOF
+{
+  "mcpServers": {
+    "zeus": {
+      "command": "$ZEUS_BIN",
+      "args": ["mcp", "stdio"],
+      "env": {
+        "HOME": "$USER_HOME",
+        "ZEUS_HOME": "$USER_HOME/.zeus"
+      }
+    }
+  }
+}
+DESKTOPEOF
+        chown "$CONSOLE_USER" "$CLAUDE_DESKTOP_CONFIG"
+        echo "Created Claude Desktop MCP config"
+    fi
+fi
+
+exit 0

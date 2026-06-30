@@ -1,0 +1,81 @@
+[package]
+name = "zeus-channels"
+description = "Messaging platform adapters for Zeus"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[features]
+default = []
+matrix = ["dep:matrix-sdk"]
+
+[dependencies]
+hostname = "0.4"
+thiserror = "1"
+zeus-core = { workspace = true }
+zeus-voice = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# IDs
+uuid = { version = "1.0", features = ["v4"] }
+
+# Logging
+tracing = { workspace = true }
+
+# Chat SDKs
+grammers-client = { workspace = true }
+grammers-session = { workspace = true }
+serenity = { workspace = true }
+songbird = { workspace = true }
+lettre = { workspace = true }
+async-imap = { workspace = true }
+tokio-tungstenite = { workspace = true }
+reqwest = { workspace = true }
+axum = { workspace = true }
+serde_urlencoded = "0.7"
+futures-util = { workspace = true }
+futures = { workspace = true }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+webpki-roots = { workspace = true }
+tokio-util = { workspace = true }
+dirs = { workspace = true }
+urlencoding = { workspace = true }
+rand = { workspace = true }
+matrix-sdk = { workspace = true, optional = true }
+mime = { workspace = true }
+rumqttc = { workspace = true }
+
+# Crypto (for webhook signatures + NIP-04 + Google OAuth2 JWT)
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+base64 = "0.22"
+ring = { workspace = true }
+hex = "0.4"
+secp256k1 = { version = "0.29", features = ["global-context"] }
+nostr-crate = { package = "nostr", version = "0.36" }
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+dashmap = "6.1"
+tempfile.workspace = true
+
+# Document text extraction (Cut B: HTML/MD pass through text/*; DOCX/PPTX/XLSX extract)
+zip = { workspace = true }
+quick-xml = { workspace = true }
+calamine = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+wiremock.workspace = true

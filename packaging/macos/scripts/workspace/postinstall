@@ -1,0 +1,268 @@
+#!/bin/bash
+# Post-install for Workspace: create ~/.zeus/ with production-ready config
+# All channel tokens go in .env — config.toml controls behavior only.
+
+set -e
+
+CONSOLE_USER=$(/usr/bin/stat -f "%Su" /dev/console)
+USER_HOME=$(eval echo ~"$CONSOLE_USER")
+
+if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ]; then
+    echo "Warning: Could not determine console user, skipping workspace setup"
+    exit 0
+fi
+
+ZEUS_DIR="$USER_HOME/.zeus"
+
+# Create directories
+for dir in "$ZEUS_DIR" "$ZEUS_DIR/workspace" "$ZEUS_DIR/workspace/memory" "$ZEUS_DIR/workspace/daily" "$ZEUS_DIR/sessions" "$ZEUS_DIR/logs" "$ZEUS_DIR/workspace/uploads"; do
+    mkdir -p "$dir"
+done
+
+# Write default config.toml if it doesn't exist
+if [ ! -f "$ZEUS_DIR/config.toml" ]; then
+    cat > "$ZEUS_DIR/config.toml" << 'CONFIGEOF'
+# Zeus Configuration
+# API keys and bot tokens go in ~/.zeus/.env (not here).
+# This file controls behavior; .env controls secrets.
+
+model = "ollama/llama3.2"
+workspace = "~/.zeus/workspace"
+sessions = "~/.zeus/sessions"
+max_iterations = 20
+max_subagent_iterations = 15
+onboarding_complete = false
+
+[tui]
+theme = "dark"
+vim_mode = false
+
+[auth]
+use_oauth = false
+
+[ollama]
+url = "http://localhost:11434"
+
+# ── Memory (Mnemosyne) ─────────────────────────────────────
+[mnemosyne]
+db_path = "~/.zeus/memory.db"
+enable_fts = true
+
+# ── Gateway ─────────────────────────────────────────────────
+[gateway]
+host = "127.0.0.1"
+port = 8080
+api_port = 3001
+ws_port = 3002
+enable_mcp = true
+enable_channels = true
+enable_heartbeat = false
+enable_cron = false
+enable_api = true
+
+# ── MCP Server ──────────────────────────────────────────────
+[mcp_server]
+enable_talos = true
+enable_agents = false
+enable_mnemosyne = true
+
+# ── Talos (macOS Automation) ────────────────────────────────
+[talos]
+enable_applescript = true
+
+# ── Telegram Relay (Bot API) ───────────────────────────────
+# Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in ~/.zeus/.env
+[telegram_relay]
+
+# ── Nous (Cognitive Engine) ─────────────────────────────────
+[nous]
+enable_learning = true
+
+# ── Hermes (Notifications) ─────────────────────────────────
+[hermes]
+default_channel = "console"
+
+# ── Channel Adapters ───────────────────────────────────────
+# Uncomment and configure channels you use.
+# All tokens/secrets go in ~/.zeus/.env
+#
+# [channels.telegram]
+# api_id = 12345
+# api_hash = "your_api_hash"
+# phone = "+1234567890"
+#
+# [channels.discord]
+# guild_id = "your_guild_id"
+#
+# [channels.slack]
+# app_token = "xapp-..."
+CONFIGEOF
+fi
+
+# Write default .env if it doesn't exist
+if [ ! -f "$ZEUS_DIR/.env" ]; then
+    cat > "$ZEUS_DIR/.env" << 'ENVEOF'
+# ═══════════════════════════════════════════════════════════
+# ZEUS — Environment Variables
+# This file is loaded automatically on startup.
+# Fill in only the services you use. Leave others blank.
+# ═══════════════════════════════════════════════════════════
+
+# ── LLM Providers (set at least ONE) ───────────────────────
+#ANTHROPIC_API_KEY=
+#OPENAI_API_KEY=
+#OPENROUTER_API_KEY=
+#GOOGLE_API_KEY=
+#GROQ_API_KEY=
+#MISTRAL_API_KEY=
+#OLLAMA_HOST=http://localhost:11434
+
+# ── Telegram (from @BotFather) ─────────────────────────────
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+TELEGRAM_ALLOWED_USERS=
+TELEGRAM_TAGGED_ONLY=yes
+
+# ── Discord ─────────────────────────────────────────────────
+DISCORD_BOT_TOKEN=
+
+# ── Slack ───────────────────────────────────────────────────
+SLACK_BOT_TOKEN=
+SLACK_APP_TOKEN=
+
+# ── WhatsApp ────────────────────────────────────────────────
+WHATSAPP_TOKEN=
+WHATSAPP_PHONE_NUMBER_ID=
+
+# ── Matrix ──────────────────────────────────────────────────
+MATRIX_HOMESERVER=
+MATRIX_USER=
+MATRIX_PASSWORD=
+
+# ── Signal ──────────────────────────────────────────────────
+SIGNAL_ACCOUNT=
+SIGNAL_CLI_PATH=
+
+# ── Email ───────────────────────────────────────────────────
+#EMAIL_SMTP_HOST=smtp.gmail.com
+#EMAIL_IMAP_HOST=imap.gmail.com
+#EMAIL_USERNAME=
+#EMAIL_PASSWORD=
+
+# ── Voice (Twilio) ──────────────────────────────────────────
+#TWILIO_ACCOUNT_SID=
+#TWILIO_AUTH_TOKEN=
+#TWILIO_PHONE_NUMBER=
+
+# ── STT / TTS ──────────────────────────────────────────────
+#ZEUS_STT_PROVIDER=whisper
+#ZEUS_TTS_PROVIDER=openai
+#ELEVENLABS_API_KEY=
+
+# ── Search ──────────────────────────────────────────────────
+#BRAVE_API_KEY=
+ENVEOF
+    chmod 600 "$ZEUS_DIR/.env"
+fi
+
+# Write default workspace files
+if [ ! -f "$ZEUS_DIR/workspace/AGENTS.md" ]; then
+    echo "# Zeus Agent System Prompt" > "$ZEUS_DIR/workspace/AGENTS.md"
+fi
+
+if [ ! -f "$ZEUS_DIR/workspace/SOUL.md" ]; then
+    cat > "$ZEUS_DIR/workspace/SOUL.md" << 'SOULEOF'
+# Soul
+
+You are Zeus, an autonomous AI assistant.
+You are helpful, precise, and security-conscious.
+SOULEOF
+fi
+
+if [ ! -f "$ZEUS_DIR/workspace/USER.md" ]; then
+    echo "# User Context" > "$ZEUS_DIR/workspace/USER.md"
+fi
+
+if [ ! -f "$ZEUS_DIR/workspace/HEARTBEAT.md" ]; then
+    echo "# Proactive Tasks" > "$ZEUS_DIR/workspace/HEARTBEAT.md"
+fi
+
+if [ ! -f "$ZEUS_DIR/workspace/memory/MEMORY.md" ]; then
+    echo "# Zeus Memory" > "$ZEUS_DIR/workspace/memory/MEMORY.md"
+fi
+
+# Write CLAUDE.md (Zeus-focused directives for Claude Code agents)
+if [ ! -f "$ZEUS_DIR/CLAUDE.md" ]; then
+    cat > "$ZEUS_DIR/CLAUDE.md" << 'CLAUDEEOF'
+# CLAUDE.md — Zeus Project
+
+> Auto-installed by Zeus setup. Source of truth for all Claude Code agents working with Zeus.
+
+## Zeus Overview
+
+Zeus is a 21-crate Rust AI assistant (~59,000 lines) with TUI, macOS Desktop, iOS, Web frontends,
+unified LLM provider (11 providers), cognitive engine, multi-channel chat (8 adapters),
+security sandboxing, macOS automation (193 tools), browser automation, and voice calls.
+
+- **Config**: `~/.zeus/config.toml` (behavior) + `~/.zeus/.env` (secrets)
+- **Binary**: `~/.local/bin/zeus`
+- **Workspace**: `~/.zeus/workspace/` (AGENTS.md, SOUL.md, USER.md, memory/)
+- **Gateway**: `zeus gateway` — API + MCP + channels + heartbeat + cron
+
+## Tools — Zeus MCP ONLY
+
+**ALWAYS use Zeus MCP tools instead of native Claude Code tools.** Zeus provides its own
+MCP server with tools that replace all native equivalents:
+
+| Instead of (native) | Use (Zeus MCP)                              |
+|---------------------|---------------------------------------------|
+| Read / cat / head   | `read_file`, `head_file`, `tail_file`       |
+| Write               | `write_file`                                |
+| Edit / sed          | `edit_file`                                 |
+| Bash / shell        | `shell`                                     |
+| Grep / rg           | `grep_files`                                |
+| Glob / find         | `find_files`                                |
+| git commands        | `git_status`, `git_diff`, `git_commit`, etc.|
+
+Zeus MCP tools load automatically via the gateway. If tools are missing, run `/mcp` to reconnect.
+**NEVER fall back to native Claude Code tools.**
+
+## Agent Identity
+
+Load your identity from `~/.zeus/config.toml` on startup. Never guess.
+
+## Code Quality — Non-Negotiable
+- **NEVER** `.unwrap()` or `.expect()` in production code. Use `?` or `unwrap_or`.
+- `cargo clippy` + `cargo fmt` + `cargo test --workspace` before every push. Zero warnings.
+- No `unsafe` without `// SAFETY:` comment. Prefer `&str`/`&Path`/`&[T]` over owned types.
+- Functions do one thing. No magic numbers. Comments explain *why* not *what*.
+
+## Plan Discipline — No Drift
+- Do exactly what was asked. No more, no less.
+- If you discover adjacent issues, note them — do NOT fix them unless asked.
+- Re-read the task before and after writing code.
+- If you touched 3+ files not in the plan, stop and reassess.
+- Don't add features, abstractions, or docstrings beyond what was asked.
+
+## Memory & Context
+- `/compact` not `/clear`. Recall from Mnemosyne on session start. Store summary on end.
+- Proactively write learnings to memory without being asked.
+
+## Coordination
+- Feature branches only. Only the coordinator merges to main.
+- Report on Telegram. When blocked, say so immediately.
+
+## Build & Deploy
+- Scripts only: `zeus-setup build` or `scripts/deploy-macos.sh`. Never ad-hoc cargo build.
+- After deploy: `/mcp` to reconnect, verify gateway, report to Telegram.
+
+## Security & Testing
+- No secrets in code. Validate external input. Don't log API keys.
+- New functions need tests. Bug fixes need regression tests. No flaky tests.
+CLAUDEEOF
+fi
+
+# Fix ownership
+chown -R "$CONSOLE_USER" "$ZEUS_DIR"
+
+exit 0

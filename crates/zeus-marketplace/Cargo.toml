@@ -1,0 +1,23 @@
+[package]
+name = "zeus-marketplace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Agent-to-agent skill marketplace — publish, trade, and rate tools"
+
+[dependencies]
+zeus-core = { workspace = true }
+zeus-orchestra = { workspace = true }
+zeus-economy = { workspace = true }
+
+tokio = { workspace = true, features = ["full"] }
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }

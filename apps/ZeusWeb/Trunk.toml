@@ -1,0 +1,30 @@
+# Trunk version pin: 0.21.1
+# The bulk-memory workaround in .cargo/config.toml is tied to this version.
+# If you upgrade Trunk, re-verify wasm-opt bulk-memory support and update
+# the comment in .cargo/config.toml accordingly.
+[build]
+target = "index.html"
+dist = "dist"
+no_sri = true
+filehash = true
+
+# WASM optimization — reduces bundle size by ~40-60%
+[build.wasm_opt]
+level = "z"  # optimize for size
+
+[watch]
+ignore = ["dist", "target"]
+
+[serve]
+address = "0.0.0.0"
+port = 8088
+
+[[proxy]]
+rewrite = "/v1/"
+backend = "http://localhost:8080"
+
+# Copy static assets to dist
+[[hooks]]
+stage = "post_build"
+command = "sh"
+command_arguments = ["-c", "cp manifest.json sw.js icon.svg dist/ 2>/dev/null || true; if [ -d audio ]; then mkdir -p dist/audio && cp -f audio/*.mp3 dist/audio/; fi; if [ -d office-game ]; then mkdir -p dist/office-game && cp -f office-game/* dist/office-game/; fi"]

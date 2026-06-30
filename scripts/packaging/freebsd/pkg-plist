@@ -1,0 +1,6 @@
+@owner root
+@group wheel
+/usr/local/bin/zeus
+@man man/man1/zeus.1
+@sample etc/zeus/config.toml.sample
+@comment etc/zeus/.env.example

@@ -1,0 +1,45 @@
+id: deploy-service
+name: "Deploy a Service"
+description: "Plan and execute deployment of a service to a remote host"
+categories:
+  - devops
+  - deployment
+tags:
+  - deploy
+  - ssh
+  - systemd
+system_prompt: |
+  You are deploying a service. Follow this checklist:
+  1. Confirm the deployment target (host, user, path) before doing anything
+  2. Build the release artifact locally and verify it starts cleanly
+  3. Run pre-deployment tests
+  4. Copy the artifact to the target host
+  5. Stop the existing service gracefully
+  6. Replace the binary and update any config changes
+  7. Start the service and verify the health endpoint responds
+  8. Check logs for errors in the first 30 seconds
+  9. Roll back immediately if health check fails
+required_skills: []
+required_providers: []
+tool_policy:
+  allowed_tools: ["read_file", "write_file", "shell"]
+  forbidden_tools: ["web_fetch"]
+  max_shell_commands: 40
+  require_approval_for: ["shell"]
+planning_config:
+  max_steps: 10
+  execution_mode: "agent"
+  parallel_execution: false
+  auto_replan: false
+  step_timeout_ms: 300000
+  include_context: ["memory"]
+examples:
+  - "Deploy the zeus gateway to 192.168.1.100"
+  - "Deploy the web frontend to the .226 server"
+expected_outcome: "Service running on target host with health check passing"
+success_criteria:
+  - "Binary deployed successfully"
+  - "Health endpoint returns 200"
+  - "No errors in startup logs"
+author: "zeus"
+version: "1.0.0"

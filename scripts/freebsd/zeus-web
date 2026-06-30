@@ -1,0 +1,90 @@
+#!/bin/sh
+
+# PROVIDE: zeus_web
+# REQUIRE: LOGIN DAEMON NETWORKING zeus_gateway
+# KEYWORD: shutdown
+#
+# Add the following lines to /etc/rc.conf to enable zeus_web:
+#
+#   zeus_web_enable="YES"
+#   zeus_web_config="/usr/local/etc/nginx/zeus-web.conf"  # optional
+#
+# The nginx config should serve /usr/local/www/zeus and proxy
+# /v1/ and /v1/ws to the zeus_gateway backend on port 3001.
+#
+
+. /etc/rc.subr
+
+name="zeus_web"
+rcvar="${name}_enable"
+
+load_rc_config $name
+
+: ${zeus_web_enable:="NO"}
+: ${zeus_web_config:="/usr/local/etc/nginx/zeus-web.conf"}
+: ${zeus_web_pidfile:="/var/run/${name}.pid"}
+: ${zeus_web_logdir:="/var/log/zeus"}
+
+pidfile="${zeus_web_pidfile}"
+procname="/usr/local/sbin/nginx"
+command="${procname}"
+command_args="-c ${zeus_web_config}"
+
+required_files="${zeus_web_config}"
+
+start_precmd="${name}_prestart"
+stop_cmd="${name}_stop"
+status_cmd="${name}_status"
+restart_cmd="${name}_restart"
+
+zeus_web_prestart()
+{
+    # Ensure web root exists
+    if [ ! -d /usr/local/www/zeus ]; then
+        install -d -o www -g www -m 0755 /usr/local/www/zeus
+    fi
+
+    # Ensure log directory exists
+    install -d -o www -g www -m 0755 "${zeus_web_logdir}"
+
+    # Write pid file directive into nginx config if not already present
+    # (Alternatively, ensure your nginx config includes: pid /var/run/zeus_web.pid;)
+
+    # Test config before starting
+    ${procname} -t -c ${zeus_web_config} 2>/dev/null
+    if [ $? -ne 0 ]; then
+        echo "zeus_web: nginx config test failed"
+        ${procname} -t -c ${zeus_web_config}
+        return 1
+    fi
+}
+
+zeus_web_stop()
+{
+    if [ -f "${pidfile}" ]; then
+        echo "Stopping ${name}."
+        kill -QUIT $(cat "${pidfile}") 2>/dev/null
+        rm -f "${pidfile}"
+    else
+        echo "${name} is not running."
+    fi
+}
+
+zeus_web_status()
+{
+    if [ -f "${pidfile}" ] && kill -0 $(cat "${pidfile}") 2>/dev/null; then
+        echo "${name} is running as pid $(cat ${pidfile})."
+    else
+        echo "${name} is not running."
+        return 1
+    fi
+}
+
+zeus_web_restart()
+{
+    zeus_web_stop
+    sleep 1
+    run_rc_command start
+}
+
+run_rc_command "$1"

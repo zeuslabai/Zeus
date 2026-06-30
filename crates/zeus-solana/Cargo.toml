@@ -1,0 +1,22 @@
+[package]
+name = "zeus-solana"
+description = "Solana on-chain operations for Zeus — SPL token transfers and settlement"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+zeus-core.workspace = true
+zeus-wallet.workspace = true
+zeus-agora.workspace = true
+
+solana-client = "2"
+solana-sdk = "2"
+spl-token-2022 = "7"
+spl-associated-token-account = "6"
+
+bs58.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["rt"] }
