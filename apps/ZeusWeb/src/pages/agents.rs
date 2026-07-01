@@ -643,7 +643,7 @@ pub fn AgentsPage() -> impl IntoView {
                         let a = agents.get();
                         let active = a.iter().filter(|ag| ag.status == "active").count();
                         if loading.get() { "Loading agents...".to_string() }
-                        else if a.is_empty() { "No agents configured".to_string() }
+                        else if a.is_empty() { "No agents yet — create your first one above.".to_string() }
                         else { format!("{} agents \u{2022} {} active \u{2022} {} tools available", a.len(), active, available_tools.get().len()) }
                     }}</p>
                 </div>

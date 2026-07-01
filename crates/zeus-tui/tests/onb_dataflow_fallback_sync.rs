@@ -44,7 +44,8 @@ fn walk_to_fallback_with_provider(provider_down_presses: usize) -> App {
         app.handle_key(KeyCode::Down); // pick non-default provider
     }
     app.handle_key(KeyCode::Right); // Provider(2) -> Auth(3)
-    app.handle_key(KeyCode::Right); // Auth(3) -> Model(4)
+    app.current_step += 1;
+    app.on_step_enter(); // Auth(3) -> Model(4): probe-gated (#240), bump past directly
     app.handle_key(KeyCode::Right); // Model(4) -> Fallback(5): on_step_enter syncs
     app
 }

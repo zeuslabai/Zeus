@@ -1,8 +1,8 @@
 //! HTTP rate limiting middleware for the REST API.
 //!
 //! Per-IP token bucket rate limiter with two tiers:
-//! - **Global**: generous limit for all endpoints (default 120 req/min)
-//! - **LLM**: stricter limit for expensive LLM-invoking endpoints (default 20 req/min)
+//! - **Global**: generous limit for all endpoints (default 600 req/min)
+//! - **LLM**: stricter limit for expensive LLM-invoking endpoints (default 300 req/min)
 //!
 //! Health endpoints (`/` and `/health`) are exempt from rate limiting.
 
@@ -33,9 +33,9 @@ pub struct RateLimitConfig {
 impl Default for RateLimitConfig {
     fn default() -> Self {
         Self {
-            global_rpm: 120,
-            llm_rpm: 20,
-            burst_size: 10,
+            global_rpm: 600,
+            llm_rpm: 300,
+            burst_size: 100,
             cleanup_interval_secs: 300,
         }
     }
@@ -282,12 +282,16 @@ where
 
             // Extract IP from ConnectInfo extension if available, then
             // normalize so IPv4-mapped IPv6 and plain IPv4 share one bucket.
-            let ip = normalize_ip(
-                req.extensions()
-                    .get::<ConnectInfo<SocketAddr>>()
-                    .map(|ci| ci.0.ip())
-                    .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
-            );
+            let connect_ip = req
+                .extensions()
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|ci| normalize_ip(ci.0.ip()));
+            // Local TUI/WebUI/CLI/agent hit their own gateway on loopback — don't self-throttle.
+            if connect_ip.map(|ip| ip.is_loopback()).unwrap_or(false) {
+                req.extensions_mut().insert(limiter);
+                return inner.call(req).await;
+            }
+            let ip = connect_ip.unwrap_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
 
             let is_llm = is_llm_endpoint(&path);
 
@@ -512,9 +516,9 @@ mod tests {
     #[test]
     fn test_default_config_values() {
         let config = RateLimitConfig::default();
-        assert_eq!(config.global_rpm, 120);
-        assert_eq!(config.llm_rpm, 20);
-        assert_eq!(config.burst_size, 10);
+        assert_eq!(config.global_rpm, 600);
+        assert_eq!(config.llm_rpm, 300);
+        assert_eq!(config.burst_size, 100);
         assert_eq!(config.cleanup_interval_secs, 300);
     }
 
@@ -754,6 +758,32 @@ mod tests {
                 .unwrap();
             let response = app.clone().oneshot(req).await.unwrap();
             assert_eq!(response.status(), 200);
+        }
+
+        #[tokio::test]
+        async fn test_loopback_connect_info_exempt_from_rate_limit() {
+            let config = RateLimitConfig {
+                global_rpm: 1,
+                llm_rpm: 1,
+                burst_size: 0,
+                cleanup_interval_secs: 300,
+            };
+            let limiter = HttpRateLimiter::new(config);
+            let layer = RateLimitLayer::new(limiter);
+            let app = test_router().await.layer(layer);
+
+            // Real loopback ConnectInfo represents local TUI/WebUI/CLI traffic and
+            // should not self-throttle even beyond the configured limit.
+            for _ in 0..5 {
+                let mut req = Request::builder()
+                    .uri("/api/test")
+                    .body(Body::empty())
+                    .unwrap();
+                req.extensions_mut()
+                    .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242))));
+                let response = app.clone().oneshot(req).await.unwrap();
+                assert_eq!(response.status(), 200);
+            }
         }
 
         #[tokio::test]

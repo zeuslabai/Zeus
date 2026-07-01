@@ -195,7 +195,7 @@ pub fn BatchPage() -> impl IntoView {
                             view! {
                                 <div style="text-align: center; padding: 40px 20px; color: rgba(255,245,240,0.3); border: 1px dashed rgba(255,60,20,0.1); border-radius: 12px;">
                                     <div style="font-size: 32px; margin-bottom: 12px;">"📦"</div>
-                                    <div style="font-size: 13px;">"No batches yet"</div>
+                                    <div style="font-size: 13px;">"No batches yet — submit prompts above to get started."</div>
                                     <div style="font-size: 11px; margin-top: 4px; color: rgba(255,245,240,0.2);">"Create one or look up an existing batch ID"</div>
                                 </div>
                             }.into_any()

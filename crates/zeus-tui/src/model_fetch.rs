@@ -40,7 +40,7 @@ impl Default for ModelFetchState {
 /// error string (surfaced on the Auth screen) on failure.
 ///
 /// Per-provider endpoints, ported verbatim from the pre-rebuild onboarding:
-/// - `anthropic` — no models endpoint; returns known flagship set (static).
+/// - `anthropic` — `GET /v1/models`, `x-api-key`/OAuth headers; filter claude.
 /// - `openai` — `GET /v1/models`, bearer; filter gpt-/o1/o3/o4.
 /// - `ollama` — `GET {OLLAMA_HOST|localhost:11434}/api/tags`; `name` field.
 /// - `groq` — `GET /openai/v1/models`, bearer.
@@ -52,12 +52,46 @@ pub async fn fetch_models(provider_id: &str, api_key: &str) -> Result<Vec<String
 
     match provider_id {
         "anthropic" => {
-            // Anthropic has no models endpoint — use the known flagship set.
-            Ok(vec![
-                "claude-sonnet-4-6".into(),
-                "claude-opus-4-6".into(),
-                "claude-haiku-4-5".into(),
-            ])
+            // Anthropic now exposes a Models API. Poll it live so newly released
+            // Claude/Sonnet models appear in onboarding without manual config.
+            let base = std::env::var("ANTHROPIC_BASE_URL")
+                .ok()
+                .filter(|u| !u.trim().is_empty())
+                .map(|u| u.trim_end_matches('/').to_string())
+                .unwrap_or_else(|| "https://api.anthropic.com".to_string());
+            let mut req = client
+                .get(format!("{base}/v1/models"))
+                .header("anthropic-version", "2023-06-01");
+            if api_key.starts_with("sk-ant-oat01-") {
+                req = req
+                    .bearer_auth(api_key)
+                    .header("anthropic-beta", "oauth-2025-04-20");
+            } else {
+                req = req.header("x-api-key", api_key);
+            }
+            let resp = req.send().await.map_err(|e| e.to_string())?;
+            if !resp.status().is_success() {
+                return Err(format!("Anthropic API error: {}", resp.status()));
+            }
+            let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+            let models: Vec<String> = body["data"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|m| m["id"].as_str().map(String::from))
+                        .filter(|id| id.starts_with("claude-"))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if models.is_empty() {
+                Ok(vec![
+                    "claude-opus-4-8".into(),
+                    "claude-sonnet-4-6".into(),
+                    "claude-haiku-4-5".into(),
+                ])
+            } else {
+                Ok(models)
+            }
         }
         "openai" => {
             let resp = client
@@ -443,6 +477,36 @@ pub async fn fetch_models(provider_id: &str, api_key: &str) -> Result<Vec<String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    async fn spawn_models_server(body: &'static str) -> (String, oneshot::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = oneshot::channel();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let _ = tx.send(String::from_utf8_lossy(&buf[..n]).into_owned());
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.flush().await;
+            }
+        });
+        (format!("http://{}", addr), rx)
+    }
 
     #[test]
     fn state_default_is_idle() {
@@ -450,11 +514,73 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn anthropic_returns_static_flagships_without_network() {
-        // Anthropic has no models endpoint — must resolve offline (no key needed).
-        let models = fetch_models("anthropic", "").await.expect("anthropic is static");
-        assert!(models.contains(&"claude-sonnet-4-6".to_string()));
-        assert!(models.len() >= 3);
+    async fn anthropic_polls_live_models_endpoint() {
+        let _env_guard = env_lock().lock().expect("env lock poisoned");
+        let (base, request) = spawn_models_server(
+            r#"{"data":[{"id":"claude-sonnet-5-20260615"},{"id":"not-claude"},{"id":"claude-opus-4-8"}]}"#,
+        )
+        .await;
+        unsafe {
+            std::env::set_var("ANTHROPIC_BASE_URL", &base);
+        }
+        let models = fetch_models("anthropic", "sk-ant-test")
+            .await
+            .expect("anthropic models fetch succeeds");
+        unsafe {
+            std::env::remove_var("ANTHROPIC_BASE_URL");
+        }
+
+        let request = request.await.expect("server captures request");
+        assert!(
+            request.starts_with("GET /v1/models "),
+            "request was: {request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("x-api-key: sk-ant-test"),
+            "request was: {request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("anthropic-version: 2023-06-01"),
+            "request was: {request}"
+        );
+        assert_eq!(
+            models,
+            vec![
+                "claude-sonnet-5-20260615".to_string(),
+                "claude-opus-4-8".to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn anthropic_oauth_uses_bearer_and_beta_header() {
+        let _env_guard = env_lock().lock().expect("env lock poisoned");
+        let (base, request) = spawn_models_server(r#"{"data":[{"id":"claude-haiku-4-5"}]}"#).await;
+        unsafe {
+            std::env::set_var("ANTHROPIC_BASE_URL", &base);
+        }
+        let models = fetch_models("anthropic", "sk-ant-oat01-test")
+            .await
+            .expect("anthropic oauth models fetch succeeds");
+        unsafe {
+            std::env::remove_var("ANTHROPIC_BASE_URL");
+        }
+
+        let request = request.await.expect("server captures request");
+        let request_lower = request.to_ascii_lowercase();
+        assert!(
+            request_lower.contains("authorization: bearer sk-ant-oat01-test"),
+            "request was: {request}"
+        );
+        assert!(
+            request_lower.contains("anthropic-beta: oauth-2025-04-20"),
+            "request was: {request}"
+        );
+        assert_eq!(models, vec!["claude-haiku-4-5".to_string()]);
     }
 
     #[test]
@@ -509,9 +635,16 @@ mod tests {
         // Point SAKANA_BASE_URL at an unroutable host → the live GET fails fast,
         // proving the arm builds `{base}/v1/models` from the override (not the
         // default host) and surfaces an honest Err rather than fabricating a list.
-        unsafe { std::env::set_var("SAKANA_BASE_URL", "http://127.0.0.1:1"); }
+        unsafe {
+            std::env::set_var("SAKANA_BASE_URL", "http://127.0.0.1:1");
+        }
         let res = fetch_models("sakana", "fish_test").await;
-        unsafe { std::env::remove_var("SAKANA_BASE_URL"); }
-        assert!(res.is_err(), "unreachable base must surface an honest error");
+        unsafe {
+            std::env::remove_var("SAKANA_BASE_URL");
+        }
+        assert!(
+            res.is_err(),
+            "unreachable base must surface an honest error"
+        );
     }
 }

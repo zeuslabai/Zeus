@@ -31,7 +31,7 @@ const SKILLS_STEP: usize = 17;
 fn goto_skills(app: &mut App) {
     let mut guard = 0;
     while app.current_step < SKILLS_STEP {
-        let s = app.current_step;
+        if app.current_step == 3 { app.current_step += 1; app.on_step_enter(); continue; }        let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
         } else if s == 6 || s == 8 || s == 9 || s == 11 || s == 15 {

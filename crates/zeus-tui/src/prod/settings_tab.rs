@@ -1,7 +1,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Clear, Block, Borders, Widget};
+use ratatui::widgets::{Block, Borders, Clear, Widget};
 
 use crate::prod::draw::BufferClampExt;
 use crate::theme;
@@ -203,6 +203,10 @@ impl<'a> SettingsTab<'a> {
         let Some(config) = config else {
             return row.value.to_string();
         };
+
+        if let Some(value) = section_live_value(config, section, row) {
+            return value;
+        }
 
         let section_obj = config
             .get(section.id())
@@ -520,6 +524,226 @@ fn field_key(key: &str) -> String {
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join("_")
+}
+
+fn section_live_value(
+    config: &serde_json::Value,
+    section: SettingsSection,
+    row: SettingRow,
+) -> Option<String> {
+    match section {
+        SettingsSection::Llm => llm_live_value(config, row.key),
+        SettingsSection::Channels => channel_live_value(config, row.key),
+        SettingsSection::Memory => memory_live_value(config, row.key),
+        SettingsSection::Security => security_live_value(config, row.key),
+        SettingsSection::Tools => tool_live_value(config, row.key),
+        SettingsSection::Display => display_live_value(config, row.key),
+        SettingsSection::System => system_live_value(config, row.key),
+    }
+}
+
+fn llm_live_value(config: &serde_json::Value, key: &str) -> Option<String> {
+    match key {
+        "Provider" => config
+            .get("default_provider")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned)
+            .or_else(|| provider_from_model(config.get("model")?.as_str()?)),
+        "Model" => config.get("model").map(format_json_value),
+        "Temperature" => config
+            .get("temperature")
+            .or_else(|| config.get("ollama")?.get("temperature"))
+            .map(format_json_value),
+        "Max iterations" => config.get("max_iterations").map(format_json_value),
+        "Fallback chain" => config
+            .get("fallback_models")
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .filter(|value| !value.is_empty()),
+        _ => None,
+    }
+}
+
+fn channel_live_value(config: &serde_json::Value, key: &str) -> Option<String> {
+    let channel_key = match key {
+        "Discord" => "discord",
+        "Telegram" => "telegram",
+        "Slack" => "slack",
+        "Email" => "email",
+        "iMessage" => "imessage",
+        "WhatsApp" => "whatsapp",
+        "Signal" => "signal",
+        "Matrix" => "matrix",
+        _ => return None,
+    };
+    let channels = config.get("channels")?;
+    let enabled = channels
+        .get(channel_key)
+        .or_else(|| channels.get(key))
+        .or_else(|| channels.get(key.to_ascii_lowercase()))
+        .is_some_and(|value| !value.is_null() && value.as_bool() != Some(false));
+    Some(format_enabled(enabled))
+}
+
+fn memory_live_value(config: &serde_json::Value, key: &str) -> Option<String> {
+    let mnemosyne = config.get("mnemosyne");
+    match key {
+        "DB path" => mnemosyne?.get("db_path").map(format_json_value),
+        "Embedding provider" => config
+            .get("embedding_status")
+            .and_then(|value| value.get("active_provider"))
+            .map(format_json_value)
+            .or_else(|| mnemosyne.map(|_| "ollama".to_string())),
+        "Embedding model" => mnemosyne?.get("embedding_model").map(format_json_value),
+        "FTS enabled" => mnemosyne?.get("enable_fts").map(format_bool),
+        "Auto-prune" => config
+            .get("session_maintenance")
+            .and_then(|value| value.get("max_age_days"))
+            .or_else(|| config.get("pruning")?.get("max_age_days"))
+            .map(|value| format!("{} days", format_json_value(value))),
+        _ => None,
+    }
+}
+
+fn security_live_value(config: &serde_json::Value, key: &str) -> Option<String> {
+    let aegis = config.get("aegis")?;
+    match key {
+        "Aegis level" => aegis.get("sandbox_level").map(format_json_value),
+        "Approval mode" => aegis
+            .get("require_confirmation_for")
+            .map(|value| match value {
+                serde_json::Value::Array(items) if items.is_empty() => "automatic".to_string(),
+                serde_json::Value::Array(items) => format!("interactive ({} tools)", items.len()),
+                _ => format_json_value(value),
+            }),
+        "Command allowlist" => aegis.get("permissions").map(format_count),
+        "URL allowlist" => aegis.get("network_allowlist").map(format_count),
+        "Audit log" => aegis.get("audit_path").map(format_json_value),
+        _ => None,
+    }
+}
+
+fn tool_live_value(config: &serde_json::Value, key: &str) -> Option<String> {
+    match key {
+        "Talos enabled" => config.get("talos").map(|talos| {
+            let enabled = talos
+                .as_object()
+                .is_some_and(|obj| obj.values().any(|value| value.as_bool() == Some(true)));
+            format_enabled(enabled)
+        }),
+        "Browser" => config
+            .get("talos")
+            .and_then(|value| value.get("browser"))
+            .map(format_enabled_bool),
+        "MCP servers" => config.get("gateway").map(|gateway| {
+            if gateway
+                .get("enable_mcp")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+            {
+                let port = gateway
+                    .get("mcp_port")
+                    .map(format_json_value)
+                    .unwrap_or_else(|| "unknown".to_string());
+                format!("enabled on {port}")
+            } else {
+                format_enabled(false)
+            }
+        }),
+        "Tool timeout" => config
+            .get("gateway")
+            .and_then(|value| value.get("timeout_secs"))
+            .map(|value| format!("{}s", format_json_value(value))),
+        _ => None,
+    }
+}
+
+fn display_live_value(config: &serde_json::Value, key: &str) -> Option<String> {
+    let tui = config.get("tui")?;
+    match key {
+        "Theme" => tui.get("theme").map(format_json_value),
+        "Accent color" => tui.get("accent_color").map(format_json_value),
+        "Vim mode" => tui.get("vim_mode").map(format_bool),
+        "High contrast" => tui.get("high_contrast").map(format_bool),
+        "Animations" => tui.get("animations").map(format_bool),
+        _ => None,
+    }
+}
+
+fn system_live_value(config: &serde_json::Value, key: &str) -> Option<String> {
+    match key {
+        "Daemon status" => config.get("gateway").map(|gateway| {
+            let host = gateway
+                .get("host")
+                .and_then(|value| value.as_str())
+                .unwrap_or("127.0.0.1");
+            let port = gateway
+                .get("port")
+                .map(format_json_value)
+                .unwrap_or_else(|| "8080".to_string());
+            format!("{host}:{port}")
+        }),
+        "Build version" => config
+            .get("version")
+            .or_else(|| config.get("build_version"))
+            .map(format_json_value)
+            .or_else(|| Some(env!("CARGO_PKG_VERSION").to_string())),
+        "Workspace path" => config.get("workspace").map(format_json_value),
+        _ => None,
+    }
+}
+
+fn provider_from_model(model: &str) -> Option<String> {
+    model
+        .split_once('/')
+        .map(|(provider, _)| provider.to_string())
+        .filter(|provider| !provider.is_empty())
+}
+
+fn format_enabled(enabled: bool) -> String {
+    if enabled {
+        "✓ enabled".to_string()
+    } else {
+        "○ disabled".to_string()
+    }
+}
+
+fn format_enabled_bool(value: &serde_json::Value) -> String {
+    format_enabled(value.as_bool().unwrap_or(false))
+}
+
+fn format_bool(value: &serde_json::Value) -> String {
+    match value.as_bool() {
+        Some(true) => "✓ true".to_string(),
+        Some(false) => "○ false".to_string(),
+        None => format_json_value(value),
+    }
+}
+
+fn format_count(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Array(items) => format!("{} entries", items.len()),
+        serde_json::Value::Object(items) => format!("{} entries", items.len()),
+        _ => format_json_value(value),
+    }
+}
+
+fn format_json_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(value) => value.clone(),
+        serde_json::Value::Bool(true) => "✓ true".to_string(),
+        serde_json::Value::Bool(false) => "○ false".to_string(),
+        serde_json::Value::Number(value) => value.to_string(),
+        serde_json::Value::Array(items) => format!("{} entries", items.len()),
+        serde_json::Value::Object(items) => format!("{} entries", items.len()),
+        serde_json::Value::Null => "unset".to_string(),
+    }
 }
 
 const LLM_ROWS: &[SettingRow] = &[

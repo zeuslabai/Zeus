@@ -3924,30 +3924,32 @@ fn default_irc_nick() -> String {
 /// X (Twitter) channel configuration
 ///
 /// Used for X/Twitter integration under `[channels.x_twitter]`.
-/// Env var fallbacks: `X_BEARER_TOKEN`, `X_API_KEY`, `X_API_SECRET`,
-/// `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET`.
+/// Env var fallbacks: `X_BEARER_TOKEN`, `X_CONSUMER_KEY`,
+/// `X_CONSUMER_KEY_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET`,
+/// `X_CLIENT_ID`, `X_CLIENT_SECRET` (legacy `X_API_KEY` / `X_API_SECRET`
+/// are still honored as fallbacks for existing installs).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XTwitterChannelConfig {
     /// Bearer token (OAuth 2.0 App-Only)
-    #[serde(default = "default_x_bearer_token", skip_serializing)]
+    #[serde(default = "default_x_bearer_token")]
     pub bearer_token: String,
-    /// API key (OAuth 1.0a consumer key)
-    #[serde(default = "default_x_api_key", skip_serializing)]
-    pub api_key: String,
-    /// API secret (OAuth 1.0a consumer secret)
-    #[serde(default = "default_x_api_secret", skip_serializing)]
-    pub api_secret: String,
+    /// Consumer key (OAuth 1.0a)
+    #[serde(default = "default_x_consumer_key", alias = "api_key")]
+    pub consumer_key: String,
+    /// Consumer key secret (OAuth 1.0a)
+    #[serde(default = "default_x_consumer_key_secret", alias = "api_secret")]
+    pub consumer_key_secret: String,
     /// Access token (OAuth 1.0a)
-    #[serde(default = "default_x_access_token", skip_serializing)]
+    #[serde(default = "default_x_access_token")]
     pub access_token: String,
     /// Access token secret (OAuth 1.0a)
-    #[serde(default = "default_x_access_token_secret", skip_serializing)]
+    #[serde(default = "default_x_access_token_secret")]
     pub access_token_secret: String,
     /// OAuth 2.0 Client ID (for PKCE flow)
-    #[serde(default = "default_x_client_id", skip_serializing)]
+    #[serde(default = "default_x_client_id")]
     pub client_id: String,
     /// OAuth 2.0 Client Secret (for PKCE flow)
-    #[serde(default = "default_x_client_secret", skip_serializing)]
+    #[serde(default = "default_x_client_secret")]
     pub client_secret: String,
     /// Polling interval for mentions in seconds (default: 60)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3995,12 +3997,16 @@ fn default_x_bearer_token() -> String {
     std::env::var("X_BEARER_TOKEN").unwrap_or_default()
 }
 
-fn default_x_api_key() -> String {
-    std::env::var("X_API_KEY").unwrap_or_default()
+fn default_x_consumer_key() -> String {
+    std::env::var("X_CONSUMER_KEY")
+        .or_else(|_| std::env::var("X_API_KEY"))
+        .unwrap_or_default()
 }
 
-fn default_x_api_secret() -> String {
-    std::env::var("X_API_SECRET").unwrap_or_default()
+fn default_x_consumer_key_secret() -> String {
+    std::env::var("X_CONSUMER_KEY_SECRET")
+        .or_else(|_| std::env::var("X_API_SECRET"))
+        .unwrap_or_default()
 }
 
 fn default_x_access_token() -> String {
@@ -6300,7 +6306,7 @@ impl Provider {
             Provider::Moonshot => "MOONSHOT_API_KEY",
             Provider::Zai => "ZAI_API_KEY",
             Provider::Qwen => "QWEN_API_KEY",
-            Provider::Minimax => "",
+            Provider::Minimax => "MINIMAX_API_KEY",
             Provider::XiaomiMimo => "XIAOMIMIMO_API_KEY",
             Provider::Sakana => "SAKANA_API_KEY",
             Provider::GoogleGeminiCli => "",
@@ -7628,6 +7634,11 @@ verbosity = "barfly"
     #[test]
     fn test_together_env_key() {
         assert_eq!(Provider::Together.env_key(), "TOGETHER_API_KEY");
+    }
+
+    #[test]
+    fn test_minimax_env_key() {
+        assert_eq!(Provider::Minimax.env_key(), "MINIMAX_API_KEY");
     }
 
     #[test]

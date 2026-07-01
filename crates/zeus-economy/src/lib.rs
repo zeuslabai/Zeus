@@ -15,12 +15,41 @@ pub use domain::{
     DomainMetadata, DomainRecord, DomainRegistry, DomainRegistryConfig, DomainResult,
     DomainTransfer,
 };
-use rusqlite::{Connection, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::{debug, info};
 use uuid::Uuid;
 use zeus_core::{Error, Result};
+
+// ===========================================================================
+// Amount safety
+// ===========================================================================
+
+/// Hard upper bound on any single economic amount (mint/earn/spend/transfer/
+/// stake/burn/settle). Chosen well below `i64::MAX` so that:
+///   1. any `u64 > i64::MAX` is rejected (SQLite stores signed 64-bit ints —
+///      a raw `u64 as i64` on such a value silently wraps negative), and
+///   2. no realistic accumulation of capped amounts can approach the i64
+///      ceiling, keeping `total_*` counters and `total_supply` sane.
+///
+/// 1 trillion base units is far above any legitimate economic operation.
+pub const MAX_AMOUNT: u64 = 1_000_000_000_000;
+
+/// Reject amounts that are zero or exceed [`MAX_AMOUNT`]. Every value-moving
+/// entry point runs this before touching the ledger, so overflow can never be
+/// reached from a client-supplied amount.
+fn validate_amount(amount: u64) -> Result<()> {
+    if amount == 0 {
+        return Err(Error::Validation("Amount must be > 0".to_string()));
+    }
+    if amount > MAX_AMOUNT {
+        return Err(Error::Validation(format!(
+            "Amount {amount} exceeds maximum allowed {MAX_AMOUNT}"
+        )));
+    }
+    Ok(())
+}
 
 // ===========================================================================
 // Transaction types
@@ -192,6 +221,9 @@ pub struct AgentWallet {
 /// Each method opens a fresh connection (consistent with Zeus crate patterns).
 /// Atomic multi-party transactions use SQLite's IMMEDIATE transaction mode
 /// to prevent TOCTOU races on balance checks.
+/// (stake_id, agent_id, amount, purpose, status, created_at, released_at)
+pub type StakeRow = (String, String, u64, String, String, String, Option<String>);
+
 pub struct TokenLedger {
     path: PathBuf,
 }
@@ -231,6 +263,47 @@ const ECONOMY_MIGRATIONS: &[&str] = &[
     "ALTER TABLE wallets ADD COLUMN token TEXT NOT NULL DEFAULT 'ZEUS';
      ALTER TABLE transactions ADD COLUMN token TEXT NOT NULL DEFAULT 'ZEUS';
      CREATE INDEX IF NOT EXISTS idx_tx_token ON transactions(token);",
+    // v3: stakes ledger — records real collateral holds so unstake cannot
+    // counterfeit tokens. A stake is created by `stake()` (debits wallet) and
+    // consumed by `unstake()` (credits wallet), validated against this table.
+    // status: 'active' | 'released'. amount is the ORIGINAL staked amount;
+    // unstake must release the full remaining amount (no partial-unstake mint).
+    "CREATE TABLE IF NOT EXISTS stakes (
+                stake_id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                purpose TEXT NOT NULL DEFAULT 'general',
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                released_at TEXT
+            );
+     CREATE INDEX IF NOT EXISTS idx_stakes_agent ON stakes(agent_id);
+     CREATE INDEX IF NOT EXISTS idx_stakes_status ON stakes(status);",
+    // v4: add a DB-level CHECK(balance >= 0) backstop. SQLite cannot attach a
+    // CHECK to an existing column via ALTER, so we rebuild the wallets table
+    // and copy rows across. This is defense-in-depth: the application already
+    // guards overdraft inside each IMMEDIATE tx, but a buggy/direct write path
+    // now hits a hard constraint instead of silently corrupting the ledger.
+    "CREATE TABLE wallets_v4 (
+                agent_id TEXT PRIMARY KEY,
+                balance INTEGER NOT NULL DEFAULT 0 CHECK (balance >= 0),
+                total_earned INTEGER NOT NULL DEFAULT 0,
+                total_spent INTEGER NOT NULL DEFAULT 0,
+                total_transferred_in INTEGER NOT NULL DEFAULT 0,
+                total_transferred_out INTEGER NOT NULL DEFAULT 0,
+                transaction_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                token TEXT NOT NULL DEFAULT 'ZEUS'
+            );
+     INSERT INTO wallets_v4 (agent_id, balance, total_earned, total_spent,
+                total_transferred_in, total_transferred_out, transaction_count,
+                created_at, updated_at, token)
+            SELECT agent_id, balance, total_earned, total_spent,
+                total_transferred_in, total_transferred_out, transaction_count,
+                created_at, updated_at, token FROM wallets;
+     DROP TABLE wallets;
+     ALTER TABLE wallets_v4 RENAME TO wallets;",
 ];
 
 impl TokenLedger {
@@ -305,12 +378,18 @@ impl TokenLedger {
         reason: TransactionReason,
         note: impl Into<String>,
     ) -> Result<u64> {
+        validate_amount(amount)?;
         let mut conn = self.conn()?;
         let db_tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| Error::Database(format!("Begin tx failed: {e}")))?;
 
         Self::ensure_wallet(&db_tx, agent_id)?;
+
+        let current = Self::read_balance(&db_tx, agent_id)?;
+        current
+            .checked_add(amount)
+            .ok_or_else(|| Error::Validation("Earn would overflow balance".to_string()))?;
 
         db_tx
             .execute(
@@ -355,6 +434,7 @@ impl TokenLedger {
         reason: TransactionReason,
         note: impl Into<String>,
     ) -> Result<u64> {
+        validate_amount(amount)?;
         let mut conn = self.conn()?;
         let db_tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -412,6 +492,7 @@ impl TokenLedger {
         reason: TransactionReason,
         note: impl Into<String>,
     ) -> Result<(u64, u64)> {
+        validate_amount(amount)?;
         let note_str: String = note.into();
         let mut conn = self.conn()?;
         let db_tx = conn
@@ -427,6 +508,12 @@ impl TokenLedger {
                 "Insufficient balance: agent {from} has {from_balance}, needs {amount}"
             )));
         }
+
+        // Guard the credit side against overflow before mutating either wallet.
+        let to_balance = Self::read_balance(&db_tx, to)?;
+        to_balance
+            .checked_add(amount)
+            .ok_or_else(|| Error::Validation("Transfer would overflow recipient balance".to_string()))?;
 
         let now = Utc::now().to_rfc3339();
 
@@ -486,6 +573,7 @@ impl TokenLedger {
         fee_amount: u64,
         reference_id: impl Into<String>,
     ) -> Result<(u64, u64, u64)> {
+        validate_amount(total_price)?;
         if fee_amount > total_price {
             return Err(Error::Validation(
                 "Fee cannot exceed total price".to_string(),
@@ -509,6 +597,16 @@ impl TokenLedger {
                 "Insufficient balance: buyer {buyer} has {buyer_balance}, needs {total_price}"
             )));
         }
+
+        // Guard both credit sides against overflow before any mutation.
+        Self::read_balance(&db_tx, seller)?
+            .checked_add(seller_amount)
+            .ok_or_else(|| Error::Validation("Settle would overflow seller balance".to_string()))?;
+        Self::read_balance(&db_tx, fee_collector)?
+            .checked_add(fee_amount)
+            .ok_or_else(|| {
+                Error::Validation("Settle would overflow fee-collector balance".to_string())
+            })?;
 
         let now = Utc::now().to_rfc3339();
 
@@ -587,6 +685,237 @@ impl TokenLedger {
     }
 
     // -----------------------------------------------------------------------
+    // Stake & Unstake
+    // -----------------------------------------------------------------------
+
+    /// Stake tokens as collateral. Atomically debits the agent's wallet and
+    /// records an `active` stake row in a single IMMEDIATE transaction, so the
+    /// debit and the stake record can never diverge. Returns the new
+    /// `stake_id` and the agent's post-debit balance.
+    ///
+    /// Overdraft-safe: the balance check is inside the transaction.
+    pub fn stake(
+        &self,
+        agent_id: &str,
+        amount: u64,
+        purpose: impl Into<String>,
+    ) -> Result<(String, u64)> {
+        validate_amount(amount)?;
+        let purpose = purpose.into();
+        let stake_id = Uuid::new_v4().to_string();
+
+        let mut conn = self.conn()?;
+        let db_tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| Error::Database(format!("Begin tx failed: {e}")))?;
+
+        Self::ensure_wallet(&db_tx, agent_id)?;
+
+        let current = Self::read_balance(&db_tx, agent_id)?;
+        if current < amount {
+            return Err(Error::Validation(format!(
+                "Insufficient balance to stake: agent {agent_id} has {current}, needs {amount}"
+            )));
+        }
+
+        let new_balance = current
+            .checked_sub(amount)
+            .ok_or_else(|| Error::Validation("Stake would underflow balance".to_string()))?;
+
+        db_tx
+            .execute(
+                "UPDATE wallets SET balance = ?1, total_spent = total_spent + ?2,
+                 transaction_count = transaction_count + 1, updated_at = ?3 WHERE agent_id = ?4",
+                params![
+                    new_balance as i64,
+                    amount as i64,
+                    Utc::now().to_rfc3339(),
+                    agent_id
+                ],
+            )
+            .map_err(|e| Error::Database(format!("Stake debit failed: {e}")))?;
+
+        db_tx
+            .execute(
+                "INSERT INTO stakes (stake_id, agent_id, amount, purpose, status, created_at)
+                 VALUES (?1, ?2, ?3, ?4, 'active', ?5)",
+                params![
+                    stake_id,
+                    agent_id,
+                    amount as i64,
+                    purpose,
+                    Utc::now().to_rfc3339(),
+                ],
+            )
+            .map_err(|e| Error::Database(format!("Stake record failed: {e}")))?;
+
+        let tx = Transaction {
+            id: Uuid::new_v4().to_string(),
+            kind: TransactionKind::Spend,
+            reason: TransactionReason::Custom(format!("stake:{purpose}")),
+            from_agent: Some(agent_id.to_string()),
+            to_agent: None,
+            amount,
+            reference_id: Some(stake_id.clone()),
+            note: format!("Staked {amount} tokens for {purpose}"),
+            created_at: Utc::now(),
+        };
+        Self::record_tx(&db_tx, &tx)?;
+
+        db_tx
+            .commit()
+            .map_err(|e| Error::Database(format!("Commit failed: {e}")))?;
+
+        info!(agent_id, amount, stake_id, purpose, "Tokens staked");
+        Ok((stake_id, new_balance))
+    }
+
+    /// Release a previously recorded stake, crediting the ORIGINAL staked
+    /// amount back to the owning agent. Validates that the stake exists, is
+    /// still `active`, and belongs to `agent_id` — then marks it `released` in
+    /// the same transaction. This is what makes unstake non-counterfeitable:
+    /// you can only ever get back exactly what a real `stake()` locked, once.
+    ///
+    /// Returns the released amount and the agent's post-credit balance.
+    pub fn unstake(&self, agent_id: &str, stake_id: &str) -> Result<(u64, u64)> {
+        let mut conn = self.conn()?;
+        let db_tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| Error::Database(format!("Begin tx failed: {e}")))?;
+
+        // Look up the stake and validate ownership + status atomically.
+        let row: Option<(String, i64, String)> = db_tx
+            .query_row(
+                "SELECT agent_id, amount, status FROM stakes WHERE stake_id = ?1",
+                params![stake_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()
+            .map_err(|e| Error::Database(format!("Stake lookup failed: {e}")))?;
+
+        let (owner, amount_i64, status) = row.ok_or_else(|| {
+            Error::Validation(format!("No such stake: {stake_id}"))
+        })?;
+
+        if owner != agent_id {
+            return Err(Error::Validation(format!(
+                "Stake {stake_id} does not belong to agent {agent_id}"
+            )));
+        }
+        if status != "active" {
+            return Err(Error::Validation(format!(
+                "Stake {stake_id} is not active (status: {status})"
+            )));
+        }
+
+        let amount = amount_i64 as u64;
+
+        // Mark released FIRST (idempotency guard against concurrent unstake of
+        // the same stake — the IMMEDIATE tx serializes, and the status check
+        // above already read 'active' under this lock).
+        let updated = db_tx
+            .execute(
+                "UPDATE stakes SET status = 'released', released_at = ?1
+                 WHERE stake_id = ?2 AND status = 'active'",
+                params![Utc::now().to_rfc3339(), stake_id],
+            )
+            .map_err(|e| Error::Database(format!("Stake release failed: {e}")))?;
+        if updated != 1 {
+            return Err(Error::Validation(format!(
+                "Stake {stake_id} could not be released (already consumed)"
+            )));
+        }
+
+        Self::ensure_wallet(&db_tx, agent_id)?;
+        let current = Self::read_balance(&db_tx, agent_id)?;
+        let new_balance = current
+            .checked_add(amount)
+            .ok_or_else(|| Error::Validation("Unstake would overflow balance".to_string()))?;
+
+        db_tx
+            .execute(
+                "UPDATE wallets SET balance = ?1, total_earned = total_earned + ?2,
+                 transaction_count = transaction_count + 1, updated_at = ?3 WHERE agent_id = ?4",
+                params![
+                    new_balance as i64,
+                    amount as i64,
+                    Utc::now().to_rfc3339(),
+                    agent_id
+                ],
+            )
+            .map_err(|e| Error::Database(format!("Unstake credit failed: {e}")))?;
+
+        let tx = Transaction {
+            id: Uuid::new_v4().to_string(),
+            kind: TransactionKind::Earn,
+            reason: TransactionReason::Custom(format!("unstake:{stake_id}")),
+            from_agent: None,
+            to_agent: Some(agent_id.to_string()),
+            amount,
+            reference_id: Some(stake_id.to_string()),
+            note: format!("Unstaked {amount} tokens (stake:{stake_id})"),
+            created_at: Utc::now(),
+        };
+        Self::record_tx(&db_tx, &tx)?;
+
+        db_tx
+            .commit()
+            .map_err(|e| Error::Database(format!("Commit failed: {e}")))?;
+
+        info!(agent_id, amount, stake_id, "Tokens unstaked");
+        Ok((amount, new_balance))
+    }
+
+    /// List stakes, optionally filtered by agent_id and/or status.
+    /// Returns (stake_id, agent_id, amount, purpose, status, created_at, released_at).
+    pub fn list_stakes(
+        &self,
+        agent_id: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<Vec<StakeRow>> {
+        let conn = self.conn()?;
+        let mut sql = String::from(
+            "SELECT stake_id, agent_id, amount, purpose, status, created_at, released_at FROM stakes WHERE 1=1"
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let mut idx = 1;
+
+        if let Some(aid) = agent_id {
+            sql.push_str(&format!(" AND agent_id = ?{idx}"));
+            param_values.push(Box::new(aid.to_string()));
+            idx += 1;
+        }
+        if let Some(st) = status {
+            sql.push_str(&format!(" AND status = ?{idx}"));
+            param_values.push(Box::new(st.to_string()));
+        }
+        sql.push_str(" ORDER BY created_at DESC");
+
+        let mut stmt = conn.prepare(&sql).map_err(|e| Error::Database(format!("Prepare list_stakes failed: {e}")))?;
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt
+            .query_map(params_refs.as_slice(), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)? as u64,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ))
+            })
+            .map_err(|e| Error::Database(format!("Query list_stakes failed: {e}")))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            let r = row.map_err(|e| Error::Database(format!("Row read failed: {e}")))?;
+            results.push(r);
+        }
+        Ok(results)
+    }
+
+    // -----------------------------------------------------------------------
     // Mint & Burn
     // -----------------------------------------------------------------------
 
@@ -598,12 +927,18 @@ impl TokenLedger {
         reason: TransactionReason,
         note: impl Into<String>,
     ) -> Result<u64> {
+        validate_amount(amount)?;
         let mut conn = self.conn()?;
         let db_tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| Error::Database(format!("Begin tx failed: {e}")))?;
 
         Self::ensure_wallet(&db_tx, agent_id)?;
+
+        let current = Self::read_balance(&db_tx, agent_id)?;
+        current
+            .checked_add(amount)
+            .ok_or_else(|| Error::Validation("Mint would overflow balance".to_string()))?;
 
         db_tx
             .execute(
@@ -644,6 +979,7 @@ impl TokenLedger {
         reason: TransactionReason,
         note: impl Into<String>,
     ) -> Result<u64> {
+        validate_amount(amount)?;
         let mut conn = self.conn()?;
         let db_tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1695,10 +2031,9 @@ mod tests {
             )
             .expect("earn should succeed");
 
-        // 5. Alice buys a skill from carol via marketplace
-        ledger
-            .mint("carol", 0, TransactionReason::SystemGrant, "new agent")
-            .expect("mint should succeed");
+        // 5. Alice buys a skill from carol via marketplace.
+        //    (carol's wallet is auto-created by settle_trade — no zero-mint seed
+        //    needed; zero-amount mints are rejected under H1.)
         ledger
             .settle_trade("alice", "carol", "platform", 100, 5, "skill-trade-1")
             .expect("settle_trade should succeed");
@@ -1758,29 +2093,30 @@ mod tests {
 
     #[test]
     fn test_zero_amount_earn() {
+        // H1: zero-amount mutations are now rejected at the ledger (previously
+        // a permissive no-op). validate_amount enforces amount > 0 everywhere.
         let (_tmp, ledger) = temp_ledger();
-        let balance = ledger
-            .earn(
-                "agent-1",
-                0,
-                TransactionReason::TaskCompletion,
-                "empty task",
-            )
-            .expect("earn should succeed");
-        assert_eq!(balance, 0);
+        assert!(
+            ledger
+                .earn("agent-1", 0, TransactionReason::TaskCompletion, "empty task")
+                .is_err()
+        );
     }
 
     #[test]
     fn test_zero_amount_transfer() {
+        // H1: zero-amount transfer is now rejected at the ledger.
         let (_tmp, ledger) = temp_ledger();
         ledger
             .mint("alice", 100, TransactionReason::SystemGrant, "")
             .expect("mint should succeed");
-        let (a, b) = ledger
-            .transfer("alice", "bob", 0, TransactionReason::PeerTransfer, "noop")
-            .expect("transfer should succeed");
-        assert_eq!(a, 100);
-        assert_eq!(b, 0);
+        assert!(
+            ledger
+                .transfer("alice", "bob", 0, TransactionReason::PeerTransfer, "noop")
+                .is_err()
+        );
+        // Sender balance untouched by the rejected transfer.
+        assert_eq!(ledger.balance("alice").expect("bal"), 100);
     }
 
     #[test]
@@ -1848,5 +2184,153 @@ mod tests {
             txs[0].reason,
             TransactionReason::Custom("bounty_payout".to_string())
         );
+    }
+
+    // -- Stake / Unstake tests (C2 regression) --
+
+    #[test]
+    fn test_stake_debits_and_records() {
+        let (_tmp, ledger) = temp_ledger();
+        ledger
+            .earn("a", 100, TransactionReason::TaskCompletion, "seed")
+            .expect("earn");
+        let (stake_id, bal) = ledger.stake("a", 40, "listing").expect("stake");
+        assert_eq!(bal, 60);
+        assert_eq!(ledger.balance("a").expect("balance"), 60);
+        assert!(!stake_id.is_empty());
+    }
+
+    #[test]
+    fn test_stake_insufficient_balance_rejected() {
+        let (_tmp, ledger) = temp_ledger();
+        ledger
+            .earn("a", 10, TransactionReason::TaskCompletion, "seed")
+            .expect("earn");
+        assert!(ledger.stake("a", 50, "listing").is_err());
+        // Balance untouched on failed stake.
+        assert_eq!(ledger.balance("a").expect("balance"), 10);
+    }
+
+    #[test]
+    fn test_unstake_releases_exact_recorded_amount() {
+        let (_tmp, ledger) = temp_ledger();
+        ledger
+            .earn("a", 100, TransactionReason::TaskCompletion, "seed")
+            .expect("earn");
+        let (stake_id, _) = ledger.stake("a", 40, "listing").expect("stake");
+        let (released, bal) = ledger.unstake("a", &stake_id).expect("unstake");
+        assert_eq!(released, 40);
+        assert_eq!(bal, 100);
+    }
+
+    #[test]
+    fn test_unstake_unknown_stake_rejected() {
+        let (_tmp, ledger) = temp_ledger();
+        ledger
+            .earn("a", 100, TransactionReason::TaskCompletion, "seed")
+            .expect("earn");
+        // C2 exploit: unstake a fabricated stake_id must NOT mint tokens.
+        assert!(ledger.unstake("a", "fabricated-id").is_err());
+        assert_eq!(ledger.balance("a").expect("balance"), 100);
+    }
+
+    #[test]
+    fn test_unstake_double_release_rejected() {
+        let (_tmp, ledger) = temp_ledger();
+        ledger
+            .earn("a", 100, TransactionReason::TaskCompletion, "seed")
+            .expect("earn");
+        let (stake_id, _) = ledger.stake("a", 40, "listing").expect("stake");
+        ledger.unstake("a", &stake_id).expect("first unstake");
+        // Second unstake of the same stake must fail — no double credit.
+        assert!(ledger.unstake("a", &stake_id).is_err());
+        assert_eq!(ledger.balance("a").expect("balance"), 100);
+    }
+
+    #[test]
+    fn test_unstake_wrong_owner_rejected() {
+        let (_tmp, ledger) = temp_ledger();
+        ledger
+            .earn("a", 100, TransactionReason::TaskCompletion, "seed")
+            .expect("earn");
+        let (stake_id, _) = ledger.stake("a", 40, "listing").expect("stake");
+        // Attacker "b" cannot release agent "a"'s stake.
+        assert!(ledger.unstake("b", &stake_id).is_err());
+        assert_eq!(ledger.balance("a").expect("balance"), 60);
+    }
+
+    // -- H1: amount-validation / overflow-safety tests --
+
+    #[test]
+    fn test_zero_amount_rejected_on_all_paths() {
+        let (_tmp, ledger) = temp_ledger();
+        assert!(ledger.earn("a", 0, TransactionReason::TaskCompletion, "z").is_err());
+        assert!(ledger.mint("a", 0, TransactionReason::TaskCompletion, "z").is_err());
+        assert!(ledger.spend("a", 0, TransactionReason::TaskCompletion, "z").is_err());
+        assert!(ledger.burn("a", 0, TransactionReason::TaskCompletion, "z").is_err());
+        assert!(ledger.transfer("a", "b", 0, TransactionReason::TaskCompletion, "z").is_err());
+        assert!(ledger.stake("a", 0, "z").is_err());
+    }
+
+    #[test]
+    fn test_amount_above_max_rejected() {
+        let (_tmp, ledger) = temp_ledger();
+        let over = MAX_AMOUNT + 1;
+        assert!(ledger.mint("a", over, TransactionReason::TaskCompletion, "big").is_err());
+        assert!(ledger.earn("a", over, TransactionReason::TaskCompletion, "big").is_err());
+        // A raw u64 > i64::MAX (silent-wrap territory) must also be rejected.
+        assert!(
+            ledger
+                .mint("a", u64::MAX, TransactionReason::TaskCompletion, "wrap")
+                .is_err()
+        );
+        // No wallet should have been created/credited by the rejected mints.
+        assert_eq!(ledger.balance("a").expect("balance"), 0);
+    }
+
+    #[test]
+    fn test_max_amount_boundary_accepted() {
+        let (_tmp, ledger) = temp_ledger();
+        // Exactly MAX_AMOUNT is allowed.
+        ledger
+            .mint("a", MAX_AMOUNT, TransactionReason::TaskCompletion, "cap")
+            .expect("mint at cap");
+        assert_eq!(ledger.balance("a").expect("balance"), MAX_AMOUNT);
+    }
+
+    #[test]
+    fn test_huge_transfer_amount_rejected_before_mutation() {
+        // A transfer of an over-cap amount is rejected up front — the sender is
+        // never debited and the recipient wallet is never even created.
+        let (_tmp, ledger) = temp_ledger();
+        ledger
+            .mint("rich", 1000, TransactionReason::TaskCompletion, "seed")
+            .expect("mint");
+        let r = ledger.transfer(
+            "rich",
+            "bob",
+            MAX_AMOUNT + 1,
+            TransactionReason::PeerTransfer,
+            "overflow",
+        );
+        assert!(r.is_err(), "over-cap transfer must be rejected");
+        // Sender balance unchanged — validation runs pre-mutation.
+        assert_eq!(ledger.balance("rich").expect("bal"), 1000);
+    }
+
+    #[test]
+    fn test_balance_check_constraint_present() {
+        // The v4 migration installs CHECK(balance >= 0). A direct negative
+        // write must be rejected by the DB itself, proving the backstop exists.
+        let (_tmp, ledger) = temp_ledger();
+        ledger
+            .earn("a", 10, TransactionReason::TaskCompletion, "seed")
+            .expect("earn");
+        let conn = ledger.conn().expect("conn");
+        let res = conn.execute(
+            "UPDATE wallets SET balance = -5 WHERE agent_id = 'a'",
+            [],
+        );
+        assert!(res.is_err(), "CHECK(balance >= 0) must reject negative write");
     }
 }

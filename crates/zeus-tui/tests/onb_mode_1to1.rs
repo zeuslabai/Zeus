@@ -50,7 +50,7 @@ fn press(app: &mut App, keys: &[KeyCode]) {
 fn goto_mode(app: &mut App) {
     let mut guard = 0;
     while app.current_step < 1 && guard < 10 {
-        app.handle_key(KeyCode::Right);
+        if app.current_step == 3 { app.current_step += 1; app.on_step_enter(); continue; }        app.handle_key(KeyCode::Right);
         guard += 1;
     }
     assert_eq!(app.current_step, 1, "should land on Mode (step 1)");

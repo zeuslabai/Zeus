@@ -206,7 +206,7 @@ pub fn VectorStoresPage() -> impl IntoView {
                             Some(view! {
                                 <div style="text-align: center; padding: 40px 20px; color: rgba(255,245,240,0.3);">
                                     <div style="font-size: 32px; margin-bottom: 12px;">"🗄️"</div>
-                                    <div style="font-size: 13px;">"No vector stores yet"</div>
+                                    <div style="font-size: 13px;">"No vector stores yet — create one to start indexing your data."</div>
                                     <div style="font-size: 11px; margin-top: 4px;">"Create one to start indexing semantic memory"</div>
                                 </div>
                             }.into_any())
@@ -361,7 +361,7 @@ pub fn VectorStoresPage() -> impl IntoView {
                                     {move || {
                                         let fs = files.get();
                                         if fs.is_empty() {
-                                            Some(view! { <div style="color: rgba(255,245,240,0.3); font-size: 13px;">"No files indexed yet."</div> }.into_any())
+                                            Some(view! { <div style="color: rgba(255,245,240,0.3); font-size: 13px;">"No files indexed yet — upload a file above to start building this store."</div> }.into_any())
                                         } else {
                                             Some(view! {
                                                 <div style="display: flex; flex-direction: column; gap: 6px;">

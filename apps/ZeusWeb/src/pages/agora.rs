@@ -91,6 +91,9 @@ pub fn AgoraPage() -> impl IntoView {
     let staking_result = RwSignal::new(String::new());
     let staking_ok = RwSignal::new(true);
     let wallet_preview = RwSignal::new(Option::<api::Wallet>::None);
+    let tx_history: RwSignal<Vec<api::Transaction>> = RwSignal::new(Vec::new());
+    let active_stakes: RwSignal<Vec<api::Stake>> = RwSignal::new(Vec::new());
+    let stakes_loading = RwSignal::new(false);
 
     // Claim bounty handler
     let do_claim = move |bid: String, btitle: String| {
@@ -1026,6 +1029,7 @@ pub fn AgoraPage() -> impl IntoView {
                                         if id.trim().is_empty() { return; }
                                         spawn_local(async move {
                                             if let Ok(w) = api::fetch_wallet(&id).await { wallet_preview.set(Some(w)); }
+                                            if let Ok(txs) = api::fetch_transactions(Some(20)).await { tx_history.set(txs); }
                                         });
                                     }
                                 }
@@ -1036,6 +1040,7 @@ pub fn AgoraPage() -> impl IntoView {
                                     if id.trim().is_empty() { return; }
                                     spawn_local(async move {
                                         if let Ok(w) = api::fetch_wallet(&id).await { wallet_preview.set(Some(w)); }
+                                        if let Ok(txs) = api::fetch_transactions(Some(20)).await { tx_history.set(txs); }
                                     });
                                 }))
                                 style="padding: 9px 18px; border-radius: 8px;"
@@ -1063,6 +1068,40 @@ pub fn AgoraPage() -> impl IntoView {
                             }.into_any()
                         }}
                     </div>
+
+                    // Transaction history
+                    {move || {
+                        let txs = tx_history.get();
+                        if txs.is_empty() { return view! { <div/> }.into_any(); }
+                        view! {
+                            <div style="margin-bottom: 24px;">
+                                <div style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 4px; color: rgba(255,245,240,0.5); margin-bottom: 14px;">"TRANSACTION HISTORY"</div>
+                                <div style="display: flex; flex-direction: column; gap: 6px;">
+                                    {txs.iter().map(|tx| {
+                                        let is_send = tx.from.is_some();
+                                        let counterparty = if is_send { tx.to.clone().unwrap_or_default() } else { tx.from.clone().unwrap_or_default() };
+                                        let arrow = if is_send { "→" } else { "←" };
+                                        let color = if is_send { "rgba(239,68,68,0.9)" } else { "rgba(34,197,94,0.9)" };
+                                        let reason = tx.reason.clone();
+                                        let ts = tx.timestamp.clone();
+                                        let amt = tx.amount;
+                                        view! {
+                                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,245,240,0.06); border-radius: 8px;">
+                                                <div style="display: flex; align-items: center; gap: 10px;">
+                                                    <span style={format!("font-size: 14px; color: {};", color)}>{arrow}</span>
+                                                    <div>
+                                                        <div style="font-size: 12px; color: rgba(255,245,240,0.8);">{counterparty}</div>
+                                                        <div style="font-size: 10px; color: rgba(255,245,240,0.4);">{reason} " · " {ts}</div>
+                                                    </div>
+                                                </div>
+                                                <span style={format!("font-family: 'Orbitron', monospace; font-size: 13px; color: {};", color)}>{format!("{} ⚡", amt)}</span>
+                                            </div>
+                                        }
+                                    }).collect::<Vec<_>>()}
+                                </div>
+                            </div>
+                        }.into_any()
+                    }}
 
                     // Op selector
                     <div style="display: flex; gap: 6px; margin-bottom: 20px;">
@@ -1226,6 +1265,52 @@ pub fn AgoraPage() -> impl IntoView {
                                 }
                             }}
                         </div>
+                    </div>
+
+                    // ── Active Stakes List ──
+                    <div style="margin-top: 24px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <div style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 2px; color: rgba(255,245,240,0.5);">ACTIVE STAKES</div>
+                            <button
+                                on:click=move |_| {
+                                    let aid = stake_agent_id.get();
+                                    stakes_loading.set(true);
+                                    spawn_local(async move {
+                                        let agent = if aid.trim().is_empty() { None } else { Some(aid.as_str()) };
+                                        if let Ok(s) = api::fetch_stakes(agent).await { active_stakes.set(s); }
+                                        stakes_loading.set(false);
+                                    });
+                                }
+                                style="padding: 5px 12px; border-radius: 6px; font-family: 'Orbitron', monospace; font-size: 8px; letter-spacing: 1px; cursor: pointer; border: 1px solid rgba(255,60,20,0.2); background: rgba(255,60,20,0.08); color: rgba(255,140,80,0.8);"
+                            >"REFRESH"</button>
+                        </div>
+                        {move || {
+                            if stakes_loading.get() {
+                                return view! { <div style="text-align: center; padding: 20px; color: rgba(255,245,240,0.3); font-size: 12px;">"Loading stakes..."</div> }.into_any();
+                            }
+                            let stakes = active_stakes.get();
+                            if stakes.is_empty() {
+                                return view! { <div style="text-align: center; padding: 20px; color: rgba(255,245,240,0.2); font-size: 12px;">"No active stakes"</div> }.into_any();
+                            }
+                            view! {
+                                <div style="display: flex; flex-direction: column; gap: 8px;">
+                                    {stakes.into_iter().map(|s| {
+                                        view! {
+                                            <div style="padding: 12px 16px; background: rgba(255,60,20,0.04); border: 1px solid rgba(255,60,20,0.1); border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
+                                                <div>
+                                                    <div style="font-size: 11px; color: rgba(255,245,240,0.5); font-family: monospace;">{s.stake_id[..8.min(s.stake_id.len())].to_string()}</div>
+                                                    <div style="font-size: 12px; color: rgba(255,245,240,0.7); margin-top: 2px;">{s.purpose.clone()}</div>
+                                                </div>
+                                                <div style="text-align: right;">
+                                                    <div style="font-family: 'Orbitron', monospace; font-size: 14px; color: rgba(255,140,80,0.9);">{format!("{} ⚡", s.amount)}</div>
+                                                    <div style="font-size: 10px; color: rgba(255,245,240,0.3); margin-top: 2px;">{s.created_at.clone()}</div>
+                                                </div>
+                                            </div>
+                                        }
+                                    }).collect::<Vec<_>>()}
+                                </div>
+                            }.into_any()
+                        }}
                     </div>
                 </div>
             </Show> // end staking tab

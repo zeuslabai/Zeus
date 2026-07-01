@@ -88,7 +88,7 @@ fn complete_summary_provider_matches_picked_provider() {
     let mut guard = 0;
     while app.current_step < 18 {
         let s = app.current_step;
-        if s == 6 || s == 8 || s == 9 || s == 11 || s == 15 || s == 17 {
+        if s == 3 || s == 6 || s == 8 || s == 9 || s == 11 || s == 15 || s == 17 {
             app.current_step += 1;
             app.on_step_enter();
         } else {

@@ -620,7 +620,7 @@ pub fn SkillsPage() -> impl IntoView {
                     <div style="text-align: center; padding: 40px; font-family: 'Orbitron', monospace; font-size: 9px; letter-spacing: 3px; color: rgba(255,60,20,0.5);">"LOADING..."</div>
                 </Show>
                 <Show when=move || !mkt_loading.get() && mkt_loaded.get() && mkt_listings.get().is_empty()>
-                    <div style="text-align: center; padding: 40px; font-size: 13px; color: rgba(255,245,240,0.5);">"No skills found."</div>
+                    <div style="text-align: center; padding: 40px; font-size: 13px; color: rgba(255,245,240,0.5);">"No skills found — try a different search or install from the marketplace."</div>
                 </Show>
                 <Show when=move || !mkt_listings.get().is_empty()>
                     <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px;">

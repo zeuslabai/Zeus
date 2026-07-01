@@ -113,7 +113,7 @@ pub fn MissionsPage() -> impl IntoView {
                                 }.into_any()
                             } else if turns.is_empty() {
                                 view! {
-                                    <p style="color: rgba(255,245,240,0.5); font-size: 12px; text-align: center; padding: 20px;">"No replay data available for this session."</p>
+                                    <p style="color: rgba(255,245,240,0.5); font-size: 12px; text-align: center; padding: 20px;">"No replay data — this mission wasn't recorded."</p>
                                 }.into_any()
                             } else {
                                 view! {

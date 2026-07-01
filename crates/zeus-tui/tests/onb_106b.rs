@@ -56,7 +56,7 @@ fn goto_step(app: &mut App, target: usize) {
         let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
-        } else if s == 6 || s == 8 || s == 9 || s == 11 || s == 15 || s == 17 {
+        } else if s == 3 || s == 6 || s == 8 || s == 9 || s == 11 || s == 15 || s == 17 {
             // Channels (6), Gateway (8), Agent (9), Security (11) and
             // Orchestration (15) are GRIDs: Right=column focus (Gateway's 4-col
             // picker, Security's 4-col level grid, Orchestration's 3-col mode

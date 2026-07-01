@@ -938,6 +938,10 @@ fn build_base_router(state: SharedState, rate_limit_config: Option<RateLimitConf
             post(handlers::fleet::economy_unstake),
         )
         .route(
+            "/v1/economy/stakes",
+            get(handlers::fleet::economy_stakes_list),
+        )
+        .route(
             "/v1/economy/transfer",
             post(handlers::fleet::economy_transfer),
         )
@@ -1428,12 +1432,49 @@ async fn no_token_middleware(
     if is_public_path(req.uri().path(), req.method()) {
         return Ok(next.run(req).await);
     }
+    // C3: money routes MUST require a credential even in no-token onboarded mode.
+    // The onboarding-complete blanket-allow below would otherwise expose the entire
+    // /v1/economy/* group (mints, transfers, earns, and balance reads) with NO
+    // credential. Gate the group here, before the blanket-allow, requiring one of
+    // the economy admin tokens (transfer OR mint — mint uses a distinct token).
+    if is_economy_path(req.uri().path()) && !economy_admin_authorized(req.headers()) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
     // If onboarding is complete, the user has configured their instance — allow all requests.
     // This enables ZeusWeb to function without requiring a separate ZEUS_API_TOKEN.
     if state.read().await.config.onboarding_complete {
         return Ok(next.run(req).await);
     }
     Err(StatusCode::SERVICE_UNAVAILABLE)
+}
+
+/// True if the (normalized) path is under the money-handling economy API group.
+fn is_economy_path(path: &str) -> bool {
+    normalize_path(path).starts_with("/v1/economy/")
+}
+
+/// C3 group-gate: authorize a request against the economy admin tokens.
+///
+/// Accepts a valid `Authorization: Bearer <token>` matching EITHER
+/// `ZEUS_TRANSFER_ADMIN_TOKEN` (transfer/stake/unstake/earn) OR
+/// `ZEUS_MINT_ADMIN_TOKEN` (mint). Fails closed: if neither token is
+/// configured, no bearer can match, so the whole group is denied.
+fn economy_admin_authorized(headers: &axum::http::HeaderMap) -> bool {
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if bearer.is_empty() {
+        return false;
+    }
+    for var in ["ZEUS_TRANSFER_ADMIN_TOKEN", "ZEUS_MINT_ADMIN_TOKEN"] {
+        let token = std::env::var(var).unwrap_or_default();
+        if !token.is_empty() && crate::api_key::constant_time_eq(bearer, &token) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Build a CORS layer with restricted origins (defaults to localhost only)
@@ -1468,4 +1509,89 @@ fn build_cors_layer(allowed_origins: &[String]) -> CorsLayer {
             axum::http::HeaderName::from_static("x-zeus-api-key"),
             axum::http::HeaderName::from_static("x-zeus-2fa-token"),
         ])
+}
+
+#[cfg(test)]
+mod c3_economy_gate_tests {
+    use super::{economy_admin_authorized, is_economy_path};
+    use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
+
+    #[test]
+    fn economy_paths_are_classified() {
+        // Money group — must be gated.
+        assert!(is_economy_path("/v1/economy/transfer"));
+        assert!(is_economy_path("/v1/economy/mint"));
+        assert!(is_economy_path("/v1/economy/earn"));
+        assert!(is_economy_path("/v1/economy/stake"));
+        assert!(is_economy_path("/v1/economy/unstake"));
+        assert!(is_economy_path("/v1/economy/wallets"));
+        assert!(is_economy_path("/v1/economy/wallets/zeus100"));
+        // Path-traversal / double-slash normalization can't smuggle past the gate.
+        assert!(is_economy_path("/v1//economy//transfer"));
+        assert!(is_economy_path("/v1/foo/../economy/mint"));
+        // Non-economy routes are not swept into the gate.
+        assert!(!is_economy_path("/v1/health"));
+        assert!(!is_economy_path("/v1/fleet"));
+        assert!(!is_economy_path("/v1/economyzzz")); // prefix must be a real segment boundary
+    }
+
+    fn bearer(tok: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {tok}")).unwrap(),
+        );
+        h
+    }
+
+    // Single sequential test: env-var mutation is process-global, so we must not
+    // race parallel tests. Exercises every branch of the C3 group-gate in order.
+    #[test]
+    fn economy_admin_gate_fails_closed_and_accepts_either_token() {
+        // Snapshot + clear so the test is hermetic regardless of ambient env.
+        let prev_t = std::env::var("ZEUS_TRANSFER_ADMIN_TOKEN").ok();
+        let prev_m = std::env::var("ZEUS_MINT_ADMIN_TOKEN").ok();
+        unsafe {
+            std::env::remove_var("ZEUS_TRANSFER_ADMIN_TOKEN");
+            std::env::remove_var("ZEUS_MINT_ADMIN_TOKEN");
+        }
+
+        // (1) Fail-closed: no tokens configured → nothing authorizes, even a bearer.
+        assert!(!economy_admin_authorized(&bearer("anything")));
+        assert!(!economy_admin_authorized(&HeaderMap::new()));
+
+        // (2) Transfer token configured → matches transfer, rejects wrong/empty.
+        unsafe { std::env::set_var("ZEUS_TRANSFER_ADMIN_TOKEN", "transfer-secret"); }
+        assert!(economy_admin_authorized(&bearer("transfer-secret")));
+        assert!(!economy_admin_authorized(&bearer("wrong")));
+        assert!(!economy_admin_authorized(&HeaderMap::new())); // missing header
+        assert!(!economy_admin_authorized(&bearer(""))); // empty bearer
+
+        // (3) Mint uses a DISTINCT token — gate must accept it too, else legit
+        //     mints 403 in no-token mode. Transfer token must NOT match mint secret.
+        unsafe { std::env::set_var("ZEUS_MINT_ADMIN_TOKEN", "mint-secret"); }
+        assert!(economy_admin_authorized(&bearer("mint-secret")));
+        assert!(economy_admin_authorized(&bearer("transfer-secret")));
+        assert!(!economy_admin_authorized(&bearer("nope")));
+
+        // (4) Empty-string env var is treated as unconfigured (can't match empty bearer).
+        unsafe {
+            std::env::set_var("ZEUS_TRANSFER_ADMIN_TOKEN", "");
+            std::env::set_var("ZEUS_MINT_ADMIN_TOKEN", "");
+        }
+        assert!(!economy_admin_authorized(&bearer("")));
+        assert!(!economy_admin_authorized(&bearer("transfer-secret")));
+
+        // Restore ambient env.
+        unsafe {
+            match prev_t {
+                Some(v) => std::env::set_var("ZEUS_TRANSFER_ADMIN_TOKEN", v),
+                None => std::env::remove_var("ZEUS_TRANSFER_ADMIN_TOKEN"),
+            }
+            match prev_m {
+                Some(v) => std::env::set_var("ZEUS_MINT_ADMIN_TOKEN", v),
+                None => std::env::remove_var("ZEUS_MINT_ADMIN_TOKEN"),
+            }
+        }
+    }
 }

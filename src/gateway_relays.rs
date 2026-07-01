@@ -591,8 +591,8 @@ pub async fn start_x_relay(
 
     // Minimum viable credentials: bearer token OR full OAuth 1.0a set.
     let has_bearer = !xt.bearer_token.is_empty();
-    let has_oauth1 = !xt.api_key.is_empty()
-        && !xt.api_secret.is_empty()
+    let has_oauth1 = !xt.consumer_key.is_empty()
+        && !xt.consumer_key_secret.is_empty()
         && !xt.access_token.is_empty()
         && !xt.access_token_secret.is_empty();
     if !has_bearer && !has_oauth1 {
@@ -602,8 +602,8 @@ pub async fn start_x_relay(
 
     let x_config = zeus_channels::XConfig {
         bearer_token: xt.bearer_token.clone(),
-        api_key: xt.api_key.clone(),
-        api_secret: xt.api_secret.clone(),
+        api_key: xt.consumer_key.clone(),
+        api_secret: xt.consumer_key_secret.clone(),
         access_token: xt.access_token.clone(),
         access_token_secret: xt.access_token_secret.clone(),
         client_id: xt.client_id.clone(),

@@ -113,7 +113,7 @@ pub fn MissionDetailPage() -> impl IntoView {
                             if turns.is_empty() {
                                 vec![view! {
                                     <Card>
-                                        <div style="text-align: center; padding: 20px; color: rgba(255,245,240,0.5); font-size: 12px;">"No replay data"</div>
+                                        <div style="text-align: center; padding: 20px; color: rgba(255,245,240,0.5); font-size: 12px;">"No replay data recorded for this session."</div>
                                     </Card>
                                 }.into_any()]
                             } else {
@@ -171,7 +171,7 @@ pub fn MissionDetailPage() -> impl IntoView {
                             if tool_list.is_empty() {
                                 vec![view! {
                                     <Card>
-                                        <div style="text-align: center; padding: 20px; color: rgba(255,245,240,0.5); font-size: 12px;">"No tool executions recorded"</div>
+                                        <div style="text-align: center; padding: 20px; color: rgba(255,245,240,0.5); font-size: 12px;">"No tool calls were made in this session."</div>
                                     </Card>
                                 }.into_any()]
                             } else {
@@ -204,7 +204,7 @@ pub fn MissionDetailPage() -> impl IntoView {
                             if entries.is_empty() {
                                 vec![view! {
                                     <Card>
-                                        <div style="text-align: center; padding: 20px; color: rgba(255,245,240,0.5); font-size: 12px;">"No audit entries"</div>
+                                        <div style="text-align: center; padding: 20px; color: rgba(255,245,240,0.5); font-size: 12px;">"No audit entries — this session ran without flags."</div>
                                     </Card>
                                 }.into_any()]
                             } else {

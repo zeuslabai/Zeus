@@ -172,7 +172,7 @@ pub fn SecurityPage() -> impl IntoView {
                         if t.is_empty() {
                             view! {
                                 <div style="padding: 20px; text-align: center; color: rgba(255,245,240,0.7); font-size: 13px;">
-                                    "No threats recorded"
+                                    "No threats detected — system is clean."
                                 </div>
                             }.into_any()
                         } else {
@@ -211,7 +211,7 @@ pub fn SecurityPage() -> impl IntoView {
                         if a.is_empty() {
                             view! {
                                 <div style="padding: 20px; text-align: center; color: rgba(255,245,240,0.7); font-size: 13px;">
-                                    "No audit entries"
+                                    "No audit entries yet — activity will appear here as agents run."
                                 </div>
                             }.into_any()
                         } else {

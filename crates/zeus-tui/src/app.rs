@@ -214,6 +214,14 @@ pub struct App {
     prod_active_adv: Option<usize>, // grid cursor in advanced overlay, None if overlay not open
     prod_adv_detail: Option<usize>, // drilled-into subview (index into ADVANCED_TABS), None = grid
     prod_chat_messages: Vec<ChatMessage>,
+    /// Index of the assistant draft currently receiving stream tokens.
+    ///
+    /// Users can queue another message while a response is still streaming; in
+    /// that case the last chat row becomes `Role::User`, but late tokens still
+    /// belong to the earlier assistant draft. Track the draft explicitly so
+    /// markdown blocks (especially tables) stay contiguous instead of being
+    /// split by the queued user echo.
+    prod_stream_assistant_idx: Option<usize>,
     pub prod_settings_section: prod::SettingsSection,
     /// Live config from `GET /v1/config` (sanitized). `None` until the config
     /// poll-worker lands the first fetch; the Settings tab overlays these live
@@ -375,6 +383,7 @@ impl App {
             // / stream handlers below). A fresh session shows the empty-state
             // composer placeholder rendered by `chat_tab`.
             prod_chat_messages: Vec::new(),
+            prod_stream_assistant_idx: None,
             prod_config_rows: None,
             prod_memory_files: None,
             prod_sessions: None,
@@ -480,17 +489,29 @@ impl App {
     /// Called by the async chat worker (`run()`) under the app lock.
     pub fn push_assistant_reply(&mut self, text: String) {
         if !text.trim().is_empty() {
-            match self.prod_chat_messages.last_mut() {
-                // If live token deltas already painted this assistant turn,
-                // replace/confirm the draft instead of appending a duplicate.
-                Some(msg) if msg.role == Role::Assistant && msg.tool_name.is_none() => {
-                    msg.text = text;
+            let mut replaced_stream_draft = false;
+            if let Some(idx) = self.prod_stream_assistant_idx
+                && let Some(msg) = self.prod_chat_messages.get_mut(idx)
+                && msg.role == Role::Assistant
+                && msg.tool_name.is_none()
+            {
+                msg.text = text.clone();
+                replaced_stream_draft = true;
+            }
+
+            if !replaced_stream_draft {
+                match self.prod_chat_messages.last_mut() {
+                    // If live token deltas already painted this assistant turn,
+                    // replace/confirm the draft instead of appending a duplicate.
+                    Some(msg) if msg.role == Role::Assistant && msg.tool_name.is_none() => {
+                        msg.text = text;
+                    }
+                    _ => self.prod_chat_messages.push(ChatMessage {
+                        role: Role::Assistant,
+                        text,
+                        tool_name: None,
+                    }),
                 }
-                _ => self.prod_chat_messages.push(ChatMessage {
-                    role: Role::Assistant,
-                    text,
-                    tool_name: None,
-                }),
             }
         }
         self.finish_chat_stream();
@@ -504,16 +525,24 @@ impl App {
             return;
         }
         self.prod_stream_state = StreamState::Streaming;
-        match self.prod_chat_messages.last_mut() {
-            Some(msg) if msg.role == Role::Assistant && msg.tool_name.is_none() => {
-                msg.text.push_str(&token);
-            }
-            _ => self.prod_chat_messages.push(ChatMessage {
-                role: Role::Assistant,
-                text: token,
-                tool_name: None,
-            }),
+
+        if let Some(idx) = self.prod_stream_assistant_idx
+            && let Some(msg) = self.prod_chat_messages.get_mut(idx)
+            && msg.role == Role::Assistant
+            && msg.tool_name.is_none()
+        {
+            msg.text.push_str(&token);
+            self.prod_chat_scroll = 0;
+            return;
         }
+
+        let idx = self.prod_chat_messages.len();
+        self.prod_chat_messages.push(ChatMessage {
+            role: Role::Assistant,
+            text: token,
+            tool_name: None,
+        });
+        self.prod_stream_assistant_idx = Some(idx);
         self.prod_chat_scroll = 0;
     }
 
@@ -530,6 +559,7 @@ impl App {
         // Clear the live tool feed — cook is done.
         self.prod_tool_feed.clear();
         self.prod_iter_count = 0;
+        self.prod_stream_assistant_idx = None;
         // Jump-to-bottom on new content: resume follow so the freshly-arrived
         // reply is visible. A user who had scrolled up to read history gets
         // pulled back to the latest message (matches Discord/Slack behaviour).
@@ -610,11 +640,8 @@ impl App {
             KeyCode::Tab => {
                 let tab_id = PRIMARY_TABS.get(self.prod_active_tab).map(|t| t.id);
                 if tab_id == Some("office") && self.prod_active_adv.is_none() {
-                    let next_focus = prod::cycle_focused(self.prod_office_focused);
-                    self.prod_office_focused = next_focus;
-                    if next_focus.is_none() {
-                        self.prod_active_tab = (self.prod_active_tab + 1) % PRIMARY_TABS.len();
-                    }
+                    self.prod_office_focused = None;
+                    self.prod_active_tab = (self.prod_active_tab + 1) % PRIMARY_TABS.len();
                 } else if self.prod_active_adv.is_some() {
                     // Cycle within advanced tabs
                     let adv = self.prod_active_adv.unwrap_or(0);
@@ -1005,7 +1032,7 @@ impl App {
             use std::collections::HashMap;
             use zeus_core::{
                 DiscordChannelConfig, IrcChannelConfig, MatrixChannelConfig, SlackChannelConfig,
-                TelegramChannelConfig,
+                TelegramChannelConfig, XTwitterChannelConfig,
             };
 
             let cv = &self.chanconfig_screen.config_values;
@@ -1105,6 +1132,28 @@ impl App {
                 });
             }
 
+            if toggled.iter().any(|c| c == "x_twitter") {
+                // Onboarding now uses X's official credential names:
+                // bearer_token, consumer_key, consumer_key_secret,
+                // access_token, access_token_secret, client_id, client_secret.
+                // The core struct preserves legacy api_key/api_secret aliases,
+                // but the wizard writes the canonical names from here on.
+                let ch = cfg.channels.get_or_insert_with(Default::default);
+                ch.x_twitter = Some(XTwitterChannelConfig {
+                    bearer_token: val("x_twitter.bearer_token"),
+                    consumer_key: val("x_twitter.consumer_key"),
+                    consumer_key_secret: val("x_twitter.consumer_key_secret"),
+                    access_token: val("x_twitter.access_token"),
+                    access_token_secret: val("x_twitter.access_token_secret"),
+                    client_id: val("x_twitter.client_id"),
+                    client_secret: val("x_twitter.client_secret"),
+                    poll_interval_secs: None,
+                    auto_reply: false,
+                    policy: None,
+                    fanout: Vec::new(),
+                });
+            }
+
             // DEFERRED (intentionally NOT persisted here):
             //   • email — onboarding collects only smtp_host/smtp_port/username/
             //     password, but EmailChannelConfig also requires imap_host/
@@ -1113,11 +1162,6 @@ impl App {
             //   • whatsapp — onboarding collects phone_id/access_token, but
             //     WhatsAppChannelConfig's required fields don't match that pair
             //     (field↔struct mismatch); skip until the steps align.
-            //   • x_twitter — onboarding collects api_key/api_secret/access_token/
-            //     access_secret, but XTwitterChannelConfig names them
-            //     consumer_key/consumer_secret/access_token/access_token_secret
-            //     (+client_id/client_secret); field-name mismatch → skip until
-            //     the onboarding keys are renamed to match the struct.
             //   • signal — the QR-pair step collects no creds matching
             //     SignalChannelConfig (signal_cli_path); deferred.
             //   • discord.server_id / discord.channel_id — env-wiring task
@@ -1155,9 +1199,10 @@ impl App {
             // (1=Setup Token, 2=Browser OAuth), NOT by the `sk-ant-oat` prefix.
             // (#257) The old prefix-only check was Anthropic-specific: every
             // non-Anthropic OAuth token (gemini-cli/qwen/minimax) failed the
-            // `sk-ant-oat` test → fell into the api-key branch → keyed by
-            // env_key(), which is EMPTY for gemini-cli & minimax → token
-            // silently dropped. Routing on auth_mode fixes all four providers;
+            // `sk-ant-oat` test → fell into the api-key branch keyed by
+            // env_key(). OAuth-only providers were silently dropped, while
+            // API-key providers wrote the token to the wrong auth path.
+            // Routing on auth_mode fixes all four providers;
             // the prefix is kept as a belt-and-suspenders OR for the Anthropic
             // setup-token paste path that may land in API-Key mode.
             let is_oauth = matches!(self.auth_mode, 1 | 2) || key.starts_with("sk-ant-oat");
@@ -1635,8 +1680,7 @@ impl App {
                     // step-nav). Filter via typing; Space/Enter toggle install.
                     self.skills_screen.next_category();
                 } else if self.current_step < 18 {
-                    self.current_step += 1;
-                    self.on_step_enter();
+                    self.advance_step();
                 }
             }
             KeyCode::Enter => {
@@ -1708,17 +1752,13 @@ impl App {
                             }
                         }
                     }
-                    // Auth (#240): block advance on an invalid key format. A
-                    // bare `"asdf"` used to fall through the `_` catch-all and
-                    // advance; now Enter is a no-op until the key matches the
-                    // provider prefix (the inline ✕ already explains why). The
-                    // live `/v1/models` probe (stretch, #239) layers on top of
-                    // this format gate later.
+                    // Auth (#239/#240): Enter is another NEXT activation, so it
+                    // must route through `advance_step()` where the live
+                    // `/v1/models` probe is the gate. The old direct
+                    // `current_step += 1` path skipped the probe after only the
+                    // cheap format pre-check.
                     Some(Step::Auth) => {
-                        if self.auth_key_valid() && self.current_step < 18 {
-                            self.current_step += 1;
-                            self.on_step_enter();
-                        }
+                        self.advance_step();
                     }
                     _ => {
                         if self.current_step < 18 {
@@ -2838,6 +2878,45 @@ mod persist_tests {
         unsafe { std::env::remove_var("ZEUS_HOME"); }
     }
 
+    /// MiniMax appears in the Auth screen as a normal API-key provider
+    /// (`sk-api-...`). It must therefore persist to the canonical `[credentials]`
+    /// env-key map too; an empty `Provider::Minimax.env_key()` silently dropped
+    /// this value in TUI onboarding.
+    #[test]
+    fn minimax_plain_api_key_persists_to_config_credentials() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("ZEUS_HOME", tmp.path()); }
+
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            "model = \"anthropic/claude-opus-4-8\"\n",
+        )
+        .unwrap();
+
+        let mut app = App::new();
+        app.provider_selected = 8; // MiniMax in screens/providers.rs
+        app.model_screen.set_provider("minimax");
+        app.auth_api_key = "sk-api-minimax-realkey-123".to_string();
+        app.collect_and_persist().expect("persist should succeed");
+
+        let toml = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(
+            toml.contains("model = \"minimax/MiniMax-M3\""),
+            "selected MiniMax provider/model must persist; got:\n{toml}"
+        );
+        assert!(
+            toml.contains("MINIMAX_API_KEY = \"sk-api-minimax-realkey-123\""),
+            "MiniMax API key must persist under [credentials] MINIMAX_API_KEY; got:\n{toml}"
+        );
+        assert!(
+            !toml.contains("[provider_credentials.minimax]"),
+            "plain MiniMax API keys must not be stored as OAuth/provider credentials; got:\n{toml}"
+        );
+
+        unsafe { std::env::remove_var("ZEUS_HOME"); }
+    }
+
     /// #257 OAuth-edge: a NON-Anthropic OAuth token (selected via auth_mode =
     /// Setup Token / Browser OAuth) must route to `[provider_credentials.{id}]`
     /// cred_type="oauth" — NOT get silently dropped. Drives all four OAuth-edge
@@ -2847,14 +2926,14 @@ mod persist_tests {
     /// The bug this guards: the old persist trigger was `key.starts_with(
     /// "sk-ant-oat")` — Anthropic-specific. Non-Anthropic OAuth tokens failed
     /// that test → fell into the `[credentials]` api-key branch keyed by
-    /// env_key(), which is EMPTY for gemini-cli & minimax → `if !env_key.
-    /// is_empty()` false → token silently dropped, never persisted at all.
+    /// env_key(). For OAuth-only providers with an empty env_key this silently
+    /// dropped the token; for API-key providers it wrote the token to the wrong
+    /// auth path.
     #[test]
     fn non_anthropic_oauth_routes_to_provider_credentials_not_dropped() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-        // (provider-screen index, canonical section id, the provider's env_key
-        //  — note gemini-cli & minimax have EMPTY env_key: the silent-drop trap.
+        // (provider-screen index, canonical section id, the provider's env_key.
         //  Indices match screens/providers.rs PROVIDERS order: gemini-cli=4,
         //  qwen=7, minimax=8, mimo=9. collect_and_persist canonicalizes the
         //  screen id via from_prefix — gemini-cli must resolve, not default to
@@ -2865,7 +2944,7 @@ mod persist_tests {
         let cases = [
             (4usize, "google-gemini-cli", ""),
             (7, "qwen", "QWEN_API_KEY"),
-            (8, "minimax", ""),
+            (8, "minimax", "MINIMAX_API_KEY"),
             (9, "xiaomimimo", "XIAOMIMIMO_API_KEY"),
         ];
 
@@ -3198,6 +3277,36 @@ mod persist_tests {
     }
 
     #[test]
+    fn auth_enter_fires_fetch_without_advancing() {
+        let (mut app, mut rx) = app_on_auth_with_fetch();
+        app.handle_key(KeyCode::Enter);
+        let sent = rx.try_recv().expect("Auth Enter must send a fetch request");
+        assert_eq!(sent.1, "sk-ant-realkey-123");
+        assert_eq!(app.model_fetch_state, ModelFetchState::Fetching);
+        assert_eq!(
+            app.current_step,
+            Step::Auth as usize,
+            "Auth Enter must wait for the probe result before leaving Auth"
+        );
+    }
+
+    #[test]
+    fn auth_right_arrow_fires_fetch_without_advancing() {
+        let (mut app, mut rx) = app_on_auth_with_fetch();
+        app.handle_key(KeyCode::Right);
+        let sent = rx
+            .try_recv()
+            .expect("Auth Right-arrow fallback must send a fetch request");
+        assert_eq!(sent.1, "sk-ant-realkey-123");
+        assert_eq!(app.model_fetch_state, ModelFetchState::Fetching);
+        assert_eq!(
+            app.current_step,
+            Step::Auth as usize,
+            "Auth Right-arrow must wait for the probe result before leaving Auth"
+        );
+    }
+
+    #[test]
     fn auth_advance_while_fetching_is_noop() {
         let (mut app, _rx) = app_on_auth_with_fetch();
         app.model_fetch_state = ModelFetchState::Fetching;
@@ -3265,7 +3374,7 @@ mod persist_tests {
     /// `discord`→`disord` swallow + the worse `q`→quit-from-chat.
 
     #[test]
-    fn prod_office_tab_from_last_focus_advances_to_next_primary_tab() {
+    fn prod_office_tab_exits_to_next_primary_tab_on_first_tab() {
         let mut app = App::new();
         app.onboarding_complete = true;
         app.prod_active_tab = PRIMARY_TABS
@@ -3273,16 +3382,25 @@ mod persist_tests {
             .position(|tab| tab.id == "office")
             .expect("office tab exists");
         app.prod_active_adv = None;
+        app.prod_office_focused = None;
 
-        let mut focus = None;
-        loop {
-            let next = prod::cycle_focused(focus);
-            if next.is_none() {
-                break;
-            }
-            focus = next;
-        }
-        app.prod_office_focused = focus;
+        app.handle_key_prod(KeyCode::Tab);
+
+        assert_eq!(app.prod_office_focused, None);
+        assert_eq!(PRIMARY_TABS[app.prod_active_tab].id, "pantheon");
+    }
+
+    #[test]
+    fn prod_office_tab_from_internal_focus_advances_to_next_primary_tab() {
+        let mut app = App::new();
+        app.onboarding_complete = true;
+        app.prod_active_tab = PRIMARY_TABS
+            .iter()
+            .position(|tab| tab.id == "office")
+            .expect("office tab exists");
+        app.prod_active_adv = None;
+        app.prod_office_focused = Some(0);
+
         app.handle_key_prod(KeyCode::Tab);
 
         assert_eq!(app.prod_office_focused, None);
@@ -3409,6 +3527,96 @@ mod persist_tests {
         assert_eq!(app.prod_stream_state, StreamState::Idle);
         assert_eq!(app.prod_chat_messages.len(), 2);
         assert_eq!(app.prod_chat_messages[1].text, "working live");
+    }
+
+    #[test]
+    fn chat_stream_continues_same_assistant_draft_after_queued_user_send() {
+        let mut app = App::new();
+
+        app.push_user_send_feedback("show table".to_string());
+        app.push_stream_token("| Field | Value |\n".to_string());
+        app.push_user_send_feedback("next question".to_string());
+        app.push_stream_token("| Binary | 0.1.2 |".to_string());
+
+        assert_eq!(app.prod_chat_messages.len(), 3);
+        assert_eq!(app.prod_chat_messages[1].role, Role::Assistant);
+        assert_eq!(
+            app.prod_chat_messages[1].text,
+            "| Field | Value |\n| Binary | 0.1.2 |"
+        );
+        assert_eq!(app.prod_chat_messages[2].role, Role::User);
+
+        app.push_assistant_reply(
+            "| Field | Value |\n| Binary | 0.1.2 |".to_string(),
+        );
+
+        assert_eq!(app.prod_stream_state, StreamState::Idle);
+        assert_eq!(app.prod_chat_messages.len(), 3);
+        assert_eq!(app.prod_chat_messages[1].role, Role::Assistant);
+        assert_eq!(
+            app.prod_chat_messages[1].text,
+            "| Field | Value |\n| Binary | 0.1.2 |"
+        );
+        assert_eq!(app.prod_chat_messages[2].role, Role::User);
+    }
+
+    #[test]
+    fn queued_user_send_preserves_streaming_table_rendering() {
+        use ratatui::{Terminal, backend::TestBackend, style::Modifier};
+
+        let mut app = App::new();
+        app.push_user_send_feedback("show table".to_string());
+        app.push_stream_token("| Field | Value |\n".to_string());
+        app.push_user_send_feedback("next question".to_string());
+        app.push_stream_token("| Binary | 0.1.2 |".to_string());
+
+        let messages = app.prod_chat_messages.clone();
+        let mut term = Terminal::new(TestBackend::new(96, 28)).unwrap();
+        term.draw(|f| {
+            let chat = ChatTab {
+                messages: &messages,
+                input: "",
+                stream_state: app.prod_stream_state,
+                scroll_offset: 0,
+                slash_open: false,
+                cursor_on: false,
+                anim_tick: 0,
+                tool_feed: &[],
+                iter_count: 0,
+                active_tasks: None,
+                model_badge: Some("test-model"),
+                ctx_percent: 0,
+            };
+            f.render_widget(chat, f.area());
+        })
+        .unwrap();
+        let buf = term.backend().buffer().clone();
+
+        let mut text = String::new();
+        let mut field_style = None;
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                let cell = &buf[(x, y)];
+                let symbol = cell.symbol();
+                if symbol.starts_with('F') {
+                    field_style = Some(cell.style());
+                }
+                text.push_str(symbol);
+            }
+            text.push('\n');
+        }
+
+        assert!(text.contains("Field"), "table header missing:\n{text}");
+        assert!(text.contains("Binary"), "table data missing:\n{text}");
+        assert!(
+            !text.contains("| Field") && !text.contains("| Binary"),
+            "table fell back to raw pipe rows after queued send:\n{text}"
+        );
+        let style = field_style.expect("table header cell style captured");
+        assert!(
+            style.add_modifier.contains(Modifier::BOLD),
+            "table header lost markdown/table styling: {style:?}"
+        );
     }
 
     #[test]
@@ -3671,6 +3879,77 @@ mod persist_tests {
         unsafe { std::env::remove_var("ZEUS_HOME"); }
     }
 
+    /// X/Twitter onboarding must persist the official X credential names instead
+    /// of silently dropping the channel due to the old api_key/api_secret naming.
+    #[test]
+    fn x_twitter_official_credentials_persist() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("ZEUS_HOME", tmp.path()); }
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            r#"model = "anthropic/claude-sonnet-4"
+onboarding_complete = false
+"#,
+        )
+        .unwrap();
+
+        let mut app = App::new();
+        app.chanconfig_screen.toggled = vec!["x_twitter".to_string()];
+        app.chanconfig_screen
+            .config_values
+            .insert("x_twitter.bearer_token".into(), "bearer".into());
+        app.chanconfig_screen
+            .config_values
+            .insert("x_twitter.consumer_key".into(), "consumer".into());
+        app.chanconfig_screen
+            .config_values
+            .insert("x_twitter.consumer_key_secret".into(), "consumer-secret".into());
+        app.chanconfig_screen
+            .config_values
+            .insert("x_twitter.access_token".into(), "access".into());
+        app.chanconfig_screen
+            .config_values
+            .insert("x_twitter.access_token_secret".into(), "access-secret".into());
+        app.chanconfig_screen
+            .config_values
+            .insert("x_twitter.client_id".into(), "client-id".into());
+        app.chanconfig_screen
+            .config_values
+            .insert("x_twitter.client_secret".into(), "client-secret".into());
+
+        let cfg = app.collect_and_persist().expect("persist should succeed");
+        let ch = cfg.channels.as_ref().expect("[channels] must exist");
+        let x = ch
+            .x_twitter
+            .as_ref()
+            .expect("[channels.x_twitter] must persist");
+        assert_eq!(x.bearer_token, "bearer");
+        assert_eq!(x.consumer_key, "consumer");
+        assert_eq!(x.consumer_key_secret, "consumer-secret");
+        assert_eq!(x.access_token, "access");
+        assert_eq!(x.access_token_secret, "access-secret");
+        assert_eq!(x.client_id, "client-id");
+        assert_eq!(x.client_secret, "client-secret");
+
+        let saved = zeus_core::Config::load_from(&tmp.path().join("config.toml"))
+            .expect("saved config.toml should reload");
+        let saved_x = saved
+            .channels
+            .as_ref()
+            .and_then(|channels| channels.x_twitter.as_ref())
+            .expect("saved [channels.x_twitter] must survive disk round-trip");
+        assert_eq!(saved_x.bearer_token, "bearer");
+        assert_eq!(saved_x.consumer_key, "consumer");
+        assert_eq!(saved_x.consumer_key_secret, "consumer-secret");
+        assert_eq!(saved_x.access_token, "access");
+        assert_eq!(saved_x.access_token_secret, "access-secret");
+        assert_eq!(saved_x.client_id, "client-id");
+        assert_eq!(saved_x.client_secret, "client-secret");
+
+        unsafe { std::env::remove_var("ZEUS_HOME"); }
+    }
+
     /// #273 registry-completeness guard: EVERY channel id in the onboarding
     /// registry (`chanconfig::channel_registry_ids`) must be CLASSIFIED — either
     /// in the persisted set (has a `collect_and_persist` arm) or in the
@@ -3683,13 +3962,22 @@ mod persist_tests {
         use std::collections::HashSet;
 
         // Channels with a live persist arm in `collect_and_persist`.
-        let persisted: HashSet<&str> =
-            ["telegram", "discord", "slack", "irc", "matrix"].into_iter().collect();
+        let persisted: HashSet<&str> = [
+            "telegram",
+            "discord",
+            "slack",
+            "irc",
+            "matrix",
+            "x_twitter",
+        ]
+        .into_iter()
+        .collect();
         // Channels intentionally NOT persisted (see the DEFERRED comment block):
         //   email     — partial creds (no imap_*); whatsapp — field↔struct mismatch;
-        //   x_twitter — field-name mismatch; signal/imessage — no struct-matching creds.
-        let deferred: HashSet<&str> =
-            ["email", "imessage", "whatsapp", "signal", "x_twitter"].into_iter().collect();
+        //   signal/imessage — no struct-matching creds.
+        let deferred: HashSet<&str> = ["email", "imessage", "whatsapp", "signal"]
+            .into_iter()
+            .collect();
 
         for id in screens::chanconfig::channel_registry_ids() {
             let classified = persisted.contains(id) || deferred.contains(id);

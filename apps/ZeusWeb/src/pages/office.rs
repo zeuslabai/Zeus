@@ -1227,7 +1227,7 @@ fn RoomsPanel() -> impl IntoView {
                 }
                 let rs = rooms.get();
                 if rs.is_empty() {
-                    return view! { <div style="color: #445566; font-size: 11px;">"No rooms yet. Create one in Pantheon."</div> }.into_any();
+                    return view! { <div style="color: #445566; font-size: 11px;">"No rooms yet — create one in Pantheon to get started."</div> }.into_any();
                 }
                 view! {
                     <div style="display: flex; flex-direction: column; gap: 6px;">

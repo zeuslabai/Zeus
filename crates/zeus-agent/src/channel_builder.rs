@@ -489,8 +489,8 @@ pub async fn build_channel_manager_from_config(
         if let Some(ref xt) = cc.x_twitter {
             let x_config = zeus_channels::XConfig {
                 bearer_token: xt.bearer_token.clone(),
-                api_key: xt.api_key.clone(),
-                api_secret: xt.api_secret.clone(),
+                api_key: xt.consumer_key.clone(),
+                api_secret: xt.consumer_key_secret.clone(),
                 access_token: xt.access_token.clone(),
                 access_token_secret: xt.access_token_secret.clone(),
                 poll_interval_secs: xt.poll_interval_secs,

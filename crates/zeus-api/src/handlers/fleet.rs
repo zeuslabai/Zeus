@@ -996,35 +996,59 @@ fn default_stake_purpose() -> String {
 pub struct UnstakeRequest {
     /// Agent unstaking tokens
     pub agent_id: String,
-    /// Amount to unstake
-    pub amount: u64,
-    /// Stake ID to unstake from
+    /// Stake ID to unstake from. The FULL original staked amount is released —
+    /// the amount is read from the `stakes` ledger, not supplied by the caller,
+    /// so unstake cannot counterfeit tokens.
     pub stake_id: String,
+    /// Deprecated: ignored. The released amount is authoritatively the recorded
+    /// stake amount. Retained for backward-compatible request bodies.
+    #[serde(default)]
+    pub amount: Option<u64>,
 }
 
 /// POST /v1/economy/stake — Stake tokens as collateral for marketplace participation
+///
+/// Requires `Authorization: Bearer <ZEUS_TRANSFER_ADMIN_TOKEN>` header — the
+/// same interim admin gate transfer/mint use, since stake debits a wallet.
+/// If the token is not configured, the endpoint is permanently disabled
+/// (fails closed). The stake is recorded in the `stakes` ledger so it can be
+/// validated on unstake — no counterfeiting.
 pub async fn economy_stake(
+    headers: HeaderMap,
     State(state): State<SharedState>,
     Json(req): Json<StakeRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    // --- Auth gate (interim, #190): fails closed when unconfigured ---
+    let admin_token = std::env::var("ZEUS_TRANSFER_ADMIN_TOKEN").unwrap_or_default();
+    if admin_token.is_empty() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stake endpoint disabled: ZEUS_TRANSFER_ADMIN_TOKEN not configured".to_string(),
+        ));
+    }
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if bearer.is_empty() {
+        return Err((StatusCode::UNAUTHORIZED, "Authorization header required".to_string()));
+    }
+    if !constant_time_eq(bearer, &admin_token) {
+        return Err((StatusCode::FORBIDDEN, "Invalid stake admin token".to_string()));
+    }
+
     if req.amount == 0 {
         return Err((StatusCode::BAD_REQUEST, "Amount must be > 0".to_string()));
     }
 
     let state_guard = state.read().await;
 
-    // Debit the agent's wallet (hold as collateral)
-    state_guard
+    // Atomically debit the wallet AND record the stake (single tx).
+    let (stake_id, new_balance) = state_guard
         .ledger
-        .spend(
-            &req.agent_id,
-            req.amount,
-            zeus_economy::TransactionReason::Custom(format!("stake:{}", req.purpose)),
-            format!("Staked {} tokens for {}", req.amount, req.purpose),
-        )
+        .stake(&req.agent_id, req.amount, req.purpose.clone())
         .map_err(|e| (StatusCode::PAYMENT_REQUIRED, format!("Stake failed: {}", e)))?;
-
-    let stake_id = uuid::Uuid::new_v4().to_string();
 
     info!(
         agent = %req.agent_id,
@@ -1039,40 +1063,54 @@ pub async fn economy_stake(
         "stake_id": stake_id,
         "agent_id": req.agent_id,
         "amount": req.amount,
+        "balance": new_balance,
         "purpose": req.purpose,
     })))
 }
 
 /// POST /v1/economy/unstake — Release staked tokens back to wallet
+///
+/// Requires `Authorization: Bearer <ZEUS_TRANSFER_ADMIN_TOKEN>` header (same
+/// interim admin gate as stake/transfer). Fails closed when unconfigured.
+/// Releases the FULL original staked amount recorded in the `stakes` ledger —
+/// the caller cannot specify an amount, so this can no longer mint free tokens.
 pub async fn economy_unstake(
+    headers: HeaderMap,
     State(state): State<SharedState>,
     Json(req): Json<UnstakeRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    if req.amount == 0 {
-        return Err((StatusCode::BAD_REQUEST, "Amount must be > 0".to_string()));
+    // --- Auth gate (interim, #190): fails closed when unconfigured ---
+    let admin_token = std::env::var("ZEUS_TRANSFER_ADMIN_TOKEN").unwrap_or_default();
+    if admin_token.is_empty() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Unstake endpoint disabled: ZEUS_TRANSFER_ADMIN_TOKEN not configured".to_string(),
+        ));
+    }
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if bearer.is_empty() {
+        return Err((StatusCode::UNAUTHORIZED, "Authorization header required".to_string()));
+    }
+    if !constant_time_eq(bearer, &admin_token) {
+        return Err((StatusCode::FORBIDDEN, "Invalid unstake admin token".to_string()));
     }
 
     let state_guard = state.read().await;
 
-    // Credit back to the agent's wallet
-    state_guard
+    // Validate the stake against the ledger and release exactly the recorded
+    // amount, atomically. Ownership + active-status enforced inside.
+    let (amount_released, new_balance) = state_guard
         .ledger
-        .earn(
-            &req.agent_id,
-            req.amount,
-            zeus_economy::TransactionReason::Custom(format!("unstake:{}", req.stake_id)),
-            format!("Unstaked {} tokens (stake:{})", req.amount, req.stake_id),
-        )
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Unstake failed: {}", e),
-            )
-        })?;
+        .unstake(&req.agent_id, &req.stake_id)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Unstake failed: {}", e)))?;
 
     info!(
         agent = %req.agent_id,
-        amount = req.amount,
+        amount = amount_released,
         stake_id = %req.stake_id,
         "Economy: tokens unstaked"
     );
@@ -1081,8 +1119,47 @@ pub async fn economy_unstake(
         "success": true,
         "stake_id": req.stake_id,
         "agent_id": req.agent_id,
-        "amount_released": req.amount,
+        "amount_released": amount_released,
+        "balance": new_balance,
     })))
+}
+
+// ---------------------------------------------------------------------------
+// GET /v1/economy/stakes — List stakes (read-only, inherits C3 gate)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct ListStakesQuery {
+    pub agent_id: Option<String>,
+    pub status: Option<String>,
+}
+
+pub async fn economy_stakes_list(
+    State(state): State<SharedState>,
+    Query(query): Query<ListStakesQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let state_guard = state.read().await;
+    let stakes = state_guard
+        .ledger
+        .list_stakes(query.agent_id.as_deref(), query.status.as_deref())
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("List stakes failed: {}", e)))?;
+
+    let items: Vec<serde_json::Value> = stakes
+        .into_iter()
+        .map(|(stake_id, agent_id, amount, purpose, status, created_at, released_at)| {
+            serde_json::json!({
+                "stake_id": stake_id,
+                "agent_id": agent_id,
+                "amount": amount,
+                "purpose": purpose,
+                "status": status,
+                "created_at": created_at,
+                "released_at": released_at,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "stakes": items })))
 }
 
 // ---------------------------------------------------------------------------
@@ -1585,7 +1662,8 @@ mod tests {
         }"#;
         let req: UnstakeRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.agent_id, "zeus-100");
-        assert_eq!(req.amount, 200);
+        // amount is now deprecated/optional (released amount comes from ledger).
+        assert_eq!(req.amount, Some(200));
         assert_eq!(req.stake_id, "abc-123");
     }
 
@@ -2114,9 +2192,32 @@ fn default_complexity() -> String {
 /// Credits are computed server-side from tool count + complexity.
 /// No client influence on amounts (Zeus107 security requirement).
 pub async fn economy_earn(
+    headers: HeaderMap,
     State(state): State<SharedState>,
     Json(req): Json<EarnRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
+    // --- Auth gate (interim, #190): fails closed when unconfigured ---
+    // Credits are minted here (agent_id + complexity are client-supplied), so this
+    // is a mint vector and must be admin-gated like transfer/stake/mint.
+    let admin_token = std::env::var("ZEUS_TRANSFER_ADMIN_TOKEN").unwrap_or_default();
+    if admin_token.is_empty() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Earn endpoint disabled: ZEUS_TRANSFER_ADMIN_TOKEN not configured".to_string(),
+        ));
+    }
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if bearer.is_empty() {
+        return Err((StatusCode::UNAUTHORIZED, "Authorization header required".to_string()));
+    }
+    if !constant_time_eq(bearer, &admin_token) {
+        return Err((StatusCode::FORBIDDEN, "Invalid earn admin token".to_string()));
+    }
+
     let state_guard = state.read().await;
     let econ_config = state_guard.config.economy.clone().unwrap_or_default();
     let credits = calculate_earning(req.tools_used, &req.complexity, &econ_config);

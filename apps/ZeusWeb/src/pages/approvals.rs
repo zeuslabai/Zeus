@@ -37,7 +37,7 @@ pub fn ApprovalsPage() -> impl IntoView {
                         {move || {
                             let a = approvals.get();
                             if loading.get() { "Loading...".to_string() }
-                            else if a.is_empty() { "No pending approvals".to_string() }
+                            else if a.is_empty() { "All clear — no actions pending your approval.".to_string() }
                             else { format!("{} pending", a.len()) }
                         }}
                     </p>
@@ -55,7 +55,7 @@ pub fn ApprovalsPage() -> impl IntoView {
                                     <div style="font-family: 'Orbitron', monospace; font-size: 11px; letter-spacing: 3px; margin-top: 12px;">
                                         "ALL CLEAR"
                                     </div>
-                                    <div style="font-size: 12px; margin-top: 4px;">"No operations awaiting approval"</div>
+                                    <div style="font-size: 12px; margin-top: 4px;">"No operations are waiting — agents are running clean."</div>
                                 </div>
                             </Card>
                         }.into_any()]

@@ -19,9 +19,10 @@ use ratatui::backend::TestBackend;
 use zeus_tui::app::{App, frame};
 
 const LAST_STEP: usize = 18;
-// Grid/toggle steps consume ←/→ for in-screen focus + Enter for toggle, so the
-// established idiom (onb_complete_1to1) bumps them directly rather than via Right.
-const GRID_STEPS: [usize; 7] = [1, 6, 8, 9, 11, 15, 17];
+// Some steps cannot be advanced by a raw Right key in tests: grids/toggles
+// consume ←/→ for in-screen focus, and Auth is probe-gated. The established
+// onboarding-test idiom bumps them directly rather than waiting on live IO.
+const DIRECT_ADVANCE_STEPS: [usize; 8] = [1, 3, 6, 8, 9, 11, 15, 17];
 
 /// Render the full chrome+screen for the current step via the SAME entrypoint
 /// the live loop uses. `.expect` on draw turns any paint panic into a test
@@ -41,7 +42,7 @@ fn step_forward(app: &mut App) {
     if s == 1 {
         // Mode grid: Enter selects + advances.
         app.handle_key(KeyCode::Enter);
-    } else if GRID_STEPS.contains(&s) {
+    } else if DIRECT_ADVANCE_STEPS.contains(&s) {
         app.current_step += 1;
         app.on_step_enter();
     } else {

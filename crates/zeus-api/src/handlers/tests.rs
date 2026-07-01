@@ -7985,6 +7985,8 @@ You can search the web.
 
     #[tokio::test]
     async fn test_economy_stake_and_unstake() {
+        // SAFETY: test-only env mutation; this test is serialized by tokio
+        unsafe { std::env::set_var("ZEUS_TRANSFER_ADMIN_TOKEN", "test-transfer-token-s32c") };
         let tmp = tempfile::TempDir::new().unwrap();
         let state = test_state_with_tempdir(&tmp);
 
@@ -8007,6 +8009,7 @@ You can search the web.
             .method("POST")
             .uri("/v1/economy/stake")
             .header("content-type", "application/json")
+            .header("Authorization", "Bearer test-transfer-token-s32c")
             .body(Body::from(
                 r#"{"agent_id":"staker-1","amount":300,"purpose":"marketplace_listing"}"#,
             ))
@@ -8034,8 +8037,9 @@ You can search the web.
             .method("POST")
             .uri("/v1/economy/unstake")
             .header("content-type", "application/json")
+            .header("Authorization", "Bearer test-transfer-token-s32c")
             .body(Body::from(
-                serde_json::json!({"agent_id":"staker-1","amount":300,"stake_id":stake_id})
+                serde_json::json!({"agent_id":"staker-1","stake_id":stake_id})
                     .to_string(),
             ))
             .unwrap();
@@ -8052,6 +8056,8 @@ You can search the web.
 
     #[tokio::test]
     async fn test_economy_stake_insufficient_funds() {
+        // SAFETY: test-only env mutation; this test is serialized by tokio
+        unsafe { std::env::set_var("ZEUS_TRANSFER_ADMIN_TOKEN", "test-transfer-token-s32c") };
         let tmp = tempfile::TempDir::new().unwrap();
         let state = test_state_with_tempdir(&tmp);
 
@@ -8060,6 +8066,7 @@ You can search the web.
             .method("POST")
             .uri("/v1/economy/stake")
             .header("content-type", "application/json")
+            .header("Authorization", "Bearer test-transfer-token-s32c")
             .body(Body::from(r#"{"agent_id":"broke-agent","amount":500}"#))
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -8152,6 +8159,8 @@ You can search the web.
 
     #[tokio::test]
     async fn test_economy_stake_zero_amount_rejected() {
+        // SAFETY: test-only env mutation; this test is serialized by tokio
+        unsafe { std::env::set_var("ZEUS_TRANSFER_ADMIN_TOKEN", "test-transfer-token-s32c") };
         let tmp = tempfile::TempDir::new().unwrap();
         let state = test_state_with_tempdir(&tmp);
 
@@ -8160,6 +8169,7 @@ You can search the web.
             .method("POST")
             .uri("/v1/economy/stake")
             .header("content-type", "application/json")
+            .header("Authorization", "Bearer test-transfer-token-s32c")
             .body(Body::from(r#"{"agent_id":"a","amount":0}"#))
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();

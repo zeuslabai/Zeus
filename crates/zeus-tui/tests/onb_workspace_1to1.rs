@@ -33,7 +33,7 @@ const WORKSPACE_STEP: usize = 10;
 /// the walk hangs (Right is grid-local there and never advances the step).
 fn goto_workspace(app: &mut App) {
     while app.current_step < WORKSPACE_STEP {
-        let s = app.current_step;
+        if app.current_step == 3 { app.current_step += 1; app.on_step_enter(); continue; }        let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
         } else if s == 6 || s == 8 {

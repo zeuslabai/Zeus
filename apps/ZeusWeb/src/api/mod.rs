@@ -3159,6 +3159,18 @@ pub async fn fetch_transactions(limit: Option<usize>) -> Result<Vec<Transaction>
     fetch_json(&url).await
 }
 
+pub async fn fetch_stakes(agent_id: Option<&str>) -> Result<Vec<Stake>, String> {
+    let url = if let Some(aid) = agent_id {
+        format!("/v1/economy/stakes?agent_id={}", aid)
+    } else {
+        "/v1/economy/stakes".to_string()
+    };
+    #[derive(Deserialize)]
+    struct StakesResponse { stakes: Vec<Stake> }
+    let resp: StakesResponse = fetch_json(&url).await?;
+    Ok(resp.stakes)
+}
+
 // ── Marketplace / Agora ──
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -3276,6 +3288,24 @@ pub struct Transaction {
     pub reason: String,
     #[serde(default)]
     pub timestamp: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct Stake {
+    #[serde(default)]
+    pub stake_id: String,
+    #[serde(default)]
+    pub agent_id: String,
+    #[serde(default)]
+    pub amount: u64,
+    #[serde(default)]
+    pub purpose: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub released_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

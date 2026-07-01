@@ -178,7 +178,7 @@ pub fn SessionsPage() -> impl IntoView {
                         {move || {
                             let r = detail_replay.get();
                             if r.is_empty() {
-                                view! { <div style="color: rgba(255,245,240,0.7); font-size: 13px; padding: 16px;">"No replay data available"</div> }.into_any()
+                                view! { <div style="color: rgba(255,245,240,0.7); font-size: 13px; padding: 16px;">"No replay data — this session wasn't recorded."</div> }.into_any()
                             } else {
                                 view! {
                                     <div style="display: flex; flex-direction: column; gap: 6px; max-height: 400px; overflow-y: auto;">
@@ -207,7 +207,7 @@ pub fn SessionsPage() -> impl IntoView {
                         {move || {
                             let t = detail_tools.get();
                             if t.is_empty() {
-                                view! { <div style="color: rgba(255,245,240,0.7); font-size: 13px; padding: 16px;">"No tools used in this session"</div> }.into_any()
+                                view! { <div style="color: rgba(255,245,240,0.7); font-size: 13px; padding: 16px;">"No tools were called in this session."</div> }.into_any()
                             } else {
                                 view! {
                                     <div style="display: flex; flex-direction: column; gap: 6px;">
@@ -241,7 +241,7 @@ pub fn SessionsPage() -> impl IntoView {
                                     {move || {
                                         let entries = audit_data.get();
                                         if entries.is_empty() {
-                                            view! { <div style="color: rgba(255,245,240,0.7); font-size: 13px; padding: 16px;">"No audit entries"</div> }.into_any()
+                                            view! { <div style="color: rgba(255,245,240,0.7); font-size: 13px; padding: 16px;">"No audit entries — this session ran clean."</div> }.into_any()
                                         } else {
                                             view! {
                                                 <div style="display: flex; flex-direction: column; gap: 4px;">

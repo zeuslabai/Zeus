@@ -117,3 +117,34 @@ fn back_nav_resync_recaptures_x_twitter() {
         app.chanconfig_screen.toggled
     );
 }
+
+
+#[test]
+fn x_twitter_card_uses_official_credential_labels() {
+    let mut app = App::new();
+    app.current_step = 6;
+
+    for _ in 0..5 {
+        app.handle_key(KeyCode::Right);
+    }
+    assert_eq!(app.channels_screen.focused, 5);
+    app.handle_key(KeyCode::Char(' '));
+    app.advance_step();
+    assert_eq!(app.current_step, 7);
+
+    let full = render_lines(&app).join("
+");
+    for label in [
+        "Bearer Token",
+        "Consumer Key",
+        "Consumer Key Secret",
+        "Access Token",
+        "Access Token Secret",
+        "OAuth 2.0 Client ID",
+        "OAuth 2.0 Client Secret",
+    ] {
+        assert!(full.contains(label), "X/Twitter label `{label}` must render");
+    }
+    assert!(!full.contains("API Secret"), "old API Secret label must be gone");
+    assert!(!full.contains("Access Secret"), "old Access Secret label must be gone");
+}

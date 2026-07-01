@@ -150,7 +150,7 @@ pub fn MemoryPage() -> impl IntoView {
                     {move || {
                         let sr = search_results.get();
                         if sr.is_empty() {
-                            view! { <div style="padding: 12px; color: rgba(255,245,240,0.7); font-size: 13px;">"No results found"</div> }.into_any()
+                            view! { <div style="padding: 12px; color: rgba(255,245,240,0.7); font-size: 13px;">"No results — try different keywords or add more memories."</div> }.into_any()
                         } else {
                             view! {
                                 <div style="display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto;">
@@ -231,7 +231,7 @@ pub fn MemoryPage() -> impl IntoView {
                         if c.is_empty() {
                             view! {
                                 <div style="padding: 16px; text-align: center; color: rgba(255,245,240,0.7); font-size: 13px;">
-                                    "No communities detected"
+                                    "No clusters found — add more memories to build the graph."
                                 </div>
                             }.into_any()
                         } else {
@@ -324,7 +324,7 @@ pub fn MemoryPage() -> impl IntoView {
                     let nodes = results.get("nodes").and_then(|v| v.as_array()).cloned().unwrap_or_default();
                     let edges = results.get("edges").and_then(|v| v.as_array()).cloned().unwrap_or_default();
                     if nodes.is_empty() && edges.is_empty() {
-                        return view! { <div style="padding: 12px; color: rgba(255,245,240,0.3); font-size: 12px;">"No graph results found"</div> }.into_any();
+                        return view! { <div style="padding: 12px; color: rgba(255,245,240,0.3); font-size: 12px;">"No graph results — try a broader search term."</div> }.into_any();
                     }
                     view! {
                         <div style="margin-bottom: 16px;">
@@ -416,7 +416,7 @@ pub fn MemoryPage() -> impl IntoView {
                     if t.is_empty() {
                         view! {
                             <div style="padding: 16px; text-align: center; color: rgba(255,245,240,0.7); font-size: 13px;">
-                                "No timeline entries"
+                                "No timeline entries yet — activity will appear here as Zeus works."
                             </div>
                         }.into_any()
                     } else {

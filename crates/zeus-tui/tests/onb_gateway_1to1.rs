@@ -27,7 +27,7 @@ const GATEWAY_STEP: usize = 8;
 /// for in-screen focus, so we bump those directly — mirrors goto_step in onb_106.
 fn goto_gateway(app: &mut App) {
     while app.current_step < GATEWAY_STEP {
-        let s = app.current_step;
+        if app.current_step == 3 { app.current_step += 1; app.on_step_enter(); continue; }        let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
         } else if s == 6 {

@@ -26,7 +26,7 @@ const FEATURES_STEP: usize = 12;
 /// in onb_106. Features itself is the target; we stop AT it.
 fn goto_features(app: &mut App) {
     while app.current_step < FEATURES_STEP {
-        let s = app.current_step;
+        if app.current_step == 3 { app.current_step += 1; app.on_step_enter(); continue; }        let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
         } else if s == 6 || s == 8 || s == 9 || s == 11 {

@@ -821,7 +821,7 @@ pub fn StudioPage() -> impl IntoView {
                             let ss = sessions.get();
                             if ss.is_empty() {
                                 return vec![view! {
-                                    <div style="text-align: center; padding: 24px; color: rgba(255,245,240,0.2); font-size: 11px;">"No previous sessions"</div>
+                                    <div style="text-align: center; padding: 24px; color: rgba(255,245,240,0.2); font-size: 11px;">"No previous sessions — start a conversation to see history here."</div>
                                 }.into_any()];
                             }
                             ss.into_iter().take(30).map(|s| {
@@ -1311,7 +1311,7 @@ pub fn StudioPage() -> impl IntoView {
                                 let actions = puppet_actions.get();
                                 if actions.is_empty() {
                                     return vec![view! {
-                                        <div style="font-size: 11px; color: rgba(255,245,240,0.15); padding: 8px 0;">"No actions yet — ask Zeus to drive the browser"</div>
+                                        <div style="font-size: 11px; color: rgba(255,245,240,0.15); padding: 8px 0;">"No browser actions yet — ask Zeus to navigate or interact with a page."</div>
                                     }.into_any()];
                                 }
                                 actions.into_iter().rev().take(30).map(|a| {

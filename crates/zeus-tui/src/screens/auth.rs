@@ -404,8 +404,8 @@ impl AuthScreen {
         // the env_key via the same `from_prefix` path app.rs uses so the
         // preview can never drift from the actual config write.
         let env_key = zeus_core::Provider::from_prefix(self.provider_id).env_key();
-        // gemini-cli / minimax have an empty env_key (OAuth-only) — fall back
-        // to a stable placeholder so the preview line is never blank.
+        // gemini-cli has an empty env_key (OAuth-only) — fall back to a
+        // stable placeholder so the preview line is never blank.
         let env_key = if env_key.is_empty() { "API_KEY" } else { env_key };
         let preview_line = Line::from(vec![
             Span::styled(env_key, Style::default().fg(theme::TEXT)),

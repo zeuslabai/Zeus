@@ -28,7 +28,7 @@ const SECURITY_STEP: usize = 11;
 /// since we never walk past it).
 fn goto_security(app: &mut App) {
     while app.current_step < SECURITY_STEP {
-        let s = app.current_step;
+        if app.current_step == 3 { app.current_step += 1; app.on_step_enter(); continue; }        let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
         } else if s == 6 || s == 8 || s == 9 {

@@ -214,7 +214,7 @@ pub fn ReviewsPage() -> impl IntoView {
                                 view! {
                                     <div style="text-align: center; padding: 40px 20px; color: rgba(255,245,240,0.3); border: 1px dashed rgba(255,60,20,0.1); border-radius: 12px;">
                                         <div style="font-size: 32px; margin-bottom: 12px;">"🔍"</div>
-                                        <div style="font-size: 13px;">"No reviews yet"</div>
+                                        <div style="font-size: 13px;">"No reviews yet — submit an agent output above to request one."</div>
                                         <div style="font-size: 11px; margin-top: 4px; color: rgba(255,245,240,0.2);">"Submit an agent output to start"</div>
                                     </div>
                                 }.into_any()
