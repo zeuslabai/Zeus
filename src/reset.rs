@@ -221,12 +221,12 @@ fn double_confirm() -> Result<bool> {
 // ---------------------------------------------------------------------------
 
 /// Resolve `~/.zeus/` root (or override via $ZEUS_HOME for testing).
+///
+/// #248: delegates to `zeus_paths::zeus_home()` so reset agrees with the
+/// gateway even under daemon(8)/service managers where $HOME is unset
+/// (passwd-entry fallback instead of a hard "HOME unset" error).
 pub fn zeus_home() -> Result<PathBuf> {
-    if let Ok(h) = std::env::var("ZEUS_HOME") {
-        return Ok(PathBuf::from(h));
-    }
-    let home = std::env::var("HOME").context("HOME unset")?;
-    Ok(PathBuf::from(home).join(".zeus"))
+    Ok(crate::zeus_paths::zeus_home())
 }
 
 /// Wipe a single rel-path under `root`. Handles dirs (recursive), files,
@@ -332,11 +332,10 @@ pub fn run(args: ResetArgs) -> Result<()> {
     }
 
     // Destructive path — double-confirm unless explicitly bypassed.
-    if !(args.yes && args.hard) {
-        if !double_confirm()? {
-            println!("aborted.");
-            return Ok(());
-        }
+    let bypass_confirm = args.yes && args.hard;
+    if !bypass_confirm && !double_confirm()? {
+        println!("aborted.");
+        return Ok(());
     }
 
     let root = zeus_home()?;

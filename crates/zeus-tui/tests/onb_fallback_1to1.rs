@@ -55,8 +55,8 @@ fn render(app: &App) -> String {
 /// step-enter hook via a no-op key — this exercises the real Fallback
 /// render + key handlers without fighting each intermediate screen's idiom.
 fn goto_fallback(app: &mut App) {
-    app.current_step = 5;
-    assert_eq!(app.current_step, 5, "should land on Fallback (step 5)");
+    app.current_step = 6;
+    assert_eq!(app.current_step, 6, "should land on Fallback (step 5)");
 }
 
 /// Find the column index of the first occurrence of `needle` in `line`.
@@ -224,11 +224,11 @@ fn fallback_100x30_empty_state_keeps_lines_separated() {
 fn fallback_esc_steps_back_not_quit() {
     let mut app = App::new();
     goto_fallback(&mut app);
-    assert_eq!(app.current_step, 5);
+    assert_eq!(app.current_step, 6);
 
     app.handle_key(KeyCode::Esc);
     assert_eq!(
-        app.current_step, 4,
-        "ESC on Fallback must step back to the prior step (4), not quit"
+        app.current_step, 5,
+        "ESC on Fallback must step back to the prior step, not quit"
     );
 }

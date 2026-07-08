@@ -21,6 +21,13 @@ impl GatewayLock {
         // Check existing PID file
         if let Ok(pid_str) = std::fs::read_to_string(&pid_path)
             && let Ok(pid) = pid_str.trim().parse::<u32>() {
+                // #248: under FreeBSD's daemon(8) with `-p` (child pidfile),
+                // the supervisor writes OUR OWN pid into this file before we
+                // get here. That's us, not a rival instance.
+                if pid == std::process::id() {
+                    info!("PID file already holds our PID {} (daemon(8) child pidfile) — lock is ours", pid);
+                    return Ok(Self { pid_path });
+                }
                 if Self::process_is_alive(pid) {
                     anyhow::bail!(
                         "Gateway already running (PID {}). Kill it first or remove {}",
@@ -41,11 +48,38 @@ impl GatewayLock {
             );
         }
 
-        // Write our PID
+        // Write our PID.
+        //
+        // #248: under daemon(8) the process may start with no $HOME and no
+        // $ZEUS_HOME, so `zeus_home()` can resolve somewhere unwritable
+        // (worst case the shared `/tmp/.zeus` fallback owned by another
+        // user). A bare io::Error here gives the operator nothing to act
+        // on — name the resolved path, the uid, and the remediation.
         if let Some(parent) = pid_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            std::fs::create_dir_all(parent).map_err(|e| {
+                anyhow::anyhow!(
+                    "Cannot create Zeus home dir {} (uid {}): {}. \
+                     The gateway resolves its home via $ZEUS_HOME → $HOME/.zeus. \
+                     When run under daemon(8)/a service manager, export ZEUS_HOME \
+                     explicitly (the rc.d script does this via /usr/bin/env) or \
+                     fix ownership: chown -R <user> {}",
+                    parent.display(),
+                    unsafe { libc::getuid() },
+                    e,
+                    parent.display()
+                )
+            })?;
         }
-        std::fs::write(&pid_path, std::process::id().to_string())?;
+        std::fs::write(&pid_path, std::process::id().to_string()).map_err(|e| {
+            anyhow::anyhow!(
+                "Cannot write gateway PID lock {} (uid {}): {}. \
+                 Check ownership of the directory, or set ZEUS_HOME to a \
+                 writable location before starting the gateway.",
+                pid_path.display(),
+                unsafe { libc::getuid() },
+                e
+            )
+        })?;
         info!("Gateway lock acquired (PID {}, port {})", std::process::id(), port);
 
         Ok(Self { pid_path })

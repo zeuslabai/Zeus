@@ -181,12 +181,120 @@ fn detect_task_assignment_keyword(message: &str, agent_name: &str) -> Option<Str
 }
 use zeus_session::{ChannelSessionRouter, ContextScope, Session};
 
+/// Names of channels enabled by config (with env-var auto-enable fallbacks),
+/// for the boot banner. Mirrors the adapter-creation logic in
+/// `build_channel_manager_from_config` without instantiating anything.
+fn enabled_channel_names(config: &Config) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let env_set =
+        |k: &str| -> bool { std::env::var(k).map(|v| !v.is_empty()).unwrap_or(false) };
+    let ch = config.channels.as_ref();
+    let mut add = |name: &str, cfg_on: bool, env_on: bool| {
+        if cfg_on || env_on {
+            names.push(name.to_string());
+        }
+    };
+    add(
+        "discord",
+        ch.map(|c| c.discord.is_some()).unwrap_or(false),
+        env_set("DISCORD_BOT_TOKEN"),
+    );
+    add(
+        "telegram",
+        ch.map(|c| c.telegram.is_some()).unwrap_or(false),
+        env_set("TELEGRAM_BOT_TOKEN"),
+    );
+    add(
+        "slack",
+        ch.map(|c| c.slack.is_some()).unwrap_or(false),
+        env_set("SLACK_BOT_TOKEN"),
+    );
+    add("email", ch.map(|c| c.email.is_some()).unwrap_or(false), false);
+    add(
+        "whatsapp",
+        ch.map(|c| c.whatsapp.is_some()).unwrap_or(false),
+        false,
+    );
+    add("signal", ch.map(|c| c.signal.is_some()).unwrap_or(false), false);
+    add("matrix", ch.map(|c| c.matrix.is_some()).unwrap_or(false), false);
+    add("mqtt", ch.map(|c| c.mqtt.is_some()).unwrap_or(false), false);
+    add(
+        "mattermost",
+        ch.map(|c| c.mattermost.is_some()).unwrap_or(false),
+        false,
+    );
+    add("irc", ch.map(|c| c.irc.is_some()).unwrap_or(false), false);
+    add("twitch", ch.map(|c| c.twitch.is_some()).unwrap_or(false), false);
+    add(
+        "x_twitter",
+        ch.map(|c| c.x_twitter.is_some()).unwrap_or(false),
+        false,
+    );
+    names
+}
+
 use crate::agent_executor::AgentToolExecutor;
 use crate::gateway_lock::GatewayLock;
 
 /// Run the unified gateway daemon
-pub async fn run_gateway(config: Config, gateway: GatewayConfig) -> Result<()> {
+pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<()> {
     info!("Starting Zeus Gateway on {}:{}", gateway.host, gateway.port);
+
+    // ── Boot banner (P2 observability) ──────────────────────────────────
+    // One greppable INFO line with a stable `boot` target carrying the full
+    // runtime identity: version + git sha + instance + config source +
+    // enabled channels + all three ports. `zeus logs | grep boot` answers
+    // "what exactly is running" without archaeology.
+    {
+        let instance = std::env::var("ZEUS_INSTANCE")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "default".to_string());
+        let config_source = if config.loaded_from_default {
+            "builtin-default".to_string()
+        } else {
+            crate::zeus_paths::zeus_home()
+                .join("config.toml")
+                .display()
+                .to_string()
+        };
+        let channels = if gateway.enable_channels {
+            enabled_channel_names(&config).join(",")
+        } else {
+            "(disabled)".to_string()
+        };
+        info!(
+            target: "boot",
+            version = env!("CARGO_PKG_VERSION"),
+            git_sha = env!("GIT_SHA"),
+            instance = %instance,
+            config_source = %config_source,
+            channels = %channels,
+            api_port = gateway.port,
+            web_port = gateway.web_port,
+            mcp_port = gateway.mcp_port,
+            "gateway boot"
+        );
+    }
+
+    // Sync the *effective* enable_channels (config.toml AND --no-channels CLI
+    // flag, already folded into `gateway` by main.rs) into `config.gateway` so
+    // downstream consumers of Config — Agent::with_subsystems →
+    // build_channel_manager_from_config — see the truth. Without this,
+    // `--no-channels` only gated the message consumer while the builder still
+    // created live adapters from config/env (duplicate Discord sessions off
+    // one inherited DISCORD_BOT_TOKEN under multi-instance).
+    if let Some(g) = config.gateway.as_mut() {
+        g.enable_channels = gateway.enable_channels;
+    } else if !gateway.enable_channels {
+        // Only materialize a [gateway] section when we need to carry a
+        // non-default (disabled) flag — avoids changing `is_some()` behavior
+        // elsewhere for the enabled default case.
+        config.gateway = Some(GatewayConfig {
+            enable_channels: false,
+            ..Default::default()
+        });
+    }
 
     // Fleet channel ID — from config.toml [gateway].fleet_channel_id,
     // falling back to the first Discord binding's channel_id.
@@ -410,11 +518,17 @@ pub async fn run_gateway(config: Config, gateway: GatewayConfig) -> Result<()> {
                             Ok(s) => Arc::new(RwLock::new(s)),
                             Err(e) => {
                                 warn!("Bootstrap AppState init failed ({}), serving static files only", e);
-                                axum::serve(listener, axum::Router::new().fallback_service(
-                                    tower_http::services::ServeDir::new(&dist_path).fallback(
-                                        tower_http::services::ServeFile::new(dist_path.join("index.html")),
-                                    ),
-                                )).await?;
+                                axum::serve(
+                                    listener,
+                                    axum::Router::new()
+                                        .fallback_service(
+                                            tower_http::services::ServeDir::new(&dist_path).fallback(
+                                                tower_http::services::ServeFile::new(dist_path.join("index.html")),
+                                            ),
+                                        )
+                                        .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                                )
+                                .await?;
                                 anyhow::bail!("Bootstrap failed");
                             }
                         };
@@ -423,7 +537,11 @@ pub async fn run_gateway(config: Config, gateway: GatewayConfig) -> Result<()> {
                         // The wizard can hit /v1/gateway/restart when done to trigger
                         // a clean-exit → service-manager relaunch into full gateway mode.
                         let web_router = zeus_api::create_router(bootstrap_state, true);
-                        axum::serve(listener, web_router).await?;
+                        axum::serve(
+                            listener,
+                            web_router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                        )
+                        .await?;
                     }
                     anyhow::bail!("No LLM configured and no WebUI available. Run 'zeus' for TUI setup.");
         }
@@ -703,6 +821,25 @@ pub async fn run_gateway(config: Config, gateway: GatewayConfig) -> Result<()> {
         zeus_api::AppState::new(config.clone())
             .map_err(|e| anyhow::anyhow!("AppState init failed: {}", e))?,
     ));
+
+    // #315 item-0: share the agent loop's LIVE ChannelManager into AppState.
+    // AppState::new wires an empty ChannelManager::new(256) (zeus-api lib.rs),
+    // so every HTTP-path consumer — /v1/tools `message` execution, channel
+    // handlers, webhooks, the Pantheon announcement hook — saw zero adapters
+    // even when the agent's channels were healthy. Overwrite BOTH the state
+    // field and the ToolRegistry's handle with the agent's real manager.
+    // Must happen BEFORE AppState::boot: the announcement hook clones
+    // state.channel_manager during boot and would otherwise keep the empty one.
+    {
+        let live_channels = { agent.read().await.channel_manager() };
+        if let Some(cm) = live_channels {
+            let mut s = api_state.write().await;
+            s.channel_manager = cm.clone();
+            s.tools.set_channels(cm);
+            info!("AppState wired with agent's live ChannelManager (#315 item-0)");
+        }
+    }
+
     zeus_api::AppState::boot(&api_state).await;
 
     // Wire default agent into AppState so /v1/chat shares the agent's session
@@ -1069,8 +1206,11 @@ pub async fn run_gateway(config: Config, gateway: GatewayConfig) -> Result<()> {
 
         let api_shutdown = shutdown_token.clone();
         tasks.push(tokio::spawn(async move {
-            axum::serve(listener, router)
-                .with_graceful_shutdown(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move {
                     api_shutdown.cancelled().await;
                 })
                 .await
@@ -1511,6 +1651,15 @@ pub async fn run_gateway(config: Config, gateway: GatewayConfig) -> Result<()> {
             // Feeder task: raw channel messages → debouncer
             tasks.push(tokio::spawn(async move {
                 while let Some(msg) = rx.recv().await {
+                    // P2 observability: stable greppable inbound-message line.
+                    info!(
+                        target: "msg",
+                        dir = "in",
+                        channel = %msg.source.channel_type,
+                        peer = %msg.source.user_id,
+                        len = msg.content.len(),
+                        "msg in"
+                    );
                     debouncer.push(msg).await;
                 }
                 Ok(())

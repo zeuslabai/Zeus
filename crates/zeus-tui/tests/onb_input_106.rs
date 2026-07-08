@@ -20,8 +20,8 @@ use crossterm::event::KeyCode;
 use zeus_tui::App;
 
 /// Onboarding step indices (mirror the `Step` enum discriminants).
-const AUTH_STEP: usize = 3;
-const WORKSPACE_STEP: usize = 10;
+const AUTH_STEP: usize = 4;
+const WORKSPACE_STEP: usize = 11;
 
 /// Type a string through the real key entry point, one `Char` event per byte.
 fn type_str(app: &mut App, s: &str) {
@@ -40,11 +40,19 @@ fn auth_char_input_appends_then_backspace_pops() {
     app.current_step = AUTH_STEP;
 
     type_str(&mut app, "sk-ant-123");
-    assert_eq!(app.auth_api_key(), "sk-ant-123", "chars must append to the key buffer");
+    assert_eq!(
+        app.auth_api_key(),
+        "sk-ant-123",
+        "chars must append to the key buffer"
+    );
 
     app.handle_key(KeyCode::Backspace);
     app.handle_key(KeyCode::Backspace);
-    assert_eq!(app.auth_api_key(), "sk-ant-1", "backspace must pop the last char");
+    assert_eq!(
+        app.auth_api_key(),
+        "sk-ant-1",
+        "backspace must pop the last char"
+    );
 }
 
 /// Backspace on an empty Auth buffer must NOT panic (pop on empty String).

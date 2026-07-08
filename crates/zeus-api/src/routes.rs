@@ -946,6 +946,10 @@ fn build_base_router(state: SharedState, rate_limit_config: Option<RateLimitConf
             post(handlers::fleet::economy_transfer),
         )
         .route("/v1/economy/mint", post(handlers::fleet::economy_mint))
+        .route(
+            "/v1/economy/register-key",
+            post(handlers::fleet::economy_register_key),
+        )
         // Phase 5 — Autonomous earning + agent teams + federation
         .route("/v1/economy/earn", post(handlers::fleet::economy_earn))
         .route(
@@ -1437,7 +1441,10 @@ async fn no_token_middleware(
     // /v1/economy/* group (mints, transfers, earns, and balance reads) with NO
     // credential. Gate the group here, before the blanket-allow, requiring one of
     // the economy admin tokens (transfer OR mint — mint uses a distinct token).
-    if is_economy_path(req.uri().path()) && !economy_admin_authorized(req.headers()) {
+    if is_economy_path(req.uri().path())
+        && !is_self_authenticating_economy_path(req.uri().path())
+        && !economy_admin_authorized(req.headers())
+    {
         return Err(StatusCode::UNAUTHORIZED);
     }
     // If onboarding is complete, the user has configured their instance — allow all requests.
@@ -1451,6 +1458,15 @@ async fn no_token_middleware(
 /// True if the (normalized) path is under the money-handling economy API group.
 fn is_economy_path(path: &str) -> bool {
     normalize_path(path).starts_with("/v1/economy/")
+}
+
+/// True if the economy path carries its OWN cryptographic authentication and so
+/// must be exempt from the C3 shared-admin-token gate. `register-key` is
+/// self-authenticating via Ed25519 proof-of-possession (+ current-key rotation
+/// guard), which is exactly what lets a fresh agent bind its signing key without
+/// any shared secret — the foundation of the C1 signed-transfer model.
+fn is_self_authenticating_economy_path(path: &str) -> bool {
+    normalize_path(path).ends_with("/v1/economy/register-key")
 }
 
 /// C3 group-gate: authorize a request against the economy admin tokens.

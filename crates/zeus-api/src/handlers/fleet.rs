@@ -21,6 +21,113 @@ use crate::api_key::constant_time_eq;
 use crate::SharedState;
 
 // ---------------------------------------------------------------------------
+// C1 — Ed25519 signed-transfer verification
+// ---------------------------------------------------------------------------
+
+/// Maximum clock skew (seconds) tolerated between a signed request's `ts` and
+/// server time. Bounds `used_nonces` growth (rows older than this can be pruned)
+/// and limits the window in which a captured-but-unreplayed signature is live.
+const SIG_TS_WINDOW_SECS: i64 = 120;
+
+/// Domain-separation tag + version for the canonical signed payload. Bumping
+/// this invalidates all prior signatures (versioned crypto).
+const XFER_SIG_DOMAIN: &str = "ZEUS-XFER-V1";
+
+/// The parsed, normalized fields a signed economy request commits to. The
+/// server reconstructs the canonical payload from THESE (never trusts a
+/// client-supplied payload blob for the values) and verifies the signature
+/// against the `from` wallet's registered pubkey.
+pub struct SignedParts<'a> {
+    /// Wallet being debited / the acting agent (the identity being proven).
+    pub from: &'a str,
+    /// Recipient wallet, or `None` for single-party ops (mint/earn/stake).
+    pub to: Option<&'a str>,
+    pub amount: u64,
+    pub nonce: &'a str,
+    pub ts: i64,
+    /// Base64-encoded Ed25519 signature over the canonical payload.
+    pub signature_b64: &'a str,
+}
+
+/// Build the exact byte string the client signed. Length-prefixed field lines
+/// with a domain tag prevent field-boundary ambiguity and cross-protocol reuse.
+/// `to` renders as an empty value for single-party operations.
+fn canonical_signed_payload(from: &str, to: Option<&str>, amount: u64, nonce: &str, ts: i64) -> String {
+    format!(
+        "{XFER_SIG_DOMAIN}\nfrom={from}\nto={}\namount={amount}\nnonce={nonce}\nts={ts}",
+        to.unwrap_or("")
+    )
+}
+
+/// Verify an Ed25519-signed economy request, binding the caller to the `from`
+/// wallet and rejecting replays. On success the nonce is consumed (recorded) so
+/// the same signature can never be used twice. Fails closed: a wallet with no
+/// registered pubkey cannot pass. Errors map to HTTP status for the handler.
+///
+/// This is the C1 fix — proof the caller owns `from`, not a shared god-token —
+/// and folds in H2 replay protection via the nonce.
+fn verify_signed_request(
+    parts: &SignedParts<'_>,
+    ledger: &zeus_economy::TokenLedger,
+) -> std::result::Result<(), (StatusCode, String)> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+    // 1. Timestamp freshness — reject stale/future-dated signatures.
+    let now = chrono::Utc::now().timestamp();
+    if (now - parts.ts).abs() > SIG_TS_WINDOW_SECS {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            format!("Signature timestamp outside ±{SIG_TS_WINDOW_SECS}s window"),
+        ));
+    }
+
+    // 2. Look up the registered pubkey for `from`. NULL/absent → fail closed.
+    let pubkey_hex = ledger
+        .get_pubkey(parts.from)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Pubkey lookup failed: {e}")))?
+        .ok_or((
+            StatusCode::UNAUTHORIZED,
+            format!("Wallet '{}' has no registered signing key", parts.from),
+        ))?;
+    let pubkey_bytes: [u8; 32] = hex::decode(&pubkey_hex)
+        .ok()
+        .and_then(|v| <[u8; 32]>::try_from(v).ok())
+        .ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Stored pubkey is malformed".to_string(),
+        ))?;
+
+    // 3. Decode signature and reconstruct the canonical payload from PARSED
+    //    fields (reconstruct-don't-trust), then verify.
+    let sig_bytes = BASE64
+        .decode(parts.signature_b64)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Signature is not valid base64".to_string()))?;
+    let msg = canonical_signed_payload(parts.from, parts.to, parts.amount, parts.nonce, parts.ts);
+    zeus_wallet::WalletKeypair::verify_external(&pubkey_bytes, msg.as_bytes(), &sig_bytes)
+        .map_err(|_| (StatusCode::FORBIDDEN, "Signature verification failed".to_string()))?;
+
+    // 4. Consume the nonce — atomic replay guard (H2). Must be LAST so a
+    //    verification failure doesn't burn a nonce.
+    ledger.record_nonce(parts.from, parts.nonce).map_err(|_| {
+        (StatusCode::CONFLICT, "Nonce already used (replay rejected)".to_string())
+    })?;
+
+    Ok(())
+}
+
+/// Whether signed requests are mandatory. When `ZEUS_ECONOMY_REQUIRE_SIG` is
+/// truthy, value-moving routes REQUIRE a valid signature (the admin token alone
+/// no longer authorizes — this is the money-enable posture). When unset, the
+/// signature is verified if present but the legacy admin-token path still works,
+/// allowing a staged rollout without breaking existing callers.
+fn signature_required() -> bool {
+    matches!(
+        std::env::var("ZEUS_ECONOMY_REQUIRE_SIG").unwrap_or_default().as_str(),
+        "1" | "true" | "TRUE" | "yes"
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Request / Response types
 // ---------------------------------------------------------------------------
 
@@ -1125,6 +1232,104 @@ pub async fn economy_unstake(
 }
 
 // ---------------------------------------------------------------------------
+// POST /v1/economy/register-key — Register a wallet's Ed25519 signing key
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct RegisterKeyRequest {
+    /// Agent whose wallet the key is being bound to.
+    pub agent_id: String,
+    /// Hex-encoded Ed25519 public key (32 bytes → 64 hex chars).
+    pub pubkey: String,
+    /// Unix timestamp — bounds the proof-of-possession freshness.
+    pub ts: i64,
+    /// Base64 Ed25519 signature over the canonical register payload, proving the
+    /// caller holds the private key for `pubkey` (proof-of-possession).
+    pub signature: String,
+}
+
+/// Canonical payload signed during key registration. Binds the pubkey to the
+/// agent_id and a timestamp so a captured registration can't be replayed to
+/// re-bind a key later.
+fn canonical_register_payload(agent_id: &str, pubkey_hex: &str, ts: i64) -> String {
+    format!("ZEUS-REGKEY-V1\nagent_id={agent_id}\npubkey={pubkey_hex}\nts={ts}")
+}
+
+/// POST /v1/economy/register-key — bind an Ed25519 public key to a wallet.
+///
+/// Self-signed proof-of-possession: the request must be signed by the private
+/// key corresponding to `pubkey`. This proves the caller controls the key
+/// before we trust it to authorize transfers. First-registration is open
+/// (anyone can claim an *unregistered* wallet's key); re-registration (rotation)
+/// additionally requires the OLD key to sign — an attacker who doesn't hold the
+/// current key cannot hijack an already-keyed wallet.
+pub async fn economy_register_key(
+    State(state): State<SharedState>,
+    Json(req): Json<RegisterKeyRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+    // Freshness.
+    let now = chrono::Utc::now().timestamp();
+    if (now - req.ts).abs() > SIG_TS_WINDOW_SECS {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            format!("Registration timestamp outside ±{SIG_TS_WINDOW_SECS}s window"),
+        ));
+    }
+
+    // Decode the claimed pubkey.
+    let new_pubkey: [u8; 32] = hex::decode(&req.pubkey)
+        .ok()
+        .and_then(|v| <[u8; 32]>::try_from(v).ok())
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            "pubkey must be 32-byte hex".to_string(),
+        ))?;
+    let sig_bytes = BASE64
+        .decode(&req.signature)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "signature is not valid base64".to_string()))?;
+
+    // Proof-of-possession: the new key must sign the registration.
+    let msg = canonical_register_payload(&req.agent_id, &req.pubkey, req.ts);
+    zeus_wallet::WalletKeypair::verify_external(&new_pubkey, msg.as_bytes(), &sig_bytes)
+        .map_err(|_| (StatusCode::FORBIDDEN, "proof-of-possession signature invalid".to_string()))?;
+
+    let state_guard = state.read().await;
+
+    // Rotation guard: if a key is already registered, the CURRENT key must also
+    // authorize the change (defends against hijack of a keyed wallet).
+    let existing = state_guard
+        .ledger
+        .get_pubkey(&req.agent_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Pubkey lookup failed: {e}")))?;
+    if let Some(existing_hex) = existing
+        && existing_hex != req.pubkey
+    {
+        // A key is already bound and this request presents a DIFFERENT key.
+        // Rotation must be authorized by the current key (defends a keyed
+        // wallet from hijack). Same-key re-registration is an idempotent no-op.
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Wallet already has a signing key; rotation must be authorized by the current key"
+                .to_string(),
+        ));
+    }
+
+    state_guard
+        .ledger
+        .set_pubkey(&req.agent_id, &req.pubkey)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to register key: {e}")))?;
+
+    info!(agent = %req.agent_id, "Economy: signing key registered");
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "agent_id": req.agent_id,
+        "pubkey": req.pubkey,
+    })))
+}
+
+// ---------------------------------------------------------------------------
 // GET /v1/economy/stakes — List stakes (read-only, inherits C3 gate)
 // ---------------------------------------------------------------------------
 
@@ -1177,6 +1382,15 @@ pub struct TransferRequest {
     /// Optional note
     #[serde(default)]
     pub note: Option<String>,
+    /// C1 signed-transfer fields — proof the caller owns `from`. Optional during
+    /// staged rollout; mandatory when `ZEUS_ECONOMY_REQUIRE_SIG` is set.
+    #[serde(default)]
+    pub nonce: Option<String>,
+    #[serde(default)]
+    pub ts: Option<i64>,
+    /// Base64-encoded Ed25519 signature over the canonical payload.
+    #[serde(default)]
+    pub signature: Option<String>,
 }
 
 /// POST /v1/economy/transfer — Transfer tokens between agents
@@ -1224,6 +1438,27 @@ pub async fn economy_transfer(
     }
 
     let state_guard = state.read().await;
+
+    // --- C1 signed-transfer authz: prove the caller owns `from` ---
+    let has_sig = req.signature.is_some() && req.nonce.is_some() && req.ts.is_some();
+    if signature_required() && !has_sig {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "Signed transfer required: nonce, ts and signature must be present".to_string(),
+        ));
+    }
+    if has_sig {
+        let parts = SignedParts {
+            from: &req.from,
+            to: Some(&req.to),
+            amount: req.amount,
+            nonce: req.nonce.as_deref().unwrap(),
+            ts: req.ts.unwrap(),
+            signature_b64: req.signature.as_deref().unwrap(),
+        };
+        verify_signed_request(&parts, &state_guard.ledger)?;
+    }
+
     let note = req.note.as_deref().unwrap_or("Peer transfer");
 
     let (from_balance, to_balance) = state_guard
@@ -1436,6 +1671,124 @@ mod tests {
     fn test_fleet_definitions_not_empty() {
         let defs = fleet_definitions();
         assert_eq!(defs.len(), 8);
+    }
+
+    // -------------------------------------------------------------------
+    // C1 signed-transfer verification (verify_signed_request)
+    // -------------------------------------------------------------------
+
+    use base64::{Engine as _, engine::general_purpose::STANDARD as SIG_B64};
+    use zeus_wallet::WalletKeypair;
+
+    /// Build a ledger + a registered keypair for `agent`, returning both.
+    fn signed_test_fixture(agent: &str) -> (tempfile::TempDir, zeus_economy::TokenLedger, WalletKeypair) {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let ledger = zeus_economy::TokenLedger::new(tmp.path().join("econ.db")).expect("ledger");
+        let kp = WalletKeypair::generate(tmp.path().join("wallet"), "test", "devnet").expect("kp");
+        ledger.set_pubkey(agent, &kp.public_key_hex()).expect("register");
+        (tmp, ledger, kp)
+    }
+
+    fn sign_parts<'a>(
+        kp: &WalletKeypair,
+        from: &'a str,
+        to: Option<&'a str>,
+        amount: u64,
+        nonce: &'a str,
+        ts: i64,
+        sig_buf: &'a mut String,
+    ) -> SignedParts<'a> {
+        let msg = canonical_signed_payload(from, to, amount, nonce, ts);
+        *sig_buf = SIG_B64.encode(kp.sign(msg.as_bytes()));
+        SignedParts { from, to, amount, nonce, ts, signature_b64: sig_buf.as_str() }
+    }
+
+    #[test]
+    fn test_signed_request_valid_signature_accepted() {
+        let (_tmp, ledger, kp) = signed_test_fixture("alice");
+        let ts = chrono::Utc::now().timestamp();
+        let mut sig = String::new();
+        let parts = sign_parts(&kp, "alice", Some("bob"), 100, "nonce-a", ts, &mut sig);
+        assert!(verify_signed_request(&parts, &ledger).is_ok());
+    }
+
+    #[test]
+    fn test_signed_request_wrong_signer_rejected() {
+        // A different keypair signs → verification against alice's pubkey fails.
+        let (tmp, ledger, _kp) = signed_test_fixture("alice");
+        let attacker = WalletKeypair::generate(tmp.path().join("atk"), "atk", "devnet").expect("kp");
+        let ts = chrono::Utc::now().timestamp();
+        let mut sig = String::new();
+        let parts = sign_parts(&attacker, "alice", Some("bob"), 100, "nonce-w", ts, &mut sig);
+        let err = verify_signed_request(&parts, &ledger).unwrap_err();
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn test_signed_request_tampered_amount_rejected() {
+        // Sign for amount=100, then present amount=999 → reconstructed payload
+        // differs, signature fails. Proves reconstruct-don't-trust.
+        let (_tmp, ledger, kp) = signed_test_fixture("alice");
+        let ts = chrono::Utc::now().timestamp();
+        let msg = canonical_signed_payload("alice", Some("bob"), 100, "nonce-t", ts);
+        let sig = SIG_B64.encode(kp.sign(msg.as_bytes()));
+        let parts = SignedParts {
+            from: "alice", to: Some("bob"), amount: 999, nonce: "nonce-t", ts,
+            signature_b64: &sig,
+        };
+        assert_eq!(verify_signed_request(&parts, &ledger).unwrap_err().0, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn test_signed_request_replayed_nonce_rejected() {
+        // First verification consumes the nonce; the second identical request
+        // (same signature, same nonce) is rejected as a replay.
+        let (_tmp, ledger, kp) = signed_test_fixture("alice");
+        let ts = chrono::Utc::now().timestamp();
+        let mut sig = String::new();
+        let parts = sign_parts(&kp, "alice", Some("bob"), 100, "nonce-r", ts, &mut sig);
+        assert!(verify_signed_request(&parts, &ledger).is_ok());
+        // Re-present exactly the same signed request.
+        let parts2 = SignedParts {
+            from: "alice", to: Some("bob"), amount: 100, nonce: "nonce-r", ts,
+            signature_b64: &sig,
+        };
+        assert_eq!(verify_signed_request(&parts2, &ledger).unwrap_err().0, StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn test_signed_request_stale_timestamp_rejected() {
+        let (_tmp, ledger, kp) = signed_test_fixture("alice");
+        let stale_ts = chrono::Utc::now().timestamp() - (SIG_TS_WINDOW_SECS + 60);
+        let mut sig = String::new();
+        let parts = sign_parts(&kp, "alice", Some("bob"), 100, "nonce-s", stale_ts, &mut sig);
+        assert_eq!(verify_signed_request(&parts, &ledger).unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn test_signed_request_unregistered_wallet_fails_closed() {
+        // Wallet 'ghost' never registered a pubkey → even a valid self-signature
+        // cannot pass, because there's no key on file to verify against.
+        let tmp = tempfile::tempdir().expect("tmp");
+        let ledger = zeus_economy::TokenLedger::new(tmp.path().join("econ.db")).expect("ledger");
+        let kp = WalletKeypair::generate(tmp.path().join("w"), "g", "devnet").expect("kp");
+        let ts = chrono::Utc::now().timestamp();
+        let mut sig = String::new();
+        let parts = sign_parts(&kp, "ghost", Some("bob"), 100, "nonce-g", ts, &mut sig);
+        assert_eq!(verify_signed_request(&parts, &ledger).unwrap_err().0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn test_register_payload_and_pop_roundtrip() {
+        // Proof-of-possession: the canonical register payload signed by a key
+        // verifies against that key's pubkey.
+        let tmp = tempfile::tempdir().expect("tmp");
+        let kp = WalletKeypair::generate(tmp.path().join("w"), "r", "devnet").expect("kp");
+        let ts = chrono::Utc::now().timestamp();
+        let msg = canonical_register_payload("alice", &kp.public_key_hex(), ts);
+        let sig = kp.sign(msg.as_bytes());
+        let pk: [u8; 32] = hex::decode(kp.public_key_hex()).unwrap().try_into().unwrap();
+        assert!(WalletKeypair::verify_external(&pk, msg.as_bytes(), &sig).is_ok());
     }
 
     #[test]

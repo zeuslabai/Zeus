@@ -49,11 +49,16 @@ fn press(app: &mut App, keys: &[KeyCode]) {
 /// everything else (incl. Voice's own ↑/↓ list at 13) step-advances on Right.
 fn goto_voice(app: &mut App) {
     let mut guard = 0;
-    while app.current_step < 13 {
-        if app.current_step == 3 { app.current_step += 1; app.on_step_enter(); continue; }        let s = app.current_step;
+    while app.current_step < 14 {
+        if app.current_step == 4 {
+            app.current_step += 1;
+            app.on_step_enter();
+            continue;
+        }
+        let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
-        } else if s == 6 || s == 8 || s == 9 || s == 11 {
+        } else if s == 7 || s == 9 || s == 10 || s == 12 {
             app.current_step += 1;
             app.on_step_enter();
         } else {
@@ -65,7 +70,7 @@ fn goto_voice(app: &mut App) {
         guard += 1;
         assert!(guard < 100, "goto_voice stalled");
     }
-    assert_eq!(app.current_step, 13, "failed to reach Voice (13)");
+    assert_eq!(app.current_step, 14, "failed to reach Voice (13)");
 }
 
 // ---- provider list ---------------------------------------------------------
@@ -76,10 +81,16 @@ fn voice_provider_list_is_real_zeus_tts_set() {
     goto_voice(&mut app);
     let f = render(&app);
     // Real set present.
-    assert!(f.contains("ElevenLabs"), "ElevenLabs (real) must be present");
+    assert!(
+        f.contains("ElevenLabs"),
+        "ElevenLabs (real) must be present"
+    );
     assert!(f.contains("OpenAI TTS"), "OpenAI TTS must be present");
     assert!(f.contains("Edge TTS"), "Edge TTS must replace Cartesia");
-    assert!(f.contains("Custom Endpoint"), "Custom Endpoint must be present");
+    assert!(
+        f.contains("Custom Endpoint"),
+        "Custom Endpoint must be present"
+    );
     assert!(f.contains("Skip"), "Skip must be present");
     // Glyphs.
     assert!(f.contains("11L"), "ElevenLabs glyph 11L");
@@ -98,7 +109,10 @@ fn voice_credentials_panel_renders_for_api_provider() {
     goto_voice(&mut app);
     // Default selection = ElevenLabs (index 0, ≠ Skip) → credentials show.
     let f = render(&app);
-    assert!(f.contains("CREDENTIALS"), "CREDENTIALS label for non-Skip provider");
+    assert!(
+        f.contains("CREDENTIALS"),
+        "CREDENTIALS label for non-Skip provider"
+    );
     assert!(f.contains("API Key"), "API Key field");
     assert!(f.contains("Voice ID"), "Voice ID field");
     assert!(f.contains("TEST VOICE"), "▸ TEST VOICE button");
@@ -128,7 +142,10 @@ fn voice_api_key_masks_char_safe_last4() {
     // Focus is on API Key (field 0, secret). Type a known secret.
     press(
         &mut app,
-        &"sk-SECRET1234".chars().map(KeyCode::Char).collect::<Vec<_>>(),
+        &"sk-SECRET1234"
+            .chars()
+            .map(KeyCode::Char)
+            .collect::<Vec<_>>(),
     );
     let f = render(&app);
     // ***{last4} shape → "***1234"; raw secret must NOT leak.
@@ -147,10 +164,16 @@ fn voice_multibyte_secret_no_panic() {
         &"café→世界🔱".chars().map(KeyCode::Char).collect::<Vec<_>>(),
     );
     let f = render(&app);
-    assert!(!f.trim().is_empty(), "multibyte secret must not panic render");
+    assert!(
+        !f.trim().is_empty(),
+        "multibyte secret must not panic render"
+    );
     // last-4 chars = "界🔱" tail (we don't assert exact glyphs, just no leak +
     // the *** prefix present).
-    assert!(f.contains("***"), "masked prefix present for multibyte secret");
+    assert!(
+        f.contains("***"),
+        "masked prefix present for multibyte secret"
+    );
 }
 
 #[test]
@@ -175,7 +198,10 @@ fn voice_skip_shows_no_voice_warning() {
         &[KeyCode::Down, KeyCode::Down, KeyCode::Down, KeyCode::Down],
     );
     let f = render(&app);
-    assert!(f.contains("NO VOICE CONFIGURED"), "Skip → ⚠ NO VOICE CONFIGURED box");
+    assert!(
+        f.contains("NO VOICE CONFIGURED"),
+        "Skip → ⚠ NO VOICE CONFIGURED box"
+    );
     // The credentials panel must NOT show for Skip.
     assert!(!f.contains("TEST VOICE"), "no TEST VOICE button on Skip");
 }
@@ -188,7 +214,10 @@ fn voice_down_selects_not_step() {
     goto_voice(&mut app);
     let before = app.current_step;
     press(&mut app, &[KeyCode::Down]);
-    assert_eq!(app.current_step, before, "↓ selects provider, does NOT step-nav");
+    assert_eq!(
+        app.current_step, before,
+        "↓ selects provider, does NOT step-nav"
+    );
 }
 
 #[test]
@@ -199,7 +228,11 @@ fn voice_right_step_advances_not_grid() {
     goto_voice(&mut app);
     let before = app.current_step;
     app.handle_key(KeyCode::Right);
-    assert_eq!(app.current_step, before + 1, "Right advances step (no ←/→ grid)");
+    assert_eq!(
+        app.current_step,
+        before + 1,
+        "Right advances step (no ←/→ grid)"
+    );
 }
 
 #[test]

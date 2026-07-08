@@ -13,7 +13,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -282,20 +282,19 @@ where
 
             // Extract IP from ConnectInfo extension if available, then
             // normalize so IPv4-mapped IPv6 and plain IPv4 share one bucket.
+            // Only the socket peer can prove locality: do not trust forwarded
+            // headers, and treat missing peer metadata as non-local.
             let connect_ip = req
                 .extensions()
                 .get::<ConnectInfo<SocketAddr>>()
                 .map(|ci| normalize_ip(ci.0.ip()));
-            // Local TUI/WebUI/CLI/agent hit their own gateway on loopback — don't self-throttle.
-            if connect_ip.map(|ip| ip.is_loopback()).unwrap_or(false) {
-                req.extensions_mut().insert(limiter);
-                return inner.call(req).await;
-            }
-            let ip = connect_ip.unwrap_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+            let is_loopback_client = connect_ip.map(|ip| ip.is_loopback()).unwrap_or(false);
+            let ip = connect_ip.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
 
             let is_llm = is_llm_endpoint(&path);
+            let apply_llm_limit = is_llm && !is_loopback_client;
 
-            match limiter.try_acquire(ip, is_llm) {
+            match limiter.try_acquire(ip, apply_llm_limit) {
                 Ok(()) => {
                     req.extensions_mut().insert(limiter);
                     inner.call(req).await
@@ -641,6 +640,10 @@ mod tests {
                 .route("/", axum::routing::get(|| async { "health" }))
                 .route("/api/test", axum::routing::get(|| async { "test" }))
                 .route("/v1/chat", axum::routing::post(|| async { "llm endpoint" }))
+                .route(
+                    "/v1/chat/completions",
+                    axum::routing::post(|| async { "openai llm endpoint" }),
+                )
         }
 
         #[tokio::test]
@@ -761,7 +764,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_loopback_connect_info_exempt_from_rate_limit() {
+        async fn test_loopback_non_llm_still_obeys_global_limit() {
             let config = RateLimitConfig {
                 global_rpm: 1,
                 llm_rpm: 1,
@@ -771,18 +774,115 @@ mod tests {
             let limiter = HttpRateLimiter::new(config);
             let layer = RateLimitLayer::new(limiter);
             let app = test_router().await.layer(layer);
+            let local = ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242)));
 
-            // Real loopback ConnectInfo represents local TUI/WebUI/CLI traffic and
-            // should not self-throttle even beyond the configured limit.
-            for _ in 0..5 {
+            for expected in [StatusCode::OK, StatusCode::TOO_MANY_REQUESTS] {
                 let mut req = Request::builder()
                     .uri("/api/test")
+                    .body(Body::empty())
+                    .unwrap();
+                req.extensions_mut().insert(local);
+                let response = app.clone().oneshot(req).await.unwrap();
+                assert_eq!(response.status(), expected);
+            }
+        }
+
+        #[tokio::test]
+        async fn test_loopback_chat_completions_bypasses_llm_limit() {
+            let config = RateLimitConfig {
+                global_rpm: 600,
+                llm_rpm: 1,
+                burst_size: 0,
+                cleanup_interval_secs: 300,
+            };
+            let limiter = HttpRateLimiter::new(config);
+            let layer = RateLimitLayer::new(limiter);
+            let app = test_router().await.layer(layer);
+
+            for _ in 0..5 {
+                let mut req = Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
                     .body(Body::empty())
                     .unwrap();
                 req.extensions_mut()
                     .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4242))));
                 let response = app.clone().oneshot(req).await.unwrap();
                 assert_eq!(response.status(), 200);
+            }
+        }
+
+        #[tokio::test]
+        async fn test_remote_chat_completions_still_hits_llm_limit() {
+            let config = RateLimitConfig {
+                global_rpm: 600,
+                llm_rpm: 1,
+                burst_size: 0,
+                cleanup_interval_secs: 300,
+            };
+            let limiter = HttpRateLimiter::new(config);
+            let layer = RateLimitLayer::new(limiter);
+            let app = test_router().await.layer(layer);
+            let remote = ConnectInfo(SocketAddr::from(([203, 0, 113, 10], 4242)));
+
+            for expected in [StatusCode::OK, StatusCode::TOO_MANY_REQUESTS] {
+                let mut req = Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .body(Body::empty())
+                    .unwrap();
+                req.extensions_mut().insert(remote);
+                let response = app.clone().oneshot(req).await.unwrap();
+                assert_eq!(response.status(), expected);
+            }
+        }
+
+        #[tokio::test]
+        async fn test_missing_connect_info_is_not_local_for_llm_limit() {
+            let config = RateLimitConfig {
+                global_rpm: 600,
+                llm_rpm: 1,
+                burst_size: 0,
+                cleanup_interval_secs: 300,
+            };
+            let limiter = HttpRateLimiter::new(config);
+            let layer = RateLimitLayer::new(limiter);
+            let app = test_router().await.layer(layer);
+
+            for expected in [StatusCode::OK, StatusCode::TOO_MANY_REQUESTS] {
+                let req = Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .body(Body::empty())
+                    .unwrap();
+                let response = app.clone().oneshot(req).await.unwrap();
+                assert_eq!(response.status(), expected);
+            }
+        }
+
+        #[tokio::test]
+        async fn test_forwarded_loopback_header_cannot_spoof_local_llm_bypass() {
+            let config = RateLimitConfig {
+                global_rpm: 600,
+                llm_rpm: 1,
+                burst_size: 0,
+                cleanup_interval_secs: 300,
+            };
+            let limiter = HttpRateLimiter::new(config);
+            let layer = RateLimitLayer::new(limiter);
+            let app = test_router().await.layer(layer);
+            let remote = ConnectInfo(SocketAddr::from(([203, 0, 113, 10], 4242)));
+
+            for expected in [StatusCode::OK, StatusCode::TOO_MANY_REQUESTS] {
+                let mut req = Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("x-forwarded-for", "127.0.0.1")
+                    .body(Body::empty())
+                    .unwrap();
+                req.extensions_mut().insert(remote);
+                let response = app.clone().oneshot(req).await.unwrap();
+                assert_eq!(response.status(), expected);
             }
         }
 

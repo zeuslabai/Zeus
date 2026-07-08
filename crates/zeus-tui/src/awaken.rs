@@ -20,12 +20,6 @@
 /// the plain terminal where `zeus onboard` ran. stdout/stderr → log files;
 /// `setsid` (new session/process-group) detaches it from the dying parent.
 pub fn spawn_gateway_detached() {
-    // Port-check guard: never double-launch if a gateway is already serving.
-    if std::net::TcpStream::connect(("127.0.0.1", 8080)).is_ok() {
-        tracing::info!("AWAKEN: gateway already serving on :8080 — skipping launch");
-        return;
-    }
-
     let exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => {
@@ -33,6 +27,18 @@ pub fn spawn_gateway_detached() {
             return;
         }
     };
+
+    // #310: classic onboarding installed the native boot service (rc.d /
+    // systemd unit); the AWAKEN path must too, or the gateway dies with the
+    // box. Runs BEFORE the port guard on purpose — re-onboarding against an
+    // already-running gateway still needs boot persistence installed.
+    install_native_service(&exe);
+
+    // Port-check guard: never double-launch if a gateway is already serving.
+    if std::net::TcpStream::connect(("127.0.0.1", 8080)).is_ok() {
+        tracing::info!("AWAKEN: gateway already serving on :8080 — skipping launch");
+        return;
+    }
 
     let log_dir = dirs::home_dir().unwrap_or_default().join(".zeus").join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
@@ -75,5 +81,61 @@ pub fn spawn_gateway_detached() {
             child.id()
         ),
         Err(e) => eprintln!("AWAKEN: failed to spawn gateway: {e}"),
+    }
+}
+
+/// #310: install the native boot service by re-invoking the `zeus` binary's
+/// own `daemon install` subcommand (`src/daemon.rs`) as a child process.
+///
+/// Why a subprocess and not a direct call: the install logic lives in the
+/// root bin crate (platform-cfg'd rc.d/systemd/launchd handling, idempotent
+/// stale-script rewrite, sysrc enable) and is not linkable from this lib —
+/// and it's already the tested path `zeus daemon install` users hit directly.
+///
+/// Per-platform behavior (all non-interactive):
+/// - **FreeBSD**: writes `/usr/local/etc/rc.d/zeus_gateway`, chmod 755,
+///   `sysrc zeus_gateway_enable=YES`. Needs root for rc.d — on
+///   `PermissionDenied` the subcommand bails with the exact
+///   `sudo zeus daemon install` remediation, which we surface in the log.
+/// - **Linux**: writes the `zeus-gateway` systemd user unit +
+///   `systemctl --user daemon-reload`. No privilege needed.
+/// - **macOS**: `daemon install` is a guidance no-op (Dispatch 3 moved the
+///   system LaunchDaemon to `scripts/install.sh`, sudo-gated) — harmless.
+///
+/// Failures are logged, never fatal: the detached AWAKEN-B spawn still gives
+/// this session a live gateway; the service only adds boot persistence.
+fn install_native_service(exe: &std::path::Path) {
+    match std::process::Command::new(exe).args(["daemon", "install"]).output() {
+        Ok(out) if out.status.success() => {
+            tracing::info!(
+                "AWAKEN: native boot service installed (zeus daemon install): {}",
+                String::from_utf8_lossy(&out.stdout).trim().replace('\n', " | ")
+            );
+        }
+        Ok(out) => {
+            // Likely a privilege failure (rc.d needs root on FreeBSD). The
+            // TUI terminal is in raw mode so an interactive sudo prompt is
+            // impossible — but `sudo -n` (never-prompt) succeeds on NOPASSWD
+            // boxes and fails instantly everywhere else.
+            let retried = std::process::Command::new("sudo")
+                .args(["-n", &exe.to_string_lossy(), "daemon", "install"])
+                .output();
+            if let Ok(r) = retried
+                && r.status.success()
+            {
+                tracing::info!(
+                    "AWAKEN: native boot service installed via sudo -n: {}",
+                    String::from_utf8_lossy(&r.stdout).trim().replace('\n', " | ")
+                );
+                return;
+            }
+            tracing::warn!(
+                "AWAKEN: native service install failed ({}): {} {} — run `sudo zeus daemon install` to enable boot persistence",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim(),
+                String::from_utf8_lossy(&out.stdout).trim()
+            );
+        }
+        Err(e) => tracing::warn!("AWAKEN: could not run `zeus daemon install`: {e}"),
     }
 }

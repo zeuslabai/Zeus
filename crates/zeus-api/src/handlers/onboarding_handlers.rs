@@ -36,9 +36,32 @@ pub struct OnboardingSetupRequest {
     pub name: Option<String>,
     /// Ollama URL (only relevant when provider == "ollama")
     pub ollama_url: Option<String>,
+    /// Whether to use OAuth for Anthropic auth (set per chosen auth method)
+    pub use_oauth: Option<bool>,
+    /// Ordered fallback model list (provider/model strings)
+    pub fallback_models: Option<Vec<String>>,
+    /// Gateway configuration overrides
+    pub gateway: Option<OnboardingGatewayConfig>,
+    /// Voice/TTS provider id (e.g. "elevenlabs", "piper", "openai_tts", "none")
+    pub voice_provider: Option<String>,
+    /// Image generation provider id (e.g. "openai", "comfyui", "fooocus", "none")
+    pub image_gen_provider: Option<String>,
+    /// Embedding provider id for Mnemosyne (e.g. "ollama", "openai", "none")
+    pub embedding_provider: Option<String>,
+    /// Workspace directory path override
+    pub workspace_path: Option<String>,
     /// Mark onboarding complete after saving
     #[serde(default)]
     pub complete: bool,
+}
+
+/// Gateway config subset sent by the onboarding wizard.
+#[derive(Debug, Deserialize)]
+pub struct OnboardingGatewayConfig {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub timeout_secs: Option<u64>,
+    pub mentions_only: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -240,17 +263,37 @@ pub async fn onboarding_setup(
     let mut saved_keys: Vec<String> = Vec::new();
 
     // ── 1. API keys → credentials + env vars ─────────────────────────────────
+    // #312 batch①: mirror TUI's OAT-prefix detection (app.rs ~1358).
+    // OAuth tokens (sk-ant-oat* or use_oauth=true) route to
+    // `[provider_credentials.{provider}]` via set_oauth — the path the
+    // gateway's auth read-path consults for OAuth. Plain API keys go to
+    // `[credentials]` keyed by env_key.
     if let Some(keys) = &req.api_keys {
         for (provider, key) in keys {
             if key.is_empty() {
                 continue;
             }
-            // Store in config [credentials] section
             let env_key = provider_env_key(provider)
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| format!("{}_API_KEY", provider.to_uppercase()));
 
-            state.config.credentials.insert(env_key.clone(), key.clone());
+            // Detect OAuth tokens: explicit use_oauth flag OR OAT-prefix heuristic
+            let is_oauth = req.use_oauth.unwrap_or(false)
+                || key.starts_with("sk-ant-oat");
+
+            if is_oauth {
+                // Route to [provider_credentials.{provider}] — the gateway's
+                // OAuth auth read-path (zeus-llm branch-4).
+                let p = zeus_core::Provider::from_prefix(provider);
+                if !state.config.provider_credentials.set_oauth(p, key) {
+                    // Unknown provider for OAuth — fall back to credentials HashMap
+                    state.config.credentials.insert(env_key.clone(), key.clone());
+                }
+            } else {
+                // Plain API key → [credentials] HashMap (the gateway bridge
+                // exports these to process env at startup).
+                state.config.credentials.insert(env_key.clone(), key.clone());
+            }
 
             // #220: also store in CredentialVault (keychain/file) so the key
             // survives outside config.toml — mirrors POST /v1/credentials (#219).
@@ -261,6 +304,126 @@ pub async fn onboarding_setup(
             // Inject into process environment so llm clients pick it up immediately
             unsafe { std::env::set_var(&env_key, key); }
             saved_keys.push(env_key);
+        }
+    }
+
+    // ── 1b. Persist use_oauth per the auth method actually chosen ─────────────
+    // #313 follow-up: the WebUI sends use_oauth=true when the user authenticated
+    // via OAuth (auth_types["anthropic"] == "oauth_token"), false for API key.
+    // Without this, config.auth.use_oauth stays at its default (false) even when
+    // the user chose OAuth, causing the S97 guard to inject the wrong credential.
+    if let Some(use_oauth) = req.use_oauth {
+        state.config.auth.use_oauth = use_oauth;
+    }
+
+    // ── 1c. Fallback models ───────────────────────────────────────────────────
+    // #312 batch①: WebUI sends fallback_models as a JSON array of "provider/model"
+    // strings. Persist to config.fallback_models (mirrors TUI app.rs ~1076).
+    if let Some(fallbacks) = &req.fallback_models {
+        if fallbacks.is_empty() {
+            state.config.fallback_models = None;
+        } else {
+            state.config.fallback_models = Some(fallbacks.clone());
+        }
+    }
+
+    // ── 1d. Gateway config ────────────────────────────────────────────────────
+    // #312 batch①: WebUI sends gateway host/port/timeout/mentions_only.
+    // Persist to config.gateway (mirrors TUI gateway_screen fields).
+    if let Some(gw) = &req.gateway {
+        let gateway = state.config.gateway.get_or_insert_with(Default::default);
+        if let Some(host) = &gw.host {
+            if !host.is_empty() {
+                gateway.host = host.clone();
+            }
+        }
+        if let Some(port) = gw.port {
+            if port > 0 {
+                gateway.port = port;
+            }
+        }
+        if let Some(timeout) = gw.timeout_secs {
+            if timeout > 0 {
+                gateway.timeout_secs = timeout;
+            }
+        }
+        if let Some(mentions) = gw.mentions_only {
+            gateway.mentions_only = mentions;
+        }
+    }
+
+    // ── 1e. Voice / TTS provider ──────────────────────────────────────────────
+    // #312 batch②: WebUI sends voice_provider (e.g. "elevenlabs", "piper",
+    // "openai_tts", "none"). Persist to config.voice — mirrors TUI
+    // app.rs:1122-1133 voice screen handling.
+    if let Some(voice_id) = &req.voice_provider {
+        if !voice_id.is_empty() {
+            let voice = state.config.voice.get_or_insert_with(Default::default);
+            if voice_id == "none" {
+                voice.enabled = false;
+            } else {
+                voice.provider = Some(voice_id.clone());
+                voice.enabled = true;
+            }
+        }
+    }
+
+    // ── 1f. Image generation provider ─────────────────────────────────────────
+    // #312 batch②: WebUI sends image_gen_provider (e.g. "openai", "comfyui",
+    // "fooocus", "a1111", "openai-custom", "none"). Persist to config.image_gen
+    // — mirrors TUI app.rs:1135-1151 image screen handling.
+    if let Some(img_id) = &req.image_gen_provider {
+        if !img_id.is_empty() && img_id != "none" {
+            use zeus_core::ImageGenProviderType;
+            let provider = match img_id.as_str() {
+                "openai" => Some(ImageGenProviderType::OpenAi),
+                "comfyui" => Some(ImageGenProviderType::ComfyUi),
+                "fooocus" => Some(ImageGenProviderType::Fooocus),
+                "a1111" => Some(ImageGenProviderType::Automatic1111),
+                "openai-custom" => Some(ImageGenProviderType::OpenAiCompatible),
+                _ => None,
+            };
+            if let Some(p) = provider {
+                state.config.image_gen.get_or_insert_with(Default::default).provider = p;
+            }
+        }
+    }
+
+    // ── 1g. Embedding provider (Mnemosyne) ────────────────────────────────────
+    // #312 batch②: WebUI sends embedding_provider (e.g. "ollama", "openai",
+    // "none"). Persist to config.mnemosyne — mirrors TUI app.rs:1155-1168
+    // memory screen handling.
+    if let Some(emb_id) = &req.embedding_provider {
+        if !emb_id.is_empty() && emb_id != "none" {
+            use zeus_core::EmbeddingProvider;
+            let provider = match emb_id.as_str() {
+                "ollama" => Some(EmbeddingProvider::Ollama),
+                "openai" => Some(EmbeddingProvider::OpenAI),
+                "gemini" => Some(EmbeddingProvider::Gemini),
+                "voyage" => Some(EmbeddingProvider::Voyage),
+                _ => None,
+            };
+            if let Some(p) = provider {
+                let mn = state.config.mnemosyne.get_or_insert_with(Default::default);
+                mn.enable_embeddings = true;
+                mn.embedding_providers = vec![p];
+            }
+        }
+    }
+
+    // ── 1h. Workspace path ────────────────────────────────────────────────────
+    // #312 batch②: WebUI sends workspace_path. Persist to config.workspace —
+    // mirrors TUI app.rs ~workspace screen handling.
+    if let Some(ws) = &req.workspace_path {
+        if !ws.is_empty() {
+            let expanded = if ws.starts_with('~') {
+                dirs::home_dir()
+                    .unwrap_or_default()
+                    .join(ws.trim_start_matches("~/"))
+            } else {
+                std::path::PathBuf::from(ws)
+            };
+            state.config.workspace = expanded;
         }
     }
 

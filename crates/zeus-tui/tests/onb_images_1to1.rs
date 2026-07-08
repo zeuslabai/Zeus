@@ -49,11 +49,16 @@ fn press(app: &mut App, keys: &[KeyCode]) {
 /// grids, so the helper must clear them or the walk hangs (the cross-screen rule).
 fn goto_images(app: &mut App) {
     let mut guard = 0;
-    while app.current_step < 14 {
-        if app.current_step == 3 { app.current_step += 1; app.on_step_enter(); continue; }        let s = app.current_step;
+    while app.current_step < 15 {
+        if app.current_step == 4 {
+            app.current_step += 1;
+            app.on_step_enter();
+            continue;
+        }
+        let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
-        } else if s == 6 || s == 8 || s == 9 || s == 11 {
+        } else if s == 7 || s == 9 || s == 10 || s == 12 {
             app.current_step += 1;
             app.on_step_enter();
         } else {
@@ -65,7 +70,7 @@ fn goto_images(app: &mut App) {
         guard += 1;
         assert!(guard < 100, "goto_images stalled at step {s}");
     }
-    assert_eq!(app.current_step, 14, "failed to reach Images (step 14)");
+    assert_eq!(app.current_step, 15, "failed to reach Images (step 14)");
 }
 
 // ---- tests -----------------------------------------------------------------
@@ -77,11 +82,17 @@ fn images_provider_set_is_real_talos_backends() {
     // Default selection = OpenAI (index 0) — header shows it; the list shows all.
     let frame = render(&app);
     // The 5 real backends + Skip must all render in the LEFT provider list.
-    assert!(frame.contains("OpenAI GPT Image"), "OpenAI GPT Image missing");
+    assert!(
+        frame.contains("OpenAI GPT Image"),
+        "OpenAI GPT Image missing"
+    );
     assert!(frame.contains("Automatic1111"), "Automatic1111 missing");
     assert!(frame.contains("ComfyUI"), "ComfyUI missing");
     assert!(frame.contains("Fooocus"), "Fooocus missing");
-    assert!(frame.contains("OpenAI compat URL"), "OpenAI compat URL missing");
+    assert!(
+        frame.contains("OpenAI compat URL"),
+        "OpenAI compat URL missing"
+    );
     assert!(frame.contains("Skip"), "Skip missing");
 }
 
@@ -91,7 +102,10 @@ fn images_nanobanana_and_bfl_are_gone() {
     goto_images(&mut app);
     let frame = render(&app);
     // The stale JSX-mirrored providers must NOT appear anywhere.
-    assert!(!frame.contains("NanoBanana"), "NanoBanana must be swapped out");
+    assert!(
+        !frame.contains("NanoBanana"),
+        "NanoBanana must be swapped out"
+    );
     assert!(!frame.contains("BFL"), "BFL Flux must be swapped out");
     assert!(!frame.contains("flux"), "flux placeholder must be gone");
     assert!(!frame.contains("GCP"), "Google glyph must be gone");
@@ -106,7 +120,10 @@ fn images_a1111_steps_hint_verbatim() {
     goto_images(&mut app);
     // Select Automatic1111: from OpenAI(0) → ComfyUI → Fooocus → compat → a1111.
     // Down 4 times lands on a1111 (index 4).
-    press(&mut app, &[KeyCode::Down, KeyCode::Down, KeyCode::Down, KeyCode::Down]);
+    press(
+        &mut app,
+        &[KeyCode::Down, KeyCode::Down, KeyCode::Down, KeyCode::Down],
+    );
     let frame = render(&app);
     assert!(
         frame.contains("Automatic1111"),
@@ -160,10 +177,16 @@ fn images_secret_mask_is_last4_char_safe() {
     // OpenAI selected: fields = [API Key (secret), Model]. Focus is field 0.
     // Type a multibyte key — masking must NOT byte-slice (panic) and must show
     // ***{last4}.
-    press(&mut app, &"sk-café".chars().map(KeyCode::Char).collect::<Vec<_>>());
+    press(
+        &mut app,
+        &"sk-café".chars().map(KeyCode::Char).collect::<Vec<_>>(),
+    );
     let frame = render(&app);
     // ***{last4} of "sk-café" = "***café".
-    assert!(frame.contains("***café"), "secret must render as ***{{last4}}");
+    assert!(
+        frame.contains("***café"),
+        "secret must render as ***{{last4}}"
+    );
     // The full secret must NOT leak.
     assert!(
         !frame.contains("sk-café"),
@@ -204,24 +227,21 @@ fn images_skip_shows_no_config() {
 fn images_down_selects_not_step_and_right_advances() {
     let mut app = App::new();
     goto_images(&mut app);
-    assert_eq!(app.current_step, 14);
+    assert_eq!(app.current_step, 15);
     // Down moves selection within the vertical list — does NOT change the step.
     press(&mut app, &[KeyCode::Down]);
-    assert_eq!(app.current_step, 14, "Down must select, not step-nav");
+    assert_eq!(app.current_step, 15, "Down must select, not step-nav");
     // Right step-advances (Images is NOT a ←/→ grid).
     press(&mut app, &[KeyCode::Right]);
-    assert_eq!(app.current_step, 15, "Right must advance Images → step 15");
+    assert_eq!(app.current_step, 16, "Right must advance Images → step 15");
 }
 
 #[test]
 fn images_esc_backs_not_quit() {
     let mut app = App::new();
     goto_images(&mut app);
-    assert_eq!(app.current_step, 14);
+    assert_eq!(app.current_step, 15);
     app.handle_key(KeyCode::Esc);
     // ESC backs out one step (does not quit).
-    assert_eq!(app.current_step, 13, "Esc must back to step 13, not quit");
+    assert_eq!(app.current_step, 14, "Esc must back to step 13, not quit");
 }
-
-
-

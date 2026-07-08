@@ -597,6 +597,10 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway: Option<GatewayConfig>,
 
+    /// Logging configuration (levels, file sink, retention)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logging: Option<LoggingConfig>,
+
     /// Session compaction configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_compaction: Option<SessionCompactionConfig>,
@@ -2477,6 +2481,50 @@ fn default_rl_llm_rpm() -> u32 {
 }
 fn default_rl_burst_size() -> u32 {
     10
+}
+
+/// Logging configuration: `[logging]` section.
+///
+/// Controls the default tracing level for all Zeus workspace crates, the
+/// durable rotating file sink under `{zeus_home}/logs/`, and its retention.
+/// `RUST_LOG` always wins over these settings when set.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    /// Default level for stderr/console output: trace|debug|info|warn|error.
+    /// Overridden by `--verbose` (forces debug) and by `RUST_LOG`.
+    #[serde(default = "default_log_level")]
+    pub level: String,
+
+    /// Level for the rotating file sink (defaults to `level` when unset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_level: Option<String>,
+
+    /// Enable the rotating file sink under `{zeus_home}/logs/gateway.log` (default: true).
+    #[serde(default = "default_true")]
+    pub file_enabled: bool,
+
+    /// How many days of rotated daily log files to keep (default: 7).
+    #[serde(default = "default_log_retention_days")]
+    pub retention_days: u32,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            level: default_log_level(),
+            file_level: None,
+            file_enabled: true,
+            retention_days: default_log_retention_days(),
+        }
+    }
+}
+
+fn default_log_level() -> String {
+    "info".to_string()
+}
+
+fn default_log_retention_days() -> u32 {
+    7
 }
 
 /// Gateway configuration
@@ -5045,6 +5093,7 @@ impl Default for Config {
             council: None,
             search: Some(SearchConfig::default()),
             gateway: None,
+            logging: None,
             pantheon: None,
             star_office: None,
             session_compaction: Some(SessionCompactionConfig::default()),
@@ -5089,6 +5138,23 @@ impl Default for Config {
     }
 }
 
+/// Outcome of [`Config::persist_gateway_port_guarded`] (#311).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortPersist {
+    /// No config.toml on disk — nothing to persist into.
+    NoConfig,
+    /// On-disk port already matches (or there was nothing to rewrite).
+    NoChange,
+    /// Config had no explicit gateway port; the runtime port was recorded.
+    Persisted,
+    /// Config HAS an explicit port that differs from the runtime port.
+    /// The config was NOT touched — callers must log this loudly.
+    OverrideDetected {
+        /// The explicit port recorded in config.toml.
+        config_port: u16,
+    },
+}
+
 impl Config {
     /// Resolve the Zeus config directory.
     /// Checks `ZEUS_HOME` env var first (used by deploy scripts and tests),
@@ -5118,6 +5184,11 @@ impl Config {
     /// `[gateway]` table, preserving all comments and formatting. Idempotent:
     /// returns `Ok(false)` (no write) when the on-disk value already matches.
     ///
+    /// ⚠️ #311: prefer [`Config::persist_gateway_port_guarded`] — this
+    /// unguarded variant will overwrite an explicit on-disk port with
+    /// whatever the CLI/service passed, which is how a stale
+    /// `zeus_gateway_port` in rc.conf hijacked a fresh install's config.
+    ///
     /// Returns `Ok(true)` if the file was rewritten, `Ok(false)` if no change
     /// was needed.
     pub fn persist_gateway_port(real_port: u16) -> Result<bool> {
@@ -5132,6 +5203,101 @@ impl Config {
         }
         Self::atomic_write(&config_path, &updated)?;
         Ok(true)
+    }
+
+    /// #311 port-persist guard: persist the runtime port back to config.toml
+    /// **only when the config has no explicit `[gateway] port` yet**, and
+    /// report an override instead of silently rewriting when it does.
+    ///
+    /// Rationale: the unguarded persist treats whatever the CLI/service
+    /// passed as the source of truth. On the .224 install a stale
+    /// `zeus_gateway_port=3001` left in rc.conf by an old uninstall got fed
+    /// to `zeus gateway --port 3001`, which then *overwrote* the fresh
+    /// config.toml's `port = 8080` — the stale service var hijacked the new
+    /// install. With the guard, an existing explicit port is never clobbered;
+    /// the caller gets [`PortPersist::OverrideDetected`] and must log loudly.
+    pub fn persist_gateway_port_guarded(real_port: u16) -> Result<PortPersist> {
+        Self::persist_gateway_port_guarded_at(&Self::config_path()?, real_port)
+    }
+
+    /// Path-parameterized core of [`Config::persist_gateway_port_guarded`]
+    /// (separated for testability — no env mutation needed in tests).
+    pub fn persist_gateway_port_guarded_at(
+        config_path: &std::path::Path,
+        real_port: u16,
+    ) -> Result<PortPersist> {
+        if !config_path.exists() {
+            return Ok(PortPersist::NoConfig);
+        }
+        let content = std::fs::read_to_string(config_path)?;
+        match Self::gateway_port_in(&content) {
+            // Explicit port already recorded and matches — nothing to do.
+            Some(existing) if existing == real_port => Ok(PortPersist::NoChange),
+            // Explicit port differs — the runtime value is overriding the
+            // operator's config. Do NOT rewrite; surface it.
+            Some(existing) => Ok(PortPersist::OverrideDetected { config_port: existing }),
+            // No explicit port in [gateway] — first write wins; record it so
+            // the TUI/client probes the right port (#105 intent, kept).
+            None => {
+                let mut updated = Self::rewrite_gateway_port(&content, real_port);
+                if updated == content {
+                    // No active `port` key to rewrite — insert one right
+                    // after the [gateway] header if the table exists.
+                    updated = Self::insert_gateway_port(&content, real_port);
+                }
+                if updated == content {
+                    // No [gateway] table at all — nothing to record into.
+                    return Ok(PortPersist::NoChange);
+                }
+                Self::atomic_write(config_path, &updated)?;
+                Ok(PortPersist::Persisted)
+            }
+        }
+    }
+
+    /// Pure helper: insert `port = N` immediately after the `[gateway]`
+    /// header. Returns the input unchanged when no `[gateway]` table exists.
+    fn insert_gateway_port(content: &str, real_port: u16) -> String {
+        let mut out = String::with_capacity(content.len() + 16);
+        let mut inserted = false;
+        for line in content.lines() {
+            out.push_str(line);
+            out.push('\n');
+            if !inserted && line.trim_start().starts_with("[gateway]") {
+                out.push_str(&format!("port = {real_port}\n"));
+                inserted = true;
+            }
+        }
+        if !content.ends_with('\n') {
+            out.pop();
+        }
+        if inserted { out } else { content.to_string() }
+    }
+
+    /// Pure helper: read the explicit `port = N` value inside the `[gateway]`
+    /// table, ignoring comments and other tables. `None` when the config has
+    /// no explicit gateway port.
+    pub fn gateway_port_in(content: &str) -> Option<u16> {
+        let mut in_gateway = false;
+        for line in content.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with('[') {
+                in_gateway = trimmed.starts_with("[gateway]");
+                continue;
+            }
+            if in_gateway
+                && !trimmed.starts_with('#')
+                && let Some(eq) = trimmed.find('=')
+                && trimmed[..eq].trim() == "port"
+            {
+                let val = trimmed[eq + 1..].trim();
+                let val = val.split(&['#', ' ', '\t'][..]).next().unwrap_or(val);
+                if let Ok(p) = val.parse::<u16>() {
+                    return Some(p);
+                }
+            }
+        }
+        None
     }
 
     /// Pure helper: rewrite the `port = N` line within the `[gateway]` table.
@@ -8667,6 +8833,62 @@ mod sprint_tests {
         let j2 = serde_json::to_string(&c2).expect("should serialize to JSON");
         assert!(j2.contains("max_iterations"), "non-default max_iterations should be present");
     }
+    #[test]
+    fn test_gateway_port_in_reads_explicit_port() {
+        // #311: guard helper must see the explicit [gateway] port…
+        let c = "[gateway]\nhost = \"0.0.0.0\"\nport = 8080\n";
+        assert_eq!(Config::gateway_port_in(c), Some(8080));
+        // …with trailing comments…
+        let c2 = "[gateway]\nport = 3001  # custom\n";
+        assert_eq!(Config::gateway_port_in(c2), Some(3001));
+        // …but never a commented-out port, another table's port, or none.
+        assert_eq!(Config::gateway_port_in("[gateway]\n# port = 9999\n"), None);
+        assert_eq!(Config::gateway_port_in("[api]\nport = 7777\n"), None);
+        assert_eq!(Config::gateway_port_in("model = \"x\"\n"), None);
+    }
+
+    #[test]
+    fn test_persist_gateway_port_guarded_respects_explicit_port() {
+        // #311: an explicit on-disk port must never be clobbered by the
+        // runtime port (the stale-rc.conf hijack). Path-parameterized —
+        // no env mutation, real config untouched.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg = dir.path().join("config.toml");
+        std::fs::write(&cfg, "[gateway]\nport = 8080\n").expect("write");
+        // Differing runtime port → override reported, file untouched.
+        let r = Config::persist_gateway_port_guarded_at(&cfg, 3001).expect("guarded persist");
+        assert_eq!(r, PortPersist::OverrideDetected { config_port: 8080 });
+        let on_disk = std::fs::read_to_string(&cfg).expect("read");
+        assert!(on_disk.contains("port = 8080"), "explicit port must survive");
+        // Matching runtime port → no change.
+        let r2 = Config::persist_gateway_port_guarded_at(&cfg, 8080).expect("guarded persist");
+        assert_eq!(r2, PortPersist::NoChange);
+    }
+
+    #[test]
+    fn test_persist_gateway_port_guarded_fills_missing_port() {
+        // #311: when config has NO explicit port, first write wins.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg = dir.path().join("config.toml");
+        std::fs::write(&cfg, "[gateway]\nhost = \"0.0.0.0\"\n").expect("write");
+        // No `port` key → guarded persist records the runtime port.
+        let r = Config::persist_gateway_port_guarded_at(&cfg, 3001).expect("guarded persist");
+        assert_eq!(r, PortPersist::Persisted);
+        let on_disk = std::fs::read_to_string(&cfg).expect("read");
+        assert!(on_disk.contains("port = 3001"), "runtime port recorded");
+        assert!(on_disk.contains("host = \"0.0.0.0\""), "siblings preserved");
+        // No [gateway] table at all → nothing to record into.
+        let cfg2 = dir.path().join("config2.toml");
+        std::fs::write(&cfg2, "model = \"x\"\n").expect("write");
+        let r_no_table =
+            Config::persist_gateway_port_guarded_at(&cfg2, 3001).expect("guarded persist");
+        assert_eq!(r_no_table, PortPersist::NoChange);
+        // Missing config entirely → NoConfig.
+        let r2 = Config::persist_gateway_port_guarded_at(&dir.path().join("nope.toml"), 3001)
+            .expect("guarded persist");
+        assert_eq!(r2, PortPersist::NoConfig);
+    }
+
     #[test]
     fn test_rewrite_gateway_port_preserves_comments() {
         // #105 fix #1: surgical, comment-preserving port rewrite

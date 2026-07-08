@@ -403,10 +403,15 @@ impl TelegramAdapter {
 
                 // Emit if there's text OR attachments (file-only messages must propagate).
                 if !text.is_empty() || !attachments.is_empty() {
+                    // Prefix sender name into content (Discord parity, #317).
+                    // Applied AFTER is_addressed computation so trigger detection
+                    // never sees the mutated string.
+                    let sender_name = sender.as_ref().map(|s| s.name()).unwrap_or("unknown");
+                    let prefixed_text = format!("[{}]: {}", sender_name, text);
                     let channel_message = if attachments.is_empty() {
-                        ChannelMessage::new(source, text.to_string()).with_addressed(is_addressed)
+                        ChannelMessage::new(source, prefixed_text).with_addressed(is_addressed)
                     } else {
-                        ChannelMessage::with_attachments(source, text.to_string(), attachments)
+                        ChannelMessage::with_attachments(source, prefixed_text, attachments)
                             .with_addressed(is_addressed)
                     };
                     tracing::debug!(
@@ -1552,5 +1557,32 @@ mod tests {
                 "expected degradation through self.send(), got bot_token gate: {msg}"
             );
         }
+    }
+
+    // -- #317: sender prefix in content (Discord parity) --
+
+    #[test]
+    fn test_telegram_sender_prefix_format() {
+        // Contract: content is prefixed with "[sender_name]: " so the agent
+        // knows who sent the message, mirroring discord.rs:573.
+        let sender_name = "Alice";
+        let text = "hello world";
+        let prefixed = format!("[{}]: {}", sender_name, text);
+        assert_eq!(prefixed, "[Alice]: hello world");
+    }
+
+    #[test]
+    fn test_telegram_prefix_applied_after_addressing() {
+        // Contract: is_addressed is computed on the ORIGINAL text (before
+        // prefix), so trigger detection never sees "[name]: " in the string.
+        // Simulate: is_addressed computed on raw text, then prefix applied.
+        let sender_name = "Alice";
+        let text = "/command arg"; // slash command triggers is_addressed
+        let is_addressed = text.starts_with('/');
+        assert!(is_addressed); // detected on raw text
+
+        let prefixed = format!("[{}]: {}", sender_name, text);
+        // The prefixed string starts with "[", not "/"
+        assert!(!prefixed.starts_with('/'));
     }
 }

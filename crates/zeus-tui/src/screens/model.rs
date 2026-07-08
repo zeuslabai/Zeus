@@ -211,6 +211,28 @@ impl ModelScreen {
         self.models().get(self.selected).map(|m| m.id.as_ref()).unwrap_or("")
     }
 
+    /// Select a model by id when hydrating onboarding from an existing config.
+    /// If the configured model is absent from the static catalog, keep it as a
+    /// one-entry live catalog so pressing through onboarding is a no-op.
+    pub fn select_model_id(&mut self, model_id: &str) {
+        if model_id.is_empty() {
+            return;
+        }
+        if let Some(idx) = self.models().iter().position(|m| m.id.as_ref() == model_id) {
+            self.selected = idx;
+            return;
+        }
+        self.live_models = vec![ModelEntry {
+            id: Cow::Owned(model_id.to_string()),
+            name: Cow::Owned(model_id.to_string()),
+            ctx: Cow::Borrowed("configured"),
+            price: Cow::Borrowed("configured"),
+            recommended: true,
+            sub: Cow::Borrowed("Loaded from existing config"),
+        }];
+        self.selected = 0;
+    }
+
     /// Render the model screen into the given area.
     /// Matches JSX ModelStep after #271 parity:
     /// - Header: "Pick a model" + sub with provider name

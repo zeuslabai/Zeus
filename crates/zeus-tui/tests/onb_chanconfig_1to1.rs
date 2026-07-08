@@ -20,7 +20,9 @@ use crossterm::event::KeyCode;
 fn render(app: &App) -> String {
     let backend = TestBackend::new(120, 44);
     let mut terminal = Terminal::new(backend).expect("terminal");
-    terminal.draw(|f| frame(f, app)).expect("draw must not panic");
+    terminal
+        .draw(|f| frame(f, app))
+        .expect("draw must not panic");
     let buf = terminal.backend().buffer().clone();
     let mut out = String::new();
     for y in 0..buf.area.height {
@@ -35,7 +37,7 @@ fn render(app: &App) -> String {
 /// Put the app on the ChannelConfig step (7) with an explicit toggled set,
 /// bypassing the grid-nav of the Channels screen for deterministic content.
 fn chanconfig_with(app: &mut App, toggled: &[&str]) {
-    app.current_step = 7;
+    app.current_step = 8;
     app.chanconfig_screen.toggled = toggled.iter().map(|s| s.to_string()).collect();
     app.chanconfig_screen.field_cursor = 0;
     // Refocus onto the first focusable field of the new set.
@@ -50,13 +52,22 @@ fn header_pluralizes_channel_count() {
     let mut app = App::new();
     chanconfig_with(&mut app, &["telegram", "discord"]);
     let s = render(&app);
-    assert!(s.contains("Configure 2 channels"), "expected plural header:\n{s}");
+    assert!(
+        s.contains("Configure 2 channels"),
+        "expected plural header:\n{s}"
+    );
 
     let mut app1 = App::new();
     chanconfig_with(&mut app1, &["telegram"]);
     let s1 = render(&app1);
-    assert!(s1.contains("Configure 1 channel"), "expected singular header:\n{s1}");
-    assert!(!s1.contains("Configure 1 channels"), "singular must not have trailing 's'");
+    assert!(
+        s1.contains("Configure 1 channel"),
+        "expected singular header:\n{s1}"
+    );
+    assert!(
+        !s1.contains("Configure 1 channels"),
+        "singular must not have trailing 's'"
+    );
 }
 
 // ── State badges: QR PAIRING / APPLESCRIPT ───────────────────────────────────
@@ -68,21 +79,30 @@ fn phone_paired_channels_show_state_badges_and_info_lines() {
     let s = render(&app);
 
     // iMessage = AppleScript: cyan badge + ● macOS-bridge info line, no fields.
-    assert!(s.contains("APPLESCRIPT"), "iMessage must show APPLESCRIPT badge:\n{s}");
+    assert!(
+        s.contains("APPLESCRIPT"),
+        "iMessage must show APPLESCRIPT badge:\n{s}"
+    );
     assert!(
         s.contains("Uses native macOS bridge"),
         "iMessage must show the AppleScript info line:\n{s}"
     );
 
     // Signal = QR: amber badge + ⚠ QR info line, no fields.
-    assert!(s.contains("QR PAIRING"), "Signal must show QR PAIRING badge:\n{s}");
+    assert!(
+        s.contains("QR PAIRING"),
+        "Signal must show QR PAIRING badge:\n{s}"
+    );
     assert!(
         s.contains("Requires phone-side QR scan"),
         "Signal must show the QR info line:\n{s}"
     );
 
     // Credential-less channels must NOT render a SEND TEST button.
-    assert!(!s.contains("SEND TEST"), "imessage/signal have no test button:\n{s}");
+    assert!(
+        !s.contains("SEND TEST"),
+        "imessage/signal have no test button:\n{s}"
+    );
 }
 
 // ── sdk italic label renders ─────────────────────────────────────────────────
@@ -93,9 +113,15 @@ fn card_header_shows_name_and_sdk() {
     chanconfig_with(&mut app, &["telegram"]);
     let s = render(&app);
     assert!(s.contains("Telegram"), "card must show channel name:\n{s}");
-    assert!(s.contains("grammers MTProto"), "card must show sdk label:\n{s}");
+    assert!(
+        s.contains("grammers MTProto"),
+        "card must show sdk label:\n{s}"
+    );
     // Telegram has fields → SEND TEST button present.
-    assert!(s.contains("SEND TEST"), "credentialed channel must show SEND TEST:\n{s}");
+    assert!(
+        s.contains("SEND TEST"),
+        "credentialed channel must show SEND TEST:\n{s}"
+    );
 }
 
 // ── Secret masking: ***{last4}, char-safe ────────────────────────────────────
@@ -125,7 +151,10 @@ fn secret_masking_is_multibyte_safe() {
     }
     // Must not panic; last 4 chars are "café" (4 chars, 5 bytes).
     let s = render(&app);
-    assert!(s.contains("***café"), "multibyte last4 must render intact:\n{s}");
+    assert!(
+        s.contains("***café"),
+        "multibyte last4 must render intact:\n{s}"
+    );
 }
 
 #[test]
@@ -153,9 +182,10 @@ fn send_test_transitions_to_delivered_and_tested_badge() {
     app.chanconfig_screen
         .config_values
         .insert("telegram.api_id".to_string(), "12345678".to_string());
-    app.chanconfig_screen
-        .config_values
-        .insert("telegram.api_hash".to_string(), "abcdef0123456789".to_string());
+    app.chanconfig_screen.config_values.insert(
+        "telegram.api_hash".to_string(),
+        "abcdef0123456789".to_string(),
+    );
     app.chanconfig_screen
         .config_values
         .insert("telegram.phone".to_string(), "+15551234567".to_string());
@@ -163,8 +193,14 @@ fn send_test_transitions_to_delivered_and_tested_badge() {
     app.chanconfig_screen.focused_field = "test:telegram".to_string();
     app.handle_key(KeyCode::Enter);
     let s = render(&app);
-    assert!(s.contains("DELIVERED"), "after test, button reads DELIVERED:\n{s}");
-    assert!(s.contains("✓ TESTED"), "after test, header shows ✓ TESTED badge:\n{s}");
+    assert!(
+        s.contains("DELIVERED"),
+        "after test, button reads DELIVERED:\n{s}"
+    );
+    assert!(
+        s.contains("✓ TESTED"),
+        "after test, header shows ✓ TESTED badge:\n{s}"
+    );
     assert!(
         s.contains("Test message delivered to Telegram"),
         "success line must name the channel:\n{s}"
@@ -178,7 +214,10 @@ fn empty_toggled_shows_console_only_box() {
     let mut app = App::new();
     chanconfig_with(&mut app, &[]);
     let s = render(&app);
-    assert!(s.contains("Configure 0 channels"), "header counts zero:\n{s}");
+    assert!(
+        s.contains("Configure 0 channels"),
+        "header counts zero:\n{s}"
+    );
     assert!(
         s.contains("No channels selected"),
         "empty state must show console-only message:\n{s}"
@@ -193,5 +232,9 @@ fn esc_steps_back_not_quit() {
     chanconfig_with(&mut app, &["telegram"]);
     let before = app.current_step;
     app.handle_key(KeyCode::Esc);
-    assert_eq!(app.current_step, before - 1, "ESC backs out one step, not quit");
+    assert_eq!(
+        app.current_step,
+        before - 1,
+        "ESC backs out one step, not quit"
+    );
 }

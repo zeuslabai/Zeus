@@ -461,6 +461,30 @@ impl AgentScreen {
         self.persona_idx = 0;
     }
 
+    /// Select a persona by name when hydrating onboarding from an existing
+    /// config. Unknown persona names are preserved by adding a minimal entry so
+    /// completing onboarding does not reset them to the first default persona.
+    pub fn select_persona_name(&mut self, name: &str) {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        if let Some(idx) = self.personas.iter().position(|p| p.name == trimmed) {
+            self.persona_idx = idx;
+            return;
+        }
+        self.personas.push(Persona {
+            id: trimmed.to_lowercase().replace(' ', "-"),
+            name: trimmed.to_string(),
+            glyph: "◈".to_string(),
+            color: theme::CYAN,
+            sub: "Loaded from existing config".to_string(),
+            tone: default_tone_for(trimmed),
+            principles: Vec::new(),
+        });
+        self.persona_idx = self.personas.len() - 1;
+    }
+
     fn persona(&self) -> &Persona {
         &self.personas[self.persona_idx]
     }

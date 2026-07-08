@@ -18,7 +18,9 @@ use crossterm::event::KeyCode;
 fn render_lines(app: &App) -> Vec<String> {
     let backend = TestBackend::new(140, 44);
     let mut terminal = Terminal::new(backend).expect("terminal");
-    terminal.draw(|f| frame(f, app)).expect("draw must not panic");
+    terminal
+        .draw(|f| frame(f, app))
+        .expect("draw must not panic");
     let buf = terminal.backend().buffer().clone();
     let mut lines = Vec::with_capacity(buf.area.height as usize);
     for y in 0..buf.area.height {
@@ -36,8 +38,8 @@ fn render_lines(app: &App) -> Vec<String> {
 #[test]
 fn x_and_irc_survive_sync_into_chanconfig() {
     let mut app = App::new();
-    app.current_step = 6;
-    assert_eq!(app.current_step, 6, "land on Channels");
+    app.current_step = 7;
+    assert_eq!(app.current_step, 7, "land on Channels");
 
     // Channels default-selected = [discord(1), telegram(0)]. Navigate the grid
     // to irc (flat idx 4) and x_twitter (flat idx 5) and toggle them ON.
@@ -61,7 +63,7 @@ fn x_and_irc_survive_sync_into_chanconfig() {
 
     // Advance into ChannelConfig (step 7) — the real on_step_enter sync fires.
     app.advance_step();
-    assert_eq!(app.current_step, 7, "land on ChannelConfig");
+    assert_eq!(app.current_step, 8, "land on ChannelConfig");
 
     // The dropout claim: irc/x_twitter vanish here. Assert they DON'T.
     let toggled = &app.chanconfig_screen.toggled;
@@ -92,13 +94,13 @@ fn x_and_irc_survive_sync_into_chanconfig() {
 #[test]
 fn back_nav_resync_recaptures_x_twitter() {
     let mut app = App::new();
-    app.current_step = 6;
+    app.current_step = 7;
 
     // Advance to ChannelConfig with defaults, then back to Channels.
     app.advance_step();
-    assert_eq!(app.current_step, 7);
+    assert_eq!(app.current_step, 8);
     app.step_back();
-    assert_eq!(app.current_step, 6, "back on Channels");
+    assert_eq!(app.current_step, 7, "back on Channels");
 
     // Now toggle x_twitter ON (idx 5) and re-advance.
     for _ in 0..5 {
@@ -107,7 +109,7 @@ fn back_nav_resync_recaptures_x_twitter() {
     assert_eq!(app.channels_screen.focused, 5);
     app.handle_key(KeyCode::Char(' '));
     app.advance_step();
-    assert_eq!(app.current_step, 7);
+    assert_eq!(app.current_step, 8);
 
     assert!(
         app.chanconfig_screen
@@ -118,11 +120,10 @@ fn back_nav_resync_recaptures_x_twitter() {
     );
 }
 
-
 #[test]
 fn x_twitter_card_uses_official_credential_labels() {
     let mut app = App::new();
-    app.current_step = 6;
+    app.current_step = 7;
 
     for _ in 0..5 {
         app.handle_key(KeyCode::Right);
@@ -130,10 +131,12 @@ fn x_twitter_card_uses_official_credential_labels() {
     assert_eq!(app.channels_screen.focused, 5);
     app.handle_key(KeyCode::Char(' '));
     app.advance_step();
-    assert_eq!(app.current_step, 7);
+    assert_eq!(app.current_step, 8);
 
-    let full = render_lines(&app).join("
-");
+    let full = render_lines(&app).join(
+        "
+",
+    );
     for label in [
         "Bearer Token",
         "Consumer Key",
@@ -143,8 +146,17 @@ fn x_twitter_card_uses_official_credential_labels() {
         "OAuth 2.0 Client ID",
         "OAuth 2.0 Client Secret",
     ] {
-        assert!(full.contains(label), "X/Twitter label `{label}` must render");
+        assert!(
+            full.contains(label),
+            "X/Twitter label `{label}` must render"
+        );
     }
-    assert!(!full.contains("API Secret"), "old API Secret label must be gone");
-    assert!(!full.contains("Access Secret"), "old Access Secret label must be gone");
+    assert!(
+        !full.contains("API Secret"),
+        "old API Secret label must be gone"
+    );
+    assert!(
+        !full.contains("Access Secret"),
+        "old Access Secret label must be gone"
+    );
 }

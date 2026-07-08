@@ -190,7 +190,23 @@ impl ToolRegistry {
             schemas.extend(browser.schemas());
         }
         // Trigger schemas are already included in core_schemas (create_trigger, list_triggers, remove_trigger)
-        Self::dedup_schemas(schemas)
+        let mut schemas = Self::dedup_schemas(schemas);
+
+        // Channel self-visibility: mirror the live adapter list into the
+        // `message` tool description so the model knows which channels are
+        // actually reachable on THIS deployment (not the generic superset).
+        if let Some(ref channels) = self.channels {
+            let types = channels.configured_channel_types();
+            if !types.is_empty() {
+                if let Some(msg) = schemas.iter_mut().find(|s| s.name == "message") {
+                    msg.description.push_str(&format!(
+                        " Channels configured and live on this deployment: {}.",
+                        types.join(", ")
+                    ));
+                }
+            }
+        }
+        schemas
     }
 
     /// Deduplicate tool schemas by name, retaining the first occurrence.
@@ -4310,6 +4326,31 @@ mod tests {
         let mut reg = ToolRegistry::with_defaults();
         reg.set_channels(Arc::new(manager));
         (reg, sent)
+    }
+
+    // ── Channel self-visibility: message tool description mirrors live adapters ──
+
+    #[test]
+    fn test_message_schema_lists_live_channels() {
+        let (reg, _sent) = registry_with_x_recorder();
+        let schemas = reg.schemas();
+        let msg = schemas.iter().find(|s| s.name == "message").unwrap();
+        assert!(
+            msg.description.contains("Channels configured and live on this deployment: x_twitter"),
+            "message description must list live channels: {}",
+            msg.description
+        );
+    }
+
+    #[test]
+    fn test_message_schema_no_live_list_without_channels() {
+        let reg = ToolRegistry::with_defaults();
+        let schemas = reg.schemas();
+        let msg = schemas.iter().find(|s| s.name == "message").unwrap();
+        assert!(
+            !msg.description.contains("Channels configured and live"),
+            "no ChannelManager → no live-channel claim"
+        );
     }
 
     #[tokio::test]

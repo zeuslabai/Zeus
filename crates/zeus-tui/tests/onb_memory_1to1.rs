@@ -21,7 +21,7 @@ use zeus_tui::app::frame;
 
 use crossterm::event::KeyCode;
 
-const MEMORY_STEP: usize = 16;
+const MEMORY_STEP: usize = 17;
 
 /// Walk to the Memory step (16). Steps 1/6/8/9/11/15 consume Right for in-screen
 /// focus (grids), so we bump those directly — mirrors goto_step in onb_106b.
@@ -29,10 +29,15 @@ const MEMORY_STEP: usize = 16;
 fn goto_memory(app: &mut App) {
     let mut guard = 0;
     while app.current_step < MEMORY_STEP {
-        if app.current_step == 3 { app.current_step += 1; app.on_step_enter(); continue; }        let s = app.current_step;
+        if app.current_step == 4 {
+            app.current_step += 1;
+            app.on_step_enter();
+            continue;
+        }
+        let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
-        } else if s == 6 || s == 8 || s == 9 || s == 11 || s == 15 {
+        } else if s == 7 || s == 9 || s == 10 || s == 12 || s == 16 {
             app.current_step += 1;
             app.on_step_enter();
         } else {
@@ -95,7 +100,10 @@ fn memory_all_three_backends_present() {
     assert!(s.contains("OAI"), "missing OAI glyph\n{s}");
     assert!(s.contains("FTS"), "missing FTS glyph\n{s}");
     // Provider subs
-    assert!(s.contains("Local, free, private"), "missing ollama sub\n{s}");
+    assert!(
+        s.contains("Local, free, private"),
+        "missing ollama sub\n{s}"
+    );
     assert!(s.contains("Cloud, paid, fast"), "missing openai sub\n{s}");
     assert!(
         s.contains("No embeddings, full-text search only"),
@@ -115,7 +123,10 @@ fn memory_fts_default_badges() {
     // so the `● DETECTED` indicator renders (default `None` = "… PROBING").
     app.memory_screen.set_ollama_detected(true);
     let s = render(&mut app);
-    assert!(s.contains("★ REC"), "missing ★ REC (now on FTS-only default)\n{s}");
+    assert!(
+        s.contains("★ REC"),
+        "missing ★ REC (now on FTS-only default)\n{s}"
+    );
     assert!(
         s.contains("▸ SELECTED"),
         "missing ▸ SELECTED (now on FTS-only default)\n{s}"
@@ -170,7 +181,10 @@ fn memory_fts_only_hides_embedding_model() {
     // #258: FTS-only is now the DEFAULT selection — no nav needed.
     let s = render(&mut app);
     // FTS-only selected: DB Path stays, Embedding Model field is gone.
-    assert!(s.contains("DB Path"), "DB Path should remain for FTS-only\n{s}");
+    assert!(
+        s.contains("DB Path"),
+        "DB Path should remain for FTS-only\n{s}"
+    );
     assert!(
         !s.contains("Embedding Model"),
         "Embedding Model must be hidden for FTS-only\n{s}"
@@ -188,7 +202,10 @@ fn memory_disk_projection_rows() {
         s.contains("D I S K   P R O J E C T I O N"),
         "missing DISK PROJECTION header\n{s}"
     );
-    assert!(s.contains("1K facts") && s.contains("~12 MB"), "missing 1K row\n{s}");
+    assert!(
+        s.contains("1K facts") && s.contains("~12 MB"),
+        "missing 1K row\n{s}"
+    );
     assert!(
         s.contains("10K facts") && s.contains("~120 MB"),
         "missing 10K row\n{s}"
@@ -197,7 +214,10 @@ fn memory_disk_projection_rows() {
         s.contains("100K facts") && s.contains("~1.2 GB"),
         "missing 100K row\n{s}"
     );
-    assert!(s.contains("1M facts") && s.contains("~12 GB"), "missing 1M row\n{s}");
+    assert!(
+        s.contains("1M facts") && s.contains("~12 GB"),
+        "missing 1M row\n{s}"
+    );
 }
 
 #[test]

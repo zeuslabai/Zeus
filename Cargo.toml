@@ -124,6 +124,7 @@ anyhow = "1.0"
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2.5"
 
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
@@ -258,6 +259,7 @@ tokio-util = { workspace = true }
 dirs.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+tracing-appender.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 clap_complete.workspace = true

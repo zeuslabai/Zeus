@@ -39,8 +39,8 @@ fn render(app: &App) -> String {
 /// Navigate to the Provider step (index 2). Default `provider_selected` = 0
 /// (Anthropic), which is enough to drive the detail-panel + right-column render.
 fn goto_provider(app: &mut App) {
-    app.current_step = 2;
-    assert_eq!(app.current_step, 2, "should land on Provider (step 2)");
+    app.current_step = 3;
+    assert_eq!(app.current_step, 3, "should land on Provider (step 2)");
 }
 
 #[test]
@@ -70,14 +70,23 @@ fn provider_right_column_renders_hints_and_recommendations() {
     goto_provider(&mut app);
     let out = render(&app);
 
-    assert!(out.contains("HINTS"), "right column must render the HINTS header.\n{out}");
+    assert!(
+        out.contains("HINTS"),
+        "right column must render the HINTS header.\n{out}"
+    );
     assert!(
         out.contains("RECOMMENDATIONS"),
         "right column must render the RECOMMENDATIONS header.\n{out}"
     );
     // A couple of the recommendation rows (category → provider).
-    assert!(out.contains("Reasoning"), "RECOMMENDATIONS must list Reasoning.\n{out}");
-    assert!(out.contains("Anthropic"), "RECOMMENDATIONS must name Anthropic.\n{out}");
+    assert!(
+        out.contains("Reasoning"),
+        "RECOMMENDATIONS must list Reasoning.\n{out}"
+    );
+    assert!(
+        out.contains("Anthropic"),
+        "RECOMMENDATIONS must name Anthropic.\n{out}"
+    );
 }
 
 #[test]

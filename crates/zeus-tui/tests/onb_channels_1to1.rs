@@ -68,8 +68,8 @@ fn render(app: &App) -> String {
 /// real Channels render + key handlers without fighting each intermediate
 /// screen's idiom.
 fn goto_channels(app: &mut App) {
-    app.current_step = 6;
-    assert_eq!(app.current_step, 6, "should land on Channels (step 6)");
+    app.current_step = 7;
+    assert_eq!(app.current_step, 7, "should land on Channels");
 }
 
 /// Index of the screen row that contains `needle`, if any.
@@ -138,8 +138,14 @@ fn channels_two_col_grid_first_row_shares_a_line() {
     // Slack + Email are grid-row 1 → also share a row, below row 0.
     let sl = row_of(&lines, "Slack").expect("Slack card");
     let em = row_of(&lines, "Email").expect("Email card");
-    assert_eq!(sl, em, "Slack and Email are grid-row 1 → must share one screen row");
-    assert!(sl > tg, "Slack/Email row must be below Telegram/Discord row");
+    assert_eq!(
+        sl, em,
+        "Slack and Email are grid-row 1 → must share one screen row"
+    );
+    assert!(
+        sl > tg,
+        "Slack/Email row must be below Telegram/Discord row"
+    );
 }
 
 #[test]
@@ -210,14 +216,14 @@ fn channels_right_left_move_grid_focus_not_step() {
     // → must NOT advance the step (it moves grid focus instead).
     app.handle_key(KeyCode::Right);
     assert_eq!(
-        app.current_step, 6,
+        app.current_step, 7,
         "→ on Channels must move grid focus, NOT advance the step"
     );
 
     // ← must NOT go back a step either.
     app.handle_key(KeyCode::Left);
     assert_eq!(
-        app.current_step, 6,
+        app.current_step, 7,
         "← on Channels must move grid focus, NOT step back"
     );
 }
@@ -230,8 +236,8 @@ fn channels_esc_backs_out_not_quit() {
     // ESC = back one step (to Fallback, step 5) — must NOT quit the app.
     app.handle_key(KeyCode::Esc);
     assert_eq!(
-        app.current_step, 5,
-        "ESC on Channels must back out to Fallback (step 5), not quit"
+        app.current_step, 6,
+        "ESC on Channels must back out to Fallback, not quit"
     );
 }
 
@@ -271,14 +277,15 @@ fn channels_includes_irc_and_x_under_cloud_apis() {
     );
 }
 
-
 #[test]
 fn channels_100x30_render_dump() {
     let mut app = App::new();
     goto_channels(&mut app);
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).expect("terminal");
-    terminal.draw(|f| frame(f, &app)).expect("draw must not panic");
+    terminal
+        .draw(|f| frame(f, &app))
+        .expect("draw must not panic");
     let buf = terminal.backend().buffer().clone();
     let mut out = String::new();
     for y in 0..buf.area.height {
@@ -290,14 +297,15 @@ fn channels_100x30_render_dump() {
     eprintln!("\n--- CHANNELS 100x30 ---\n{out}\n--- END CHANNELS 100x30 ---");
 }
 
-
 #[test]
 fn channels_100x30_uses_single_header_and_clean_footer() {
     let mut app = App::new();
     goto_channels(&mut app);
     let lines = render_lines_at(&app, 100, 30);
-    let s = lines.join("
-");
+    let s = lines.join(
+        "
+",
+    );
 
     assert_eq!(
         s.matches("Pick messaging channels").count(),

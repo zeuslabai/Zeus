@@ -33,6 +33,7 @@ zeus-prometheus = { path = "../zeus-prometheus" }
 zeus-nous.workspace = true
 zeus-extensions = { path = "../zeus-extensions" }
 zeus-economy = { path = "../zeus-economy" }
+zeus-wallet.workspace = true
 zeus-marketplace = { path = "../zeus-marketplace" }
 zeus-agora = { path = "../zeus-agora" }
 zeus-solana = { path = "../zeus-solana" }

@@ -306,6 +306,15 @@ fn compute_is_addressed(
 #[async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, _ctx: Context, ready: Ready) {
+        // P2 observability: stable greppable adapter-lifecycle line (fires on
+        // every gateway READY, i.e. genuine connection, not just task spawn).
+        tracing::info!(
+            target: "adapter",
+            channel = "discord",
+            event = "connected",
+            bot = %ready.user.name,
+            "adapter connected"
+        );
         tracing::info!(
             "Discord bot connected as {}#{}",
             ready.user.name,
@@ -1203,6 +1212,10 @@ impl ChannelAdapter for DiscordAdapter {
             const STABLE_CONNECTION_THRESHOLD: std::time::Duration =
                 std::time::Duration::from_secs(30);
             let mut backoff_ms = BACKOFF_INITIAL_MS;
+            // P2 observability: monotonic reconnect counter for `n=N` in the
+            // stable `adapter` target lines. Never reset — it counts total
+            // reconnect cycles over the adapter's lifetime.
+            let mut reconnect_count: u64 = 0;
 
             loop {
                 // Rebuild handler for this connection iteration.
@@ -1247,6 +1260,14 @@ impl ChannelAdapter for DiscordAdapter {
                             }
                         }
                         backoff_ms = (backoff_ms.saturating_mul(2)).min(BACKOFF_MAX_MS);
+                        // P2 observability: stable greppable adapter-lifecycle line.
+                        tracing::info!(
+                            target: "adapter",
+                            channel = "discord",
+                            event = "reconnect",
+                            n = reconnect_count,
+                            "adapter reconnecting"
+                        );
                         continue;
                     }
                 };
@@ -1265,6 +1286,16 @@ impl ChannelAdapter for DiscordAdapter {
                         connected.store(false, Ordering::SeqCst);
                         let connection_duration = connect_started_at.elapsed();
                         let was_stable = connection_duration >= STABLE_CONNECTION_THRESHOLD;
+                        reconnect_count += 1;
+                        // P2 observability: stable greppable adapter-lifecycle line.
+                        tracing::info!(
+                            target: "adapter",
+                            channel = "discord",
+                            event = "dropped",
+                            n = reconnect_count,
+                            connection_duration_ms = connection_duration.as_millis() as u64,
+                            "adapter dropped"
+                        );
                         match result {
                             Ok(()) => {
                                 tracing::warn!(

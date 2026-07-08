@@ -148,15 +148,19 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    // Setup graceful shutdown
-    axum::serve(listener, router)
-        .with_graceful_shutdown(async {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("Failed to install Ctrl+C handler");
-            tracing::info!("Shutting down...");
-        })
-        .await?;
+    // Setup graceful shutdown. Preserve peer socket metadata so the rate limiter
+    // can distinguish loopback TUI/WebUI/CLI traffic from remote clients.
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+        tracing::info!("Shutting down...");
+    })
+    .await?;
 
     Ok(())
 }

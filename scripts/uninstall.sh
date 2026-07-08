@@ -178,19 +178,69 @@ case "$PLATFORM" in
             launchctl bootout "gui/$(id -u)" "$p" 2>/dev/null || true
             rm -f "$p" && { ok "Removed $(basename "$p")"; REMOVED=true; }
         done
+        # #311 parity: the installer's system-domain LaunchDaemon too.
+        SYS_PLIST="/Library/LaunchDaemons/com.zeus.gateway.plist"
+        if [ -f "$SYS_PLIST" ]; then
+            if dry "bootout + remove $SYS_PLIST"; then REMOVED=true; else
+                $SUDO launchctl bootout system "$SYS_PLIST" 2>/dev/null || true
+                $SUDO rm -f "$SYS_PLIST" && { ok "Removed system LaunchDaemon"; REMOVED=true; }
+            fi
+        fi
         $REMOVED || ok "No launchd service found"
         ;;
     FreeBSD)
-        RC="/usr/local/etc/rc.d/zeus_gateway"
-        if [ -f "$RC" ]; then
-            if dry "remove $RC + sysrc -x zeus_gateway_enable"; then :
+        # #311: remove EVERY zeus rc.d script (zeus_gateway + stale zeus-web /
+        # zeus_web variants) and purge ALL zeus_* rc.conf vars — a stale
+        # zeus_gateway_port/host left behind by sysrc can hijack the next
+        # fresh install's gateway config.
+        REMOVED=false
+        for RC in /usr/local/etc/rc.d/zeus_gateway \
+                  /usr/local/etc/rc.d/zeus-web \
+                  /usr/local/etc/rc.d/zeus_web; do
+            [ -f "$RC" ] || continue
+            if dry "remove $RC"; then REMOVED=true; continue; fi
+            $SUDO rm -f "$RC" || true
+            ok "Removed rc.d script ($(basename "$RC"))"
+            REMOVED=true
+        done
+        $REMOVED || ok "No rc.d scripts found"
+
+        # Purge all zeus_* rc.conf knobs (enable, port, host, user, home,
+        # config, logfile, pidfile, anthropic_key, …) for every service name.
+        ZEUS_VARS=$(sysrc -aN 2>/dev/null | grep -E '^zeus[_-]' || true)
+        if [ -n "$ZEUS_VARS" ]; then
+            if dry "sysrc -x: $(echo "$ZEUS_VARS" | tr '\n' ' ')"; then :
             else
-                $SUDO rm -f "$RC" || true
-                $SUDO sysrc -x zeus_gateway_enable >/dev/null 2>&1 || true
-                ok "Removed rc.d service (zeus_gateway)"
+                for v in $ZEUS_VARS; do
+                    $SUDO sysrc -x "$v" >/dev/null 2>&1 || true
+                done
+                ok "Purged rc.conf vars: $(echo "$ZEUS_VARS" | tr '\n' ' ')"
             fi
         else
-            ok "No rc.d service found"
+            ok "No zeus_* rc.conf vars found"
+        fi
+
+        # newsyslog rotation configs installed by the rc.d prestart
+        # (zeus_gateway + stale zeus-web variants)
+        for NSC in /usr/local/etc/newsyslog.conf.d/zeus_gateway.conf \
+                   /usr/local/etc/newsyslog.conf.d/zeus-web.conf \
+                   /usr/local/etc/newsyslog.conf.d/zeus_web.conf; do
+            [ -f "$NSC" ] || continue
+            if dry "remove $NSC"; then continue; fi
+            $SUDO rm -f "$NSC" || true
+            ok "Removed newsyslog config ($(basename "$NSC"))"
+        done
+
+        # #311: with --purge, also remove the service log sink (+ rotated
+        # archives) so a fresh install starts with a clean slate.
+        if $PURGE; then
+            if ls /var/log/zeus_gateway.log* >/dev/null 2>&1; then
+                if dry "remove /var/log/zeus_gateway.log*"; then :
+                else
+                    $SUDO rm -f /var/log/zeus_gateway.log* || true
+                    ok "Removed /var/log/zeus_gateway.log (+ rotated archives)"
+                fi
+            fi
         fi
         ;;
     Linux)

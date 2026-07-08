@@ -90,8 +90,11 @@ pub async fn spawn_web_server(
                 .route_service("/", spa_index)
                 .fallback_service(api_with_static);
             Some(tokio::spawn(async move {
-                axum::serve(listener, web_router)
-                    .with_graceful_shutdown(async move {
+                axum::serve(
+                    listener,
+                    web_router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                )
+                .with_graceful_shutdown(async move {
                         shutdown_token.cancelled().await
                     })
                     .await

@@ -20,18 +20,23 @@ use zeus_tui::app::frame;
 
 use crossterm::event::KeyCode;
 
-const SECURITY_STEP: usize = 11;
+const SECURITY_STEP: usize = 12;
 
 /// Walk to the Security step (11). Steps 1/6/8/9 consume Right for in-screen
 /// focus, so we bump those directly — mirrors goto_step in onb_106. Security
-/// itself is the target, so we stop AT it (no s==11 special-case needed here
+/// itself is the target, so we stop AT it (no s==12 special-case needed here
 /// since we never walk past it).
 fn goto_security(app: &mut App) {
     while app.current_step < SECURITY_STEP {
-        if app.current_step == 3 { app.current_step += 1; app.on_step_enter(); continue; }        let s = app.current_step;
+        if app.current_step == 4 {
+            app.current_step += 1;
+            app.on_step_enter();
+            continue;
+        }
+        let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
-        } else if s == 6 || s == 8 || s == 9 {
+        } else if s == 7 || s == 9 || s == 10 {
             app.current_step += 1;
             app.on_step_enter();
         } else {
@@ -41,7 +46,10 @@ fn goto_security(app: &mut App) {
             app.handle_key(KeyCode::Enter);
         }
     }
-    assert_eq!(app.current_step, SECURITY_STEP, "failed to reach Security step");
+    assert_eq!(
+        app.current_step, SECURITY_STEP,
+        "failed to reach Security step"
+    );
 }
 
 fn render(app: &mut App) -> String {
@@ -133,7 +141,10 @@ fn security_blocked_slices_first_three() {
     goto_security(&mut app);
     let s = render(&mut app);
     // first item should be present
-    assert!(s.contains("shell") || s.contains("✕"), "blocked items not rendered\n{s}");
+    assert!(
+        s.contains("shell") || s.contains("✕"),
+        "blocked items not rendered\n{s}"
+    );
     // 4th strict item is long + distinctive; with first-3 slice it shouldn't show.
     // (Standard's "fs_write outside workspace + home" is a different string.)
     assert!(
@@ -163,8 +174,14 @@ fn security_rec_badge_when_recommended_unselected() {
     // recommended-but-unselected → ★ REC shows.
     app.handle_key(KeyCode::Left);
     let s = render(&mut app);
-    assert!(s.contains("★ REC"), "missing ★ REC on unselected recommended card\n{s}");
-    assert!(s.contains("▸ SELECTED"), "▸ SELECTED should follow the new pick\n{s}");
+    assert!(
+        s.contains("★ REC"),
+        "missing ★ REC on unselected recommended card\n{s}"
+    );
+    assert!(
+        s.contains("▸ SELECTED"),
+        "▸ SELECTED should follow the new pick\n{s}"
+    );
 }
 
 // ── selected detail box + config write line ────────────────────────────────
@@ -175,7 +192,10 @@ fn security_selected_detail_box_and_config_line() {
     goto_security(&mut app);
     let s = render(&mut app);
     // Default = Standard.
-    assert!(s.contains("SELECTED: STANDARD"), "missing SELECTED: {{NAME}} box\n{s}");
+    assert!(
+        s.contains("SELECTED: STANDARD"),
+        "missing SELECTED: {{NAME}} box\n{s}"
+    );
     assert!(
         s.contains("[aegis] level ="),
         "missing config write preview\n{s}"
@@ -196,16 +216,28 @@ fn security_left_right_move_selection_not_step() {
 
     // Right → selection advances (Standard→Permissive), step unchanged.
     app.handle_key(KeyCode::Right);
-    assert_eq!(app.current_step, start_step, "Right must NOT step-advance at Security\n");
+    assert_eq!(
+        app.current_step, start_step,
+        "Right must NOT step-advance at Security\n"
+    );
     let s = render(&mut app);
-    assert!(s.contains("SELECTED: PERMISSIVE"), "Right did not move selection\n{s}");
+    assert!(
+        s.contains("SELECTED: PERMISSIVE"),
+        "Right did not move selection\n{s}"
+    );
 
     // Left twice → back to Strict, still same step.
     app.handle_key(KeyCode::Left);
     app.handle_key(KeyCode::Left);
-    assert_eq!(app.current_step, start_step, "Left must NOT step-back at Security\n");
+    assert_eq!(
+        app.current_step, start_step,
+        "Left must NOT step-back at Security\n"
+    );
     let s2 = render(&mut app);
-    assert!(s2.contains("SELECTED: STRICT"), "Left did not move selection\n{s2}");
+    assert!(
+        s2.contains("SELECTED: STRICT"),
+        "Left did not move selection\n{s2}"
+    );
 }
 
 #[test]
@@ -217,7 +249,10 @@ fn security_left_clamps_at_first_card() {
         app.handle_key(KeyCode::Left);
     }
     let s = render(&mut app);
-    assert!(s.contains("SELECTED: STRICT"), "Left did not clamp at first card\n{s}");
+    assert!(
+        s.contains("SELECTED: STRICT"),
+        "Left did not clamp at first card\n{s}"
+    );
 }
 
 // ── ESC = back one step (not quit) ──────────────────────────────────────────

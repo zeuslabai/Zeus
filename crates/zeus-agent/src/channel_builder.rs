@@ -22,10 +22,26 @@ use zeus_channels::{ChannelManager, ChannelMessage};
 /// telegram_bot / songbird / matrix-relay / IRC auto-join wiring preserved.
 ///
 /// Returns `(None, None)` when no channels are configured (neither
-/// `config.channels` nor env vars provide a `ChannelsConfig`).
+/// `config.channels` nor env vars provide a `ChannelsConfig`), or when
+/// channels are disabled via `[gateway] enable_channels = false` /
+/// `--no-channels`.
+///
+/// The disabled check runs *before* any env read: a disabled instance must
+/// never create adapters from an inherited `DISCORD_BOT_TOKEN` (etc.) —
+/// under multi-instance that meant N instances = N duplicate Discord
+/// sessions off one token. The "Channels: disabled" startup log must be true.
 pub async fn build_channel_manager_from_config(
     config: &Config,
 ) -> Result<(Option<Arc<ChannelManager>>, Option<mpsc::Receiver<ChannelMessage>>)> {
+    if !config
+        .gateway
+        .as_ref()
+        .map(|g| g.enable_channels)
+        .unwrap_or(true)
+    {
+        info!("Channels disabled ([gateway].enable_channels=false) — skipping adapter creation and env-merge");
+        return Ok((None, None));
+    }
     // Initialize channel manager if configured (or auto-detect from env vars)
     let env_channels = zeus_core::ChannelsConfig::from_env();
     let effective_channels: Option<zeus_core::ChannelsConfig> = match &config.channels {
@@ -73,19 +89,18 @@ pub async fn build_channel_manager_from_config(
 
         // Auto-register TelegramBotAdapter from [telegram_relay] if [channels.telegram] is absent.
         // This gives outbound capability to the `message` tool when only the relay is configured.
-        if cc.telegram.is_none() {
-            if let Some(ref relay) = config.telegram_relay {
-                if !relay.bot_token.is_empty() {
-                    let bot_config = zeus_channels::telegram_bot::TelegramBotConfig {
-                        bot_token: relay.bot_token.clone(),
-                        default_chat_id: relay.chat_id.parse::<i64>().ok(),
-                        poll_timeout_secs: None,
-                    };
-                    let adapter = zeus_channels::telegram_bot::TelegramBotAdapter::new(bot_config);
-                    info!("Telegram Bot adapter auto-registered from [telegram_relay]");
-                    manager.add_adapter(Box::new(adapter));
-                }
-            }
+        if cc.telegram.is_none()
+            && let Some(ref relay) = config.telegram_relay
+            && !relay.bot_token.is_empty()
+        {
+            let bot_config = zeus_channels::telegram_bot::TelegramBotConfig {
+                bot_token: relay.bot_token.clone(),
+                default_chat_id: relay.chat_id.parse::<i64>().ok(),
+                poll_timeout_secs: None,
+            };
+            let adapter = zeus_channels::telegram_bot::TelegramBotAdapter::new(bot_config);
+            info!("Telegram Bot adapter auto-registered from [telegram_relay]");
+            manager.add_adapter(Box::new(adapter));
         }
 
         if let Some(ref dc) = cc.discord {
@@ -474,7 +489,6 @@ pub async fn build_channel_manager_from_config(
                 server_url: mm.server_url.clone(),
                 token: mm.token.clone(),
                 team_id: mm.team_id.clone(),
-                ..Default::default()
             };
             match zeus_channels::MattermostAdapter::new(mm_config).await {
                 Ok(adapter) => {
@@ -493,6 +507,13 @@ pub async fn build_channel_manager_from_config(
                 api_secret: xt.consumer_key_secret.clone(),
                 access_token: xt.access_token.clone(),
                 access_token_secret: xt.access_token_secret.clone(),
+                // OAuth 2.0 app credentials — required for the PKCE user-context
+                // flow (build_authorize_url / token exchange / silent refresh).
+                // Previously dropped here, which stranded [channels.x_twitter]
+                // client_id/client_secret configs: the adapter fell back to
+                // OAuth 1.0a or bearer-only even when OAuth2 was configured.
+                client_id: xt.client_id.clone(),
+                client_secret: xt.client_secret.clone(),
                 poll_interval_secs: xt.poll_interval_secs,
                 auto_reply: xt.auto_reply,
                 ..Default::default()
@@ -541,4 +562,68 @@ pub async fn build_channel_manager_from_config(
     };
 
     Ok((channels, channel_rx))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `enable_channels = false` must short-circuit BEFORE any config/env
+    /// adapter construction: no manager, no receiver — even when a Discord
+    /// channel is fully configured. This is the `--no-channels` adapter-leak
+    /// regression guard (N instances = N duplicate Discord sessions off one
+    /// inherited DISCORD_BOT_TOKEN).
+    #[tokio::test]
+    async fn disabled_channels_skips_adapter_creation_even_with_config() {
+        let mut config = Config::default();
+        config.gateway = Some(zeus_core::GatewayConfig {
+            enable_channels: false,
+            ..Default::default()
+        });
+        // DiscordChannelConfig has no Default impl — deserialize a minimal
+        // config the way config.toml would provide it.
+        let discord: zeus_core::DiscordChannelConfig =
+            toml::from_str(r#"token = "fake-token-should-never-be-used""#)
+                .expect("minimal discord config must deserialize");
+        config.channels = Some(zeus_core::ChannelsConfig {
+            discord: Some(discord),
+            ..Default::default()
+        });
+
+        let (channels, rx) = build_channel_manager_from_config(&config)
+            .await
+            .expect("builder must not error on disabled path");
+        assert!(channels.is_none(), "adapters must not be created when channels are disabled");
+        assert!(rx.is_none(), "no receiver when channels are disabled");
+    }
+
+    /// Default (no [gateway] section) keeps the historical behavior:
+    /// channels enabled, builder proceeds to config/env resolution.
+    #[tokio::test]
+    async fn no_gateway_section_defaults_to_enabled_path() {
+        let mut config = Config::default();
+        config.gateway = None;
+        config.channels = None; // and no env in test context ⇒ (None, None) via normal path
+        // Guard: if a dev machine exports DISCORD_BOT_TOKEN etc., from_env()
+        // would kick in — serialize and scrub the vars this test cares about.
+        let vars = ["DISCORD_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN",
+                    "MATRIX_HOMESERVER", "MATRIX_ACCESS_TOKEN", "SIGNAL_PHONE_NUMBER"];
+        let saved: Vec<_> = vars.iter().map(|v| (v, std::env::var(v).ok())).collect();
+        // SAFETY: test-only, single-threaded access to these vars within this test.
+        for v in vars {
+            unsafe { std::env::remove_var(v) };
+        }
+
+        let result = build_channel_manager_from_config(&config).await;
+
+        for (v, val) in saved {
+            if let Some(val) = val {
+                // SAFETY: restoring prior test-scoped state.
+                unsafe { std::env::set_var(v, val) };
+            }
+        }
+        let (channels, rx) = result.expect("builder must not error");
+        assert!(channels.is_none());
+        assert!(rx.is_none());
+    }
 }

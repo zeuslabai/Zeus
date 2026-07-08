@@ -16,13 +16,37 @@
 use crossterm::event::KeyCode;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use std::sync::Mutex;
 use zeus_tui::app::{App, frame};
 
-const LAST_STEP: usize = 18;
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+fn with_isolated_zeus_home<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = tempfile::tempdir().expect("temp ZEUS_HOME");
+    let previous = std::env::var_os("ZEUS_HOME");
+    unsafe {
+        std::env::set_var("ZEUS_HOME", tmp.path());
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(tmp.path())));
+    unsafe {
+        if let Some(previous) = previous {
+            std::env::set_var("ZEUS_HOME", previous);
+        } else {
+            std::env::remove_var("ZEUS_HOME");
+        }
+    }
+    match result {
+        Ok(value) => value,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+const LAST_STEP: usize = 19;
 // Some steps cannot be advanced by a raw Right key in tests: grids/toggles
 // consume ←/→ for in-screen focus, and Auth is probe-gated. The established
 // onboarding-test idiom bumps them directly rather than waiting on live IO.
-const DIRECT_ADVANCE_STEPS: [usize; 8] = [1, 3, 6, 8, 9, 11, 15, 17];
+const DIRECT_ADVANCE_STEPS: [usize; 8] = [1, 4, 7, 9, 10, 12, 16, 18];
 
 /// Render the full chrome+screen for the current step via the SAME entrypoint
 /// the live loop uses. `.expect` on draw turns any paint panic into a test
@@ -60,7 +84,10 @@ fn step_forward(app: &mut App) {
 #[test]
 fn full_onboarding_walk_forward_renders_every_step_without_panic() {
     let mut app = App::new();
-    assert_eq!(app.current_step, 0, "fresh App must start at Welcome (step 0)");
+    assert_eq!(
+        app.current_step, 0,
+        "fresh App must start at Welcome (step 0)"
+    );
     assert!(
         !app.onboarding_complete,
         "fresh App must boot into onboarding, not prod"
@@ -77,7 +104,7 @@ fn full_onboarding_walk_forward_renders_every_step_without_panic() {
         guard += 1;
         assert!(guard < 100, "forward walk exceeded guard — possible loop");
     }
-    assert_eq!(app.current_step, LAST_STEP, "must reach Complete (18)");
+    assert_eq!(app.current_step, LAST_STEP, "must reach Complete (19)");
 }
 
 #[test]
@@ -118,12 +145,12 @@ fn typing_into_editable_fields_does_not_panic_and_caret_renders() {
     // paint path with live input + the blink seam together.
     let mut app = App::new();
     let mut guard = 0;
-    while app.current_step < 3 {
+    while app.current_step < 4 {
         step_forward(&mut app);
         guard += 1;
         assert!(guard < 50, "failed to reach Auth");
     }
-    assert_eq!(app.current_step, 3, "expected Auth at step 3");
+    assert_eq!(app.current_step, 4, "expected Auth at step 3");
 
     // Type a character into the focused field, advance the animation clock a few
     // ticks (covers both blink phases), render each time — no panic allowed.
@@ -138,33 +165,40 @@ fn typing_into_editable_fields_does_not_panic_and_caret_renders() {
 
 #[test]
 fn awaken_fires_launch_handoff_then_completes() {
-    // Drive to Complete and fire AWAKEN — must enter the visible "launching"
-    // handoff (AWAKEN-A), NOT jump silently to prod, then tick to completion.
-    let mut app = App::new();
-    let mut guard = 0;
-    while app.current_step < LAST_STEP {
-        step_forward(&mut app);
-        guard += 1;
-        assert!(guard < 100, "failed to reach Complete");
-    }
+    with_isolated_zeus_home(|zeus_home| {
+        // Drive to Complete and fire AWAKEN — must enter the visible "launching"
+        // handoff (AWAKEN-A), NOT jump silently to prod, then tick to completion.
+        let mut app = App::new();
+        let mut guard = 0;
+        while app.current_step < LAST_STEP {
+            step_forward(&mut app);
+            guard += 1;
+            assert!(guard < 100, "failed to reach Complete");
+        }
 
-    // AWAKEN. advance_step on Complete fires the launch handoff.
-    app.advance_step();
-    // Render the launching frame — must not panic and must not have silently
-    // flipped straight to a completed prod state on the same tick.
-    let sc = app.current_step;
-    render_current(&mut app, sc);
-
-    // Tick past the launch dwell — eventually onboarding_complete flips true.
-    let mut ticks = 0;
-    while !app.onboarding_complete && ticks < 50 {
-        app.tick();
+        // AWAKEN. advance_step on Complete fires the launch handoff and persists
+        // config; the temp ZEUS_HOME keeps this test from touching a real box.
+        app.advance_step();
+        assert!(
+            zeus_home.join("config.toml").exists(),
+            "AWAKEN should persist only inside isolated ZEUS_HOME"
+        );
+        // Render the launching frame — must not panic and must not have silently
+        // flipped straight to a completed prod state on the same tick.
         let sc = app.current_step;
         render_current(&mut app, sc);
-        ticks += 1;
-    }
-    assert!(
-        app.onboarding_complete,
-        "AWAKEN handoff must complete to onboarding_complete within dwell window"
-    );
+
+        // Tick past the launch dwell — eventually onboarding_complete flips true.
+        let mut ticks = 0;
+        while !app.onboarding_complete && ticks < 50 {
+            app.tick();
+            let sc = app.current_step;
+            render_current(&mut app, sc);
+            ticks += 1;
+        }
+        assert!(
+            app.onboarding_complete,
+            "AWAKEN handoff must complete to onboarding_complete within dwell window"
+        );
+    });
 }

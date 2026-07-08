@@ -25,7 +25,7 @@ use zeus_tui::screens::WorkspaceScreen;
 
 use crossterm::event::KeyCode;
 
-const WORKSPACE_STEP: usize = 10;
+const WORKSPACE_STEP: usize = 11;
 
 /// Walk to the Workspace step. Grid steps consume Right for in-screen focus, so
 /// we bump those directly — mirrors goto_step in onb_106. Workspace lives PAST
@@ -33,10 +33,15 @@ const WORKSPACE_STEP: usize = 10;
 /// the walk hangs (Right is grid-local there and never advances the step).
 fn goto_workspace(app: &mut App) {
     while app.current_step < WORKSPACE_STEP {
-        if app.current_step == 3 { app.current_step += 1; app.on_step_enter(); continue; }        let s = app.current_step;
+        if app.current_step == 4 {
+            app.current_step += 1;
+            app.on_step_enter();
+            continue;
+        }
+        let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
-        } else if s == 6 || s == 8 {
+        } else if s == 7 || s == 9 {
             app.current_step += 1;
             app.on_step_enter();
         } else {
@@ -46,7 +51,10 @@ fn goto_workspace(app: &mut App) {
             app.handle_key(KeyCode::Enter);
         }
     }
-    assert_eq!(app.current_step, WORKSPACE_STEP, "failed to reach Workspace step");
+    assert_eq!(
+        app.current_step, WORKSPACE_STEP,
+        "failed to reach Workspace step"
+    );
 }
 
 /// Render the current app into a 120×44 TestBackend → newline-joined String.
@@ -116,11 +124,15 @@ fn workspace_100x30_uses_single_app_header() {
         "Workspace title should come from the app StepHeader only\n{s}"
     );
     assert_eq!(
-        s.matches("Where Zeus stores your agent's working memory").count(),
+        s.matches("Where Zeus stores your agent's working memory")
+            .count(),
         1,
         "Workspace subtitle should not be duplicated inside the body\n{s}"
     );
-    assert!(s.contains("PATHS"), "missing PATHS section label at 100x30\n{s}");
+    assert!(
+        s.contains("PATHS"),
+        "missing PATHS section label at 100x30\n{s}"
+    );
     assert!(
         s.contains("DISK USAGE PROJECTION"),
         "missing disk projection at 100x30\n{s}"
@@ -135,11 +147,23 @@ fn workspace_three_path_fields_and_defaults() {
     // field labels
     assert!(s.contains("Workspace"), "missing Workspace field\n{s}");
     assert!(s.contains("Sessions"), "missing Sessions field\n{s}");
-    assert!(s.contains("Mnemosyne DB"), "missing Mnemosyne DB field\n{s}");
+    assert!(
+        s.contains("Mnemosyne DB"),
+        "missing Mnemosyne DB field\n{s}"
+    );
     // defaults
-    assert!(s.contains("~/.zeus/workspace"), "missing workspace default\n{s}");
-    assert!(s.contains("~/.zeus/sessions"), "missing sessions default\n{s}");
-    assert!(s.contains("~/.zeus/mnemosyne.db"), "missing mnemosyne default\n{s}");
+    assert!(
+        s.contains("~/.zeus/workspace"),
+        "missing workspace default\n{s}"
+    );
+    assert!(
+        s.contains("~/.zeus/sessions"),
+        "missing sessions default\n{s}"
+    );
+    assert!(
+        s.contains("~/.zeus/mnemosyne.db"),
+        "missing mnemosyne default\n{s}"
+    );
 }
 
 #[test]
@@ -171,14 +195,23 @@ fn workspace_disk_usage_projection() {
     let mut app = App::new();
     goto_workspace(&mut app);
     let s = render(&app);
-    assert!(s.contains("DISK USAGE PROJECTION"), "missing disk box header\n{s}");
+    assert!(
+        s.contains("DISK USAGE PROJECTION"),
+        "missing disk box header\n{s}"
+    );
     // 3-col values + sub-labels
     assert!(s.contains("~50 MB"), "missing workspace projection\n{s}");
     assert!(s.contains("~150 MB"), "missing sessions projection\n{s}");
     assert!(s.contains("~800 MB"), "missing mnemosyne projection\n{s}");
     assert!(s.contains("after 30 days"), "missing workspace sub\n{s}");
-    assert!(s.contains("@ 5 MB/day for 30d"), "missing sessions sub\n{s}");
-    assert!(s.contains("after 1000 sessions"), "missing mnemosyne sub\n{s}");
+    assert!(
+        s.contains("@ 5 MB/day for 30d"),
+        "missing sessions sub\n{s}"
+    );
+    assert!(
+        s.contains("after 1000 sessions"),
+        "missing mnemosyne sub\n{s}"
+    );
 }
 
 // ── existing-workspace amber box (standalone screen render) ─────────────────
@@ -204,9 +237,15 @@ fn workspace_existing_amber_box() {
     );
     assert!(s.contains("2847"), "missing memory-facts count\n{s}");
     assert!(s.contains("147"), "missing sessions count\n{s}");
-    assert!(s.contains("last modified"), "missing last-modified copy\n{s}");
+    assert!(
+        s.contains("last modified"),
+        "missing last-modified copy\n{s}"
+    );
     // buttons
-    assert!(s.contains("USE EXISTING"), "missing USE EXISTING button\n{s}");
+    assert!(
+        s.contains("USE EXISTING"),
+        "missing USE EXISTING button\n{s}"
+    );
     assert!(
         s.contains("START FRESH (BACKUP OLD)"),
         "missing START FRESH button\n{s}"

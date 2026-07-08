@@ -19,7 +19,9 @@ use zeus_tui::app::frame;
 fn render(app: &mut App) -> String {
     let backend = TestBackend::new(140, 44);
     let mut terminal = Terminal::new(backend).expect("terminal");
-    terminal.draw(|f| frame(f, app)).expect("draw must not panic");
+    terminal
+        .draw(|f| frame(f, app))
+        .expect("draw must not panic");
     let buf = terminal.backend().buffer().clone();
     let mut out = String::new();
     for y in 0..buf.area.height {
@@ -31,22 +33,18 @@ fn render(app: &mut App) -> String {
     out
 }
 
-/// Drive Welcome → Mode → Provider, select the Nth provider via Down presses,
-/// then advance into the Model step (Auth sits between — step past it).
+/// Drive Welcome → Mode → Instance → Provider, select the Nth provider via
+/// Down presses, then advance into the Model step (Auth sits between — step past it).
 fn walk_to_model_with_provider(provider_down_presses: usize) -> App {
     let mut app = App::new();
-    // Welcome(0) -> Mode(1): Right advances.
-    app.handle_key(KeyCode::Right);
-    // Mode(1) -> Provider(2): Enter picks a mode card and advances.
-    app.handle_key(KeyCode::Enter);
-    // Provider(2): move the selection down N times to pick a non-default provider.
+    app.handle_key(KeyCode::Right); // Welcome -> Mode
+    app.handle_key(KeyCode::Enter); // Mode -> Instance
+    app.handle_key(KeyCode::Right); // Instance -> Provider
     for _ in 0..provider_down_presses {
         app.handle_key(KeyCode::Down);
     }
-    // Provider(2) -> Auth(3): Right advances.
-    app.handle_key(KeyCode::Right);
-    // Auth(3) -> Model(4): Right advances; on_step_enter(Model) must sync provider.
-    app.handle_key(KeyCode::Right);
+    app.handle_key(KeyCode::Right); // Provider -> Auth
+    app.handle_key(KeyCode::Right); // Auth -> Model; on_step_enter(Model) syncs provider
     app
 }
 
@@ -86,9 +84,9 @@ fn complete_summary_provider_matches_picked_provider() {
     // Grid steps (6/8/9/11/15/17) consume Right for in-screen focus, so bump
     // them directly — same idiom as goto_complete in onb_complete_1to1.rs.
     let mut guard = 0;
-    while app.current_step < 18 {
+    while app.current_step < 19 {
         let s = app.current_step;
-        if s == 3 || s == 6 || s == 8 || s == 9 || s == 11 || s == 15 || s == 17 {
+        if s == 4 || s == 7 || s == 9 || s == 10 || s == 12 || s == 16 || s == 18 {
             app.current_step += 1;
             app.on_step_enter();
         } else {

@@ -10,10 +10,10 @@
 use crossterm::event::KeyCode;
 use zeus_tui::App;
 
-const CHANNELS: usize = 6;
-const VOICE: usize = 13;
-const FEATURES: usize = 12;
-const IMAGES: usize = 14;
+const CHANNELS: usize = 7;
+const VOICE: usize = 14;
+const FEATURES: usize = 13;
+const IMAGES: usize = 15;
 
 fn goto(app: &mut App, step: usize) {
     app.current_step = step;
@@ -64,7 +64,11 @@ fn features_enter_advances_directly() {
     goto(&mut app, FEATURES);
     assert_eq!(app.footer_focus, None);
     enter(&mut app);
-    assert_eq!(app.current_step, FEATURES + 1, "Enter on Features must advance");
+    assert_eq!(
+        app.current_step,
+        FEATURES + 1,
+        "Enter on Features must advance"
+    );
 }
 
 // ─── Images: Enter advances ───

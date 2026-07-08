@@ -26,7 +26,7 @@ Each Titan has a name, a voice, and a purpose. They coordinate through Pantheon,
 
 ## Features
 
-**LLM Providers** — Anthropic, OpenAI, Google Gemini, Ollama, OpenRouter, Mistral, Groq, Together, Fireworks, DeepSeek, XAI, Cerebras, Moonshot Kimi, Minimax, Qwen, and more. OAuth support for Claude Pro/Max (via `codex`) and Qwen. Automatic Ollama model discovery. Extended thinking. Streaming everywhere.
+**LLM Providers** — Anthropic with **full Claude Fable 5 and Claude Sonnet 5 support** (`anthropic/claude-fable-5`, `anthropic/claude-sonnet-5`) and **live model-catalog polling** — new Claude models appear in onboarding and `zeus config` the moment Anthropic ships them, no manual config. Plus OpenAI, Google Gemini, Ollama, OpenRouter, Mistral, Groq, Together, Fireworks, DeepSeek, XAI, Cerebras, Moonshot Kimi, Minimax, Qwen, and more. OAuth support for Claude Pro/Max (via `codex`) and Qwen. Automatic Ollama model discovery. Extended thinking. Streaming everywhere.
 
 **Tools** — 8 core tools (file I/O, shell, web fetch, subagents, messaging) plus extensive macOS automation (window management, clipboard, notifications, system events, shortcuts, Safari, Mail, Finder, and more).
 
@@ -34,9 +34,17 @@ Each Titan has a name, a voice, and a purpose. They coordinate through Pantheon,
 
 **Frontends** — Web dashboard (Leptos + WASM, in-tree at `apps/ZeusWeb/`) and a Ratatui terminal TUI (in `crates/zeus-tui/`). Native mobile/desktop apps (iOS, Android, visionOS) live in separate repositories. All sync via Zeus Core.
 
-**Agent Economy** — Marketplace for buying and selling agents, tools, and skills. Agents earn and spend tokens. A living economy of autonomous entities.
+**Agent Economy** — Marketplace for buying and selling agents, tools, and skills. Agents earn and spend tokens. A living economy of autonomous entities — with a **security-hardened money path**: admin-gated staking backed by a real stakes ledger, overflow-safe balance math with amount caps and DB-level `CHECK` constraints, and an economy API that requires credentials in every deploy mode.
 
 **Security** — Aegis enforces mandatory capability verification on every tool call. Scope escalation. Tool allowlisting. No outbound traffic without policy approval. Zero-trust, always.
+
+### Recent highlights
+
+- **Claude Fable 5 & Sonnet 5, day-one** — full support for Anthropic's newest flagship models, with live `/v1/models` catalog polling so future releases show up automatically.
+- **Hardened token economy** — fleet-audited money path: staking backed by an atomic ledger (no free-mint), integer-overflow-safe balances, credential-gated economy API, plus wallet transaction history and an active-stakes API surfaced in the WebUI.
+- **Smarter gateway rate limiting** — local TUI/WebUI/CLI traffic (loopback) is exempt, and remote limits are tuned for real agentic workloads.
+- **TUI production polish** — settings wired to live config, one-press tab navigation, resilient streaming chat with live tool feed, API-key validation on onboarding, and credential persistence fixes across providers.
+- **WebUI at full wiring** — 57 pages, effectively all driven by the live gateway (REST + WebSocket), with a polish pass across empty states and error messages.
 
 ## Architecture
 

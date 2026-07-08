@@ -1,7 +1,7 @@
 //! StepIndicator — the windowed top-progress rail.
 //!
 //! Matches the JSX `StepIndicator` (zeus-tui-onboarding.jsx line 226): a single
-//! horizontal band that shows a *window* of the 19 onboarding steps centered on
+//! horizontal band that shows a *window* of the 20 onboarding steps centered on
 //! the current step, with `···` ellipses collapsing the hidden runs and `›`
 //! separators between adjacent visible steps.
 //!
@@ -107,15 +107,9 @@ impl Widget for StepIndicator {
             // the first visible step.
             if let Some(p) = prev_idx {
                 if idx - p > 1 {
-                    spans.push(Span::styled(
-                        " ··· ",
-                        Style::default().fg(theme::MUTED),
-                    ));
+                    spans.push(Span::styled(" ··· ", Style::default().fg(theme::MUTED)));
                 } else {
-                    spans.push(Span::styled(
-                        " › ",
-                        Style::default().fg(theme::MUTED),
-                    ));
+                    spans.push(Span::styled(" › ", Style::default().fg(theme::MUTED)));
                 }
             }
 
@@ -130,9 +124,7 @@ impl Widget for StepIndicator {
                     .bg(theme::ACCENT)
                     .fg(theme::BG)
                     .add_modifier(Modifier::BOLD),
-                Marker::Completed => Style::default()
-                    .bg(theme::ACCENT_FAINT)
-                    .fg(theme::ACCENT),
+                Marker::Completed => Style::default().bg(theme::ACCENT_FAINT).fg(theme::ACCENT),
                 Marker::Future => Style::default().fg(theme::MUTED),
             };
             spans.push(Span::styled(format!(" {mtext} "), box_style));
@@ -165,7 +157,7 @@ mod tests {
         // current=9 (mid): window 5..=13, plus pinned 0 and 18.
         let v = visible_indices(9);
         assert!(v.contains(&0), "first step pinned");
-        assert!(v.contains(&18), "last step pinned");
+        assert!(v.contains(&(STEPS.len() - 1)), "last step pinned");
         for i in 5..=13 {
             assert!(v.contains(&i), "step {i} in ±4 window");
         }
@@ -181,7 +173,7 @@ mod tests {
         for i in 0..=4 {
             assert!(v.contains(&i), "step {i} visible near start");
         }
-        assert!(v.contains(&18), "last pinned");
+        assert!(v.contains(&(STEPS.len() - 1)), "last pinned");
         assert!(!v.contains(&5), "step 5 outside (dist 5)");
     }
 
@@ -204,7 +196,10 @@ mod tests {
         // find the position of 0 and the next visible
         let pos0 = v.iter().position(|&x| x == 0).unwrap();
         let next = v[pos0 + 1];
-        assert!(next > 1, "gap after pinned-first triggers ellipsis (0 -> {next})");
+        assert!(
+            next > 1,
+            "gap after pinned-first triggers ellipsis (0 -> {next})"
+        );
     }
 
     #[test]
@@ -219,7 +214,10 @@ mod tests {
         assert_eq!(marker_text(3, Marker::Completed), "✓");
         assert_eq!(marker_text(0, Marker::Current), "01", "zero-padded 1-based");
         assert_eq!(marker_text(8, Marker::Future), "09");
-        assert_eq!(marker_text(17, Marker::Future), "18");
+        assert_eq!(
+            marker_text(STEPS.len() - 1, Marker::Future),
+            format!("{:02}", STEPS.len())
+        );
     }
 
     #[test]

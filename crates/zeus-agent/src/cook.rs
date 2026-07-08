@@ -254,6 +254,15 @@ pub async fn cook_until_done(
         budget = task.iterations_budget,
         "cook_until_done: starting"
     );
+    // P2 observability: stable greppable cook-lifecycle line.
+    info!(
+        target: "cook",
+        event = "start",
+        task_id = %task.id,
+        trigger = %task.assigned_by,
+        channel = %task.source_channel,
+        "cook start"
+    );
 
     let started = Instant::now();
     // Progress-aware deadline anchor: reset on each successful iteration so a
@@ -387,6 +396,16 @@ pub async fn cook_until_done(
         outcome = %outcome.summary(),
         iterations = task.iterations_used,
         "cook_until_done: terminated"
+    );
+    // P2 observability: stable greppable cook-lifecycle line.
+    info!(
+        target: "cook",
+        event = "end",
+        task_id = %task.id,
+        duration_ms = started.elapsed().as_millis() as u64,
+        iterations = task.iterations_used,
+        result = outcome.as_status_str(),
+        "cook end"
     );
     outcome
 }

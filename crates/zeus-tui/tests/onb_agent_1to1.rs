@@ -17,19 +17,24 @@ use zeus_tui::app::frame;
 
 use crossterm::event::KeyCode;
 
-const AGENT_STEP: usize = 9;
+const AGENT_STEP: usize = 10;
 
 /// Walk to the Agent step. Grid steps (Channels=6, Agent=9) consume Right for
 /// in-screen focus, so we bump those directly — mirrors goto_step in onb_106.
 fn goto_agent(app: &mut App) {
     while app.current_step < AGENT_STEP {
-        if app.current_step == 3 { app.current_step += 1; app.on_step_enter(); continue; }        let s = app.current_step;
+        if app.current_step == 4 {
+            app.current_step += 1;
+            app.on_step_enter();
+            continue;
+        }
+        let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
-        } else if s == 6 || s == 8 {
+        } else if s == 7 || s == 9 {
             // Channels (6) and Gateway (8) consume Right for in-screen grid
             // focus → bump directly past them (Gateway became grid-local once
-            // its 4-col service picker was wired). Without the s==8 case this
+            // its 4-col service picker was wired). Without the s==9 case this
             // walk hangs on the way to Agent (9).
             app.current_step += 1;
             app.on_step_enter();
@@ -78,11 +83,17 @@ fn agent_renders_all_six_personas_and_headers() {
     assert!(screen.contains("SOUL.md"), "SOUL.md sub-copy missing");
     // All 6 persona glyphs (the 2-col grid).
     for glyph in ["COO", "ENG", "CRT", "OPS", "ANL", "CST"] {
-        assert!(screen.contains(glyph), "persona glyph {glyph} missing from grid");
+        assert!(
+            screen.contains(glyph),
+            "persona glyph {glyph} missing from grid"
+        );
     }
     // IDENTITY section + SOUL preview box + footer target.
     assert!(screen.contains("IDENTITY"), "IDENTITY section missing");
-    assert!(screen.contains("SOUL.MD PREVIEW"), "SOUL preview header missing");
+    assert!(
+        screen.contains("SOUL.MD PREVIEW"),
+        "SOUL preview header missing"
+    );
     // Footer renders the write-path. At a 46-col preview the full path clips,
     // so assert on the visible head ("writes to ~/.zeus…") — proves the footer
     // is present without over-asserting on column-clipped text.
@@ -101,7 +112,10 @@ fn agent_grid_right_moves_column_not_step() {
     assert_eq!(app.agent_screen.persona_idx, 0);
     app.handle_key(KeyCode::Right); // col 0 → col 1 (idx 1)
     assert_eq!(app.agent_screen.persona_idx, 1, "Right should move column");
-    assert_eq!(app.current_step, AGENT_STEP, "Right must NOT advance the step");
+    assert_eq!(
+        app.current_step, AGENT_STEP,
+        "Right must NOT advance the step"
+    );
 }
 
 #[test]
@@ -109,11 +123,17 @@ fn agent_grid_down_moves_row_by_two() {
     let mut app = App::new();
     goto_agent(&mut app);
     app.handle_key(KeyCode::Down); // row 0 → row 1 (idx 0 → 2)
-    assert_eq!(app.agent_screen.persona_idx, 2, "Down should move one grid row (+2)");
+    assert_eq!(
+        app.agent_screen.persona_idx, 2,
+        "Down should move one grid row (+2)"
+    );
     app.handle_key(KeyCode::Down); // row 1 → row 2 (idx 2 → 4)
     assert_eq!(app.agent_screen.persona_idx, 4);
     app.handle_key(KeyCode::Up); // back up a row
-    assert_eq!(app.agent_screen.persona_idx, 2, "Up should move back a grid row (−2)");
+    assert_eq!(
+        app.agent_screen.persona_idx, 2,
+        "Up should move back a grid row (−2)"
+    );
 }
 
 #[test]
@@ -132,7 +152,10 @@ fn agent_grid_edges_clamp_no_wrap() {
     app.handle_key(KeyCode::Right); // 4→5
     assert_eq!(app.agent_screen.persona_idx, 5);
     app.handle_key(KeyCode::Down); // row2 is last → clamp
-    assert_eq!(app.agent_screen.persona_idx, 5, "Down at last row must clamp");
+    assert_eq!(
+        app.agent_screen.persona_idx, 5,
+        "Down at last row must clamp"
+    );
     app.handle_key(KeyCode::Right); // col1 is last → clamp
     assert_eq!(app.agent_screen.persona_idx, 5, "Right at col1 must clamp");
 }
@@ -146,7 +169,10 @@ fn agent_soul_preview_reflects_selection() {
     // Default = Coordinator (idx 0): role "Coordinator", tone "...decisive".
     let coord = render(&app);
     assert!(coord.contains("## Role"), "SOUL Role section missing");
-    assert!(coord.contains("Coordinator"), "default persona role not in preview");
+    assert!(
+        coord.contains("Coordinator"),
+        "default persona role not in preview"
+    );
     assert!(
         coord.contains("decisive"),
         "Coordinator tone should seed the SOUL preview"
@@ -160,7 +186,10 @@ fn agent_soul_preview_reflects_selection() {
     app.handle_key(KeyCode::Right);
     assert_eq!(app.agent_screen.persona_idx, 1);
     let eng = render(&app);
-    assert!(eng.contains("Engineer"), "Engineer role not in preview after select");
+    assert!(
+        eng.contains("Engineer"),
+        "Engineer role not in preview after select"
+    );
     assert!(
         eng.contains("Read existing code before writing new"),
         "Engineer guiding principle missing — preview not live"
@@ -188,7 +217,10 @@ fn agent_name_autosuggest_and_multibyte_input() {
         app.handle_key(KeyCode::Char(c));
     }
     let post = render(&app);
-    assert!(post.contains("Athéna"), "typed multibyte name should render");
+    assert!(
+        post.contains("Athéna"),
+        "typed multibyte name should render"
+    );
 }
 
 // ── ESC backs out one step (does not quit) ─────────────────────────────────

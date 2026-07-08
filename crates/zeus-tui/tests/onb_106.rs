@@ -55,7 +55,7 @@ fn goto_step(app: &mut App, target: usize) {
         let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
-        } else if s == 3 || s == 6 || s == 8 || s == 9 || s == 11 || s == 15 || s == 17 {
+        } else if s == 4 || s == 7 || s == 9 || s == 10 || s == 12 || s == 16 || s == 18 {
             // Channels (6), Gateway (8), Agent (9), Security (11),
             // Orchestration (15) and Skills (17) are GRIDs: Right=grid focus
             // (Gateway's 4-col picker, Security's 4-col level grid,
@@ -83,7 +83,7 @@ fn goto_step(app: &mut App, target: usize) {
 #[test]
 fn step6_channels_nav_moves_and_renders() {
     let mut app = App::new();
-    goto_step(&mut app, 6);
+    goto_step(&mut app, 7);
     // Channels is a 2-col GRID: ↑/↓ move by a ROW (±2), ←/→ move by a COLUMN
     // (±1). This matches the spec's "↑/↓/←/→ move focus across the grid".
     let start = app.channels_screen.focused;
@@ -118,7 +118,7 @@ fn step6_channels_nav_moves_and_renders() {
 #[test]
 fn step6_toggle_selects_channel() {
     let mut app = App::new();
-    goto_step(&mut app, 6);
+    goto_step(&mut app, 7);
     // Default (per JSX): discord + telegram pre-selected; focused=0 is selected.
     let count0 = app.channels_screen.selected.len();
     let focused = app.channels_screen.focused;
@@ -149,13 +149,13 @@ fn step6_toggle_selects_channel() {
 #[test]
 fn channels_selection_propagates_to_channelconfig() {
     let mut app = App::new();
-    goto_step(&mut app, 6);
+    goto_step(&mut app, 7);
     // Select the first channel, then advance to ChannelConfig.
     press(&mut app, &[KeyCode::Enter]);
     let selected_ids = app.channels_screen.selected_ids();
     assert!(!selected_ids.is_empty());
 
-    goto_step(&mut app, 7);
+    goto_step(&mut app, 8);
     // on_step_enter() copies channels_screen.selected_ids() into
     // chanconfig_screen.toggled — this is the cross-screen propagation.
     assert_eq!(
@@ -169,9 +169,9 @@ fn channels_selection_propagates_to_channelconfig() {
 #[test]
 fn step7_channelconfig_paste_is_panic_free() {
     let mut app = App::new();
-    goto_step(&mut app, 6);
-    press(&mut app, &[KeyCode::Enter]); // select a channel so config has fields
     goto_step(&mut app, 7);
+    press(&mut app, &[KeyCode::Enter]); // select a channel so config has fields
+    goto_step(&mut app, 8);
 
     // Empty paste: a bare Backspace on a possibly-empty field must not panic.
     press(&mut app, &[KeyCode::Backspace]);
@@ -198,7 +198,7 @@ fn step7_channelconfig_paste_is_panic_free() {
 #[test]
 fn step8_gateway_nav_moves_focus() {
     let mut app = App::new();
-    goto_step(&mut app, 8);
+    goto_step(&mut app, 9);
     let start = app.gateway_screen.focused_field;
     press(&mut app, &[KeyCode::Down]);
     assert!(
@@ -208,7 +208,10 @@ fn step8_gateway_nav_moves_focus() {
     // move_down caps at 1, so after a Down from 0 we expect 1.
     assert_eq!(app.gateway_screen.focused_field, 1);
     press(&mut app, &[KeyCode::Up]);
-    assert_eq!(app.gateway_screen.focused_field, 0, "Up returns to first field");
+    assert_eq!(
+        app.gateway_screen.focused_field, 0,
+        "Up returns to first field"
+    );
     assert!(!render(&app).trim().is_empty());
 }
 
@@ -217,7 +220,7 @@ fn step8_gateway_nav_moves_focus() {
 #[test]
 fn step9_agent_cycle_and_input() {
     let mut app = App::new();
-    goto_step(&mut app, 9);
+    goto_step(&mut app, 10);
     let start = app.agent_screen.persona_idx;
     press(&mut app, &[KeyCode::Down]);
     assert_ne!(
@@ -241,7 +244,7 @@ fn step9_agent_cycle_and_input() {
 #[test]
 fn step10_workspace_typing_edits_focused_field() {
     let mut app = App::new();
-    goto_step(&mut app, 10);
+    goto_step(&mut app, 11);
 
     // Field 0 = workspace_path. Type a suffix; it must land in workspace_path,
     // not sessions/mnemosyne.
@@ -287,7 +290,7 @@ fn step10_workspace_typing_edits_focused_field() {
 #[test]
 fn step10_workspace_paste_panic_free() {
     let mut app = App::new();
-    goto_step(&mut app, 10);
+    goto_step(&mut app, 11);
     // Empty backspace at far edge, long + multibyte paste, over-backspace.
     press(&mut app, &[KeyCode::Backspace]);
     for c in "/tmp/".repeat(2000).chars() {
@@ -309,11 +312,14 @@ fn step10_workspace_paste_panic_free() {
 #[test]
 fn step11_security_nav_changes_selection() {
     let mut app = App::new();
-    goto_step(&mut app, 11);
+    goto_step(&mut app, 12);
     let start = app.security_screen.selected_id();
     press(&mut app, &[KeyCode::Down]);
     let after = app.security_screen.selected_id();
-    assert_ne!(after, start, "Down should change the selected security level");
+    assert_ne!(
+        after, start,
+        "Down should change the selected security level"
+    );
     press(&mut app, &[KeyCode::Up]);
     assert_eq!(
         app.security_screen.selected_id(),
@@ -328,11 +334,14 @@ fn step11_security_nav_changes_selection() {
 #[test]
 fn steps_6_through_11_advance_cleanly() {
     let mut app = App::new();
-    goto_step(&mut app, 6);
-    for target in 7..=11 {
+    goto_step(&mut app, 7);
+    for target in 8..=12 {
         goto_step(&mut app, target);
         assert_eq!(app.current_step, target);
         // Each screen must render without panic at every step.
-        assert!(!render(&app).trim().is_empty(), "step {target} should render");
+        assert!(
+            !render(&app).trim().is_empty(),
+            "step {target} should render"
+        );
     }
 }

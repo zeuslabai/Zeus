@@ -4,52 +4,64 @@
 //! the integrated entrypoint `zeus_tui::run(config)` (called by the root `zeus`
 //! binary) drive the same code. See [`run_standalone`] / [`run_loop`].
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    MouseEventKind,
+};
+use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Clear, Widget};
-use ratatui::Terminal;
 use std::io;
 
 // Bring sibling module names into scope so inline `prod::`, `screens::`, `theme::`
 // paths resolve from within this library module (they were crate-root in the bin).
 use crate::{prod, screens, theme};
 
-use crate::screens::{AgentScreen, AuthScreen, ChanConfigScreen, ChannelsScreen, CompleteScreen, FallbackScreen, FeaturesScreen, GatewayScreen, ImagesScreen, MemoryScreen, ModeScreen, SkillsScreen, ModelScreen, OrchestrationScreen, ProviderScreen, SecurityScreen, VoiceScreen, WelcomeScreen, WorkspaceScreen};
 use crate::screens::complete::SummaryRow;
+use crate::screens::{
+    AgentScreen, AuthScreen, ChanConfigScreen, ChannelsScreen, CompleteScreen, FallbackScreen,
+    FeaturesScreen, GatewayScreen, ImagesScreen, InstanceScreen, MemoryScreen, ModeScreen,
+    ModelScreen, OrchestrationScreen, ProviderScreen, SecurityScreen, SkillsScreen, VoiceScreen,
+    WelcomeScreen, WorkspaceScreen,
+};
 use crate::widgets::{StatusBar, StepHeader, StepIndicator, TopBar};
 
-use crate::prod::{ProdTopBar, ProdTabBar, ProdStatusBar, ChatTab, ToolsTab, ApprovalsTab, ChannelsTab, AdvancedOverlay};
-use crate::prod::top_bar::ConnState;
+use crate::prod::advanced::{ADVANCED_TABS, AdvTabDef};
 use crate::prod::chat_tab::{ChatMessage, Role, StreamState};
-use crate::prod::tab_bar::PRIMARY_TABS;
-use crate::prod::advanced::{AdvTabDef, ADVANCED_TABS};
 use crate::prod::stub_tabs::StubTab;
+use crate::prod::tab_bar::PRIMARY_TABS;
+use crate::prod::top_bar::ConnState;
+use crate::prod::{
+    AdvancedOverlay, ApprovalsTab, ChannelsTab, ChatTab, ProdStatusBar, ProdTabBar, ProdTopBar,
+    ToolsTab,
+};
 
 /// Onboarding step index — indexes into widgets::top_bar::STEPS.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Step {
     Welcome = 0,
     Mode = 1,
-    Provider = 2,
-    Auth = 3,
-    Model = 4,
-    Fallback = 5,
-    Channels = 6,
-    ChannelConfig = 7,
-    Gateway = 8,
-    Agent = 9,
-    Workspace = 10,
-    Security = 11,
-    Features = 12,
-    Voice = 13,
-    Images = 14,
-    Orchestration = 15,
-    Memory = 16,
-    Skills = 17,
-    Complete = 18,
+    Instance = 2,
+    Provider = 3,
+    Auth = 4,
+    Model = 5,
+    Fallback = 6,
+    Channels = 7,
+    ChannelConfig = 8,
+    Gateway = 9,
+    Agent = 10,
+    Workspace = 11,
+    Security = 12,
+    Features = 13,
+    Voice = 14,
+    Images = 15,
+    Orchestration = 16,
+    Memory = 17,
+    Skills = 18,
+    Complete = 19,
 }
 
 impl Step {
@@ -57,23 +69,24 @@ impl Step {
         match i {
             0 => Some(Step::Welcome),
             1 => Some(Step::Mode),
-            2 => Some(Step::Provider),
-            3 => Some(Step::Auth),
-            4 => Some(Step::Model),
-            5 => Some(Step::Fallback),
-            6 => Some(Step::Channels),
-            7 => Some(Step::ChannelConfig),
-            8 => Some(Step::Gateway),
-            9 => Some(Step::Agent),
-            10 => Some(Step::Workspace),
-            11 => Some(Step::Security),
-            12 => Some(Step::Features),
-            13 => Some(Step::Voice),
-            14 => Some(Step::Images),
-            15 => Some(Step::Orchestration),
-            16 => Some(Step::Memory),
-            17 => Some(Step::Skills),
-            18 => Some(Step::Complete),
+            2 => Some(Step::Instance),
+            3 => Some(Step::Provider),
+            4 => Some(Step::Auth),
+            5 => Some(Step::Model),
+            6 => Some(Step::Fallback),
+            7 => Some(Step::Channels),
+            8 => Some(Step::ChannelConfig),
+            9 => Some(Step::Gateway),
+            10 => Some(Step::Agent),
+            11 => Some(Step::Workspace),
+            12 => Some(Step::Security),
+            13 => Some(Step::Features),
+            14 => Some(Step::Voice),
+            15 => Some(Step::Images),
+            16 => Some(Step::Orchestration),
+            17 => Some(Step::Memory),
+            18 => Some(Step::Skills),
+            19 => Some(Step::Complete),
             _ => None,
         }
     }
@@ -82,6 +95,7 @@ impl Step {
         match self {
             Step::Welcome => "Welcome to Zeus",
             Step::Mode => "Setup Mode",
+            Step::Instance => "Choose instance",
             Step::Provider => "Pick your LLM provider",
             Step::Auth => "Authenticate",
             Step::Model => "Pick a model",
@@ -106,23 +120,40 @@ impl Step {
         match self {
             Step::Welcome => "Autonomous AI agents on your hardware",
             Step::Mode => "Choose how you want to configure Zeus",
+            Step::Instance => "Default ~/.zeus or preview a named instance home",
             Step::Provider => "Primary model that powers agent reasoning",
             Step::Auth => "Enter your API key",
-            Step::Model => "From the provider's catalog. You can change anytime via zeus config set model ...",
+            Step::Model => {
+                "From the provider's catalog. You can change anytime via zeus config set model ..."
+            }
             Step::Fallback => "Pick 0-3 fallback providers for when your primary is down.",
-            Step::Channels => "Select which channels Zeus should bridge. Per-channel credentials collected next.",
+            Step::Channels => {
+                "Select which channels Zeus should bridge. Per-channel credentials collected next."
+            }
             Step::ChannelConfig => "Per-channel credentials for the channels you selected.",
             Step::Gateway => "The gateway hosts the API, WebUI, and agent processing loop.",
-            Step::Agent => "Pick an archetype to seed your agent's SOUL.md. Customize freely after onboarding.",
-            Step::Workspace => "Where Zeus stores your agent's working memory, sessions, and journal.",
-            Step::Security => "Sandbox aggressiveness for tool execution. Approval pipeline always active.",
-            Step::Features => "Toggle which Zeus crates are active in this deployment. Disabled crates compile but don't load.",
+            Step::Agent => {
+                "Pick an archetype to seed your agent's SOUL.md. Customize freely after onboarding."
+            }
+            Step::Workspace => {
+                "Where Zeus stores your agent's working memory, sessions, and journal."
+            }
+            Step::Security => {
+                "Sandbox aggressiveness for tool execution. Approval pipeline always active."
+            }
+            Step::Features => {
+                "Toggle which Zeus crates are active in this deployment. Disabled crates compile but don't load."
+            }
             Step::Voice => "Give your agent a voice. Pick a TTS provider or skip with None.",
             Step::Images => "Powers image_generate and image_edit. Writes to [talos.image].",
             Step::Orchestration => "How Zeus runs background work — heartbeat, cron, watchdog.",
-            Step::Memory => "Mnemosyne — semantic search over agent history. Pick embedding provider.",
+            Step::Memory => {
+                "Mnemosyne — semantic search over agent history. Pick embedding provider."
+            }
             Step::Skills => "Pre-built capabilities for your agent. Toggle to install.",
-            Step::Complete => "Review your setup before launch. All settings persist to ~/.zeus/config.toml.",
+            Step::Complete => {
+                "Review your setup before launch. All settings persist to ~/.zeus/config.toml."
+            }
         }
     }
 }
@@ -154,8 +185,9 @@ pub struct App {
     /// Which footer button (if any) is currently focused. Derived from
     /// `tab_cursor` on each Tab; the render reads it for the highlight.
     pub footer_focus: Option<FooterFocus>,
-    mode_selected: usize, // 0=quickstart, 1=full, 2=custom
+    mode_selected: usize,     // 0=quickstart, 1=full, 2=custom
     provider_selected: usize, // index into PROVIDERS
+    instance_screen: InstanceScreen,
     model_screen: ModelScreen,
     pub fallback_screen: FallbackScreen,
     pub channels_screen: ChannelsScreen,
@@ -179,7 +211,7 @@ pub struct App {
     /// Renderers read it; only the loop's `tick()` writes it.
     pub anim_tick: u64,
     // Auth screen state
-    auth_mode: usize,       // 0=key, 1=token, 2=browser
+    auth_mode: usize, // 0=key, 1=token, 2=browser
     auth_api_key: String,
     auth_test_status: Option<&'static str>,
     // Workspace screen state
@@ -210,7 +242,7 @@ pub struct App {
     /// condition is edge-triggered by `launching`, but this guards against any
     /// future re-entry resetting `launching` and double-firing).
     awaken_fired: bool,
-    prod_active_tab: usize,       // index into PRIMARY_TABS
+    prod_active_tab: usize,         // index into PRIMARY_TABS
     prod_active_adv: Option<usize>, // grid cursor in advanced overlay, None if overlay not open
     prod_adv_detail: Option<usize>, // drilled-into subview (index into ADVANCED_TABS), None = grid
     prod_chat_messages: Vec<ChatMessage>,
@@ -285,7 +317,7 @@ pub struct App {
     prod_office_show_help: bool,
     prod_pantheon_selected: usize, // Pantheon tab — selected mission index
     prod_wallet_view: prod::WalletView, // Wallet tab — active sub-view (1–6)
-    prod_wallet_titan_sel: usize, // Wallet tab — selected fleet titan index
+    prod_wallet_titan_sel: usize,  // Wallet tab — selected fleet titan index
     prod_tools_filter: String,
     prod_tools_scroll: usize,
     // --- Gateway integration (Phase 2): live connection + identity ---
@@ -341,6 +373,7 @@ impl App {
             footer_focus: None,
             mode_selected: 0,
             provider_selected: 0,
+            instance_screen: InstanceScreen::new(),
             model_screen: ModelScreen::new("anthropic".to_string()),
             fallback_screen: FallbackScreen::new("anthropic".to_string()),
             channels_screen: ChannelsScreen::new(),
@@ -464,9 +497,74 @@ impl App {
             .map(|cfg| !cfg.needs_onboarding())
             .unwrap_or(false);
         let mut app = App::new();
+        if let Some(cfg) = loaded.as_ref().filter(|cfg| !cfg.loaded_from_default) {
+            app.hydrate_from_config(cfg);
+        }
         app.existing_config = existing_config;
         app.onboarding_complete = onboarding_complete;
         app
+    }
+
+    /// Pre-populate wizard-owned state from an existing config. This makes an
+    /// interactive re-run of onboarding on a configured box a no-op unless the
+    /// user actually changes fields, instead of letting fresh wizard defaults
+    /// overwrite top-level config values on AWAKEN.
+    fn hydrate_from_config(&mut self, cfg: &zeus_core::Config) {
+        let (provider, model) = cfg.parse_model();
+        let canonical_provider = provider.name();
+        let provider_id = match canonical_provider {
+            "google-gemini-cli" => "gemini-cli",
+            "moonshot" => "kimi",
+            "zai" => "glm",
+            "xiaomimimo" => "mimo",
+            other => other,
+        };
+        if let Some(idx) = crate::screens::providers::PROVIDERS
+            .iter()
+            .position(|p| p.id == provider_id)
+        {
+            self.provider_selected = idx;
+            self.model_screen.set_provider(provider_id);
+            self.fallback_screen.set_primary(provider_id);
+        }
+        self.model_screen.select_model_id(&model);
+
+        if let Some(fallbacks) = cfg.fallback_models.as_ref() {
+            self.fallback_screen.chain = fallbacks.clone();
+        }
+
+        let agent = cfg.agent.as_ref();
+        let persona = agent
+            .and_then(|a| a.persona.as_deref())
+            .or(cfg.persona.as_deref());
+        if let Some(persona) = persona {
+            self.agent_screen.select_persona_name(persona);
+        }
+        if let Some(name) = agent
+            .and_then(|a| a.name.as_deref())
+            .or(cfg.name.as_deref())
+            .filter(|name| !name.trim().is_empty())
+        {
+            self.agent_screen.name = name.to_string();
+            self.agent_name = name.to_string();
+        }
+        if let Some(role) = agent.and_then(|a| a.role.as_deref()) {
+            self.agent_screen.role = role.to_string();
+        }
+
+        self.workspace_path = cfg.workspace.display().to_string();
+        self.sessions_path = cfg.sessions.display().to_string();
+
+        if let Some(gateway) = cfg.gateway.as_ref() {
+            self.gateway_screen.host = gateway.host.clone();
+            self.gateway_screen.port = gateway.port.to_string();
+            self.gateway_host = gateway.host.clone();
+            self.gateway_port = gateway.port;
+        }
+
+        if !cfg.enabled_skills.is_empty() {
+            self.skills_screen.installed = cfg.enabled_skills.clone();
+        }
     }
 
     /// Append a user message synchronously before dispatching to the async
@@ -585,7 +683,12 @@ impl App {
         let summary: String = output.chars().take(60).collect();
         self.prod_stream_state = StreamState::Streaming;
         // Find the last matching tool that isn't done yet.
-        if let Some(item) = self.prod_tool_feed.iter_mut().rev().find(|t| t.name == name && !t.done) {
+        if let Some(item) = self
+            .prod_tool_feed
+            .iter_mut()
+            .rev()
+            .find(|t| t.name == name && !t.done)
+        {
             item.done = true;
             item.output_summary = summary;
         }
@@ -615,6 +718,26 @@ impl App {
             .sum()
     }
 
+    fn handle_mouse_prod(&mut self, kind: MouseEventKind) {
+        if !self.onboarding_complete
+            || self.prod_active_tab != 0
+            || self.prod_active_adv.is_some()
+            || self.prod_adv_detail.is_some()
+        {
+            return;
+        }
+
+        match kind {
+            MouseEventKind::ScrollUp => {
+                self.prod_chat_scroll = (self.prod_chat_scroll + 3).min(self.chat_scroll_max());
+            }
+            MouseEventKind::ScrollDown => {
+                self.prod_chat_scroll = self.prod_chat_scroll.saturating_sub(3);
+            }
+            _ => {}
+        }
+    }
+
     /// Production UI key handling — Tab/Shift-Tab cycles tabs, Enter selects advanced.
     fn handle_key_prod(&mut self, key: KeyCode) {
         match key {
@@ -626,14 +749,10 @@ impl App {
             // below (`prod_active_tab == 0 && prod_active_adv.is_none()`); when
             // it fails, the arm doesn't match and the char falls through to the
             // chat-input catch-all.
-            KeyCode::Char('q')
-                if self.prod_active_tab != 0 || self.prod_active_adv.is_some() =>
-            {
+            KeyCode::Char('q') if self.prod_active_tab != 0 || self.prod_active_adv.is_some() => {
                 self.should_quit = true
             }
-            KeyCode::Char('c')
-                if self.prod_active_tab != 0 || self.prod_active_adv.is_some() =>
-            {
+            KeyCode::Char('c') if self.prod_active_tab != 0 || self.prod_active_adv.is_some() => {
                 // Ctrl+C is handled by crossterm as Char('c') with ctrl modifier
                 // For now, just 'q' quits
             }
@@ -654,9 +773,11 @@ impl App {
             KeyCode::BackTab => {
                 if self.prod_active_adv.is_some() {
                     let adv = self.prod_active_adv.unwrap_or(0);
-                    self.prod_active_adv = Some((adv + ADVANCED_TABS.len() - 1) % ADVANCED_TABS.len());
+                    self.prod_active_adv =
+                        Some((adv + ADVANCED_TABS.len() - 1) % ADVANCED_TABS.len());
                 } else {
-                    self.prod_active_tab = (self.prod_active_tab + PRIMARY_TABS.len() - 1) % PRIMARY_TABS.len();
+                    self.prod_active_tab =
+                        (self.prod_active_tab + PRIMARY_TABS.len() - 1) % PRIMARY_TABS.len();
                 }
             }
             KeyCode::Enter => {
@@ -684,8 +805,9 @@ impl App {
                             // Standalone (no gateway wired) — no live backend.
                             self.prod_chat_messages.push(ChatMessage {
                                 role: Role::Assistant,
-                                text: "(not connected to a gateway — launch via `zeus` for live chat)"
-                                    .to_string(),
+                                text:
+                                    "(not connected to a gateway — launch via `zeus` for live chat)"
+                                        .to_string(),
                                 tool_name: None,
                             });
                             self.prod_stream_state = StreamState::Idle;
@@ -703,6 +825,9 @@ impl App {
                     self.prod_active_adv = None;
                 } else if self.prod_slash_open {
                     self.prod_slash_open = false;
+                } else if self.prod_active_tab == 0 && self.prod_chat_scroll > 0 {
+                    // Chat history scrolled up → jump back to the live bottom.
+                    self.prod_chat_scroll = 0;
                 } else if tab_id == Some("office") {
                     // Office P3: Esc closes memo/help overlays and clears focus.
                     self.prod_office_show_memo = false;
@@ -710,14 +835,11 @@ impl App {
                     self.prod_office_focused = None;
                 }
             }
-            KeyCode::Char('f')
-                if self.prod_active_tab != 0 || self.prod_active_adv.is_some() =>
-            {
+            KeyCode::Char('f') if self.prod_active_tab != 0 || self.prod_active_adv.is_some() => {
                 // Back-compat focus shortcut; Tab is the prototype key for Office focus.
                 let tab_id = PRIMARY_TABS.get(self.prod_active_tab).map(|t| t.id);
                 if tab_id == Some("office") && self.prod_active_adv.is_none() {
-                    self.prod_office_focused =
-                        prod::cycle_focused(self.prod_office_focused);
+                    self.prod_office_focused = prod::cycle_focused(self.prod_office_focused);
                 }
             }
             KeyCode::Char('m') | KeyCode::Char('M')
@@ -748,49 +870,64 @@ impl App {
             }
             // Wallet tab — sub-view switch (1–6) + titan nav (j/k).
             KeyCode::Char(c)
-                if PRIMARY_TABS.get(self.prod_active_tab).map(|t| t.id) == Some("wallet") => {
-                    match c {
-                        '1'..='6' => {
-                            let n = (c as u8 - b'0') as usize;
-                            if let Some(v) = prod::WalletView::from_key(n) {
-                                self.prod_wallet_view = v;
-                            }
+                if PRIMARY_TABS.get(self.prod_active_tab).map(|t| t.id) == Some("wallet") =>
+            {
+                match c {
+                    '1'..='6' => {
+                        let n = (c as u8 - b'0') as usize;
+                        if let Some(v) = prod::WalletView::from_key(n) {
+                            self.prod_wallet_view = v;
                         }
-                        'j' => {
-                            // #274: nav over LIVE fleet wallets (empty → no-op).
-                            let count = self
-                                .prod_economy_wallets
-                                .as_ref()
-                                .map(|w| w.len())
-                                .unwrap_or(0);
-                            if count > 0 {
-                                self.prod_wallet_titan_sel =
-                                    (self.prod_wallet_titan_sel + 1) % count;
-                            }
-                        }
-                        'k' => {
-                            let count = self
-                                .prod_economy_wallets
-                                .as_ref()
-                                .map(|w| w.len())
-                                .unwrap_or(0);
-                            if count > 0 {
-                                self.prod_wallet_titan_sel =
-                                    (self.prod_wallet_titan_sel + count - 1) % count;
-                            }
-                        }
-                        _ => {}
                     }
+                    'j' => {
+                        // #274: nav over LIVE fleet wallets (empty → no-op).
+                        let count = self
+                            .prod_economy_wallets
+                            .as_ref()
+                            .map(|w| w.len())
+                            .unwrap_or(0);
+                        if count > 0 {
+                            self.prod_wallet_titan_sel = (self.prod_wallet_titan_sel + 1) % count;
+                        }
+                    }
+                    'k' => {
+                        let count = self
+                            .prod_economy_wallets
+                            .as_ref()
+                            .map(|w| w.len())
+                            .unwrap_or(0);
+                        if count > 0 {
+                            self.prod_wallet_titan_sel =
+                                (self.prod_wallet_titan_sel + count - 1) % count;
+                        }
+                    }
+                    _ => {}
                 }
-            KeyCode::Char(c)
-                if self.prod_active_tab == 0 && self.prod_active_adv.is_none() => {
-                    // Chat input
-                    self.prod_chat_input.push(c);
+            }
+            KeyCode::Char(c) if self.prod_active_tab == 0 && self.prod_active_adv.is_none() => {
+                // Chat input
+                self.prod_chat_input.push(c);
+            }
+            KeyCode::Backspace if self.prod_active_tab == 0 => {
+                self.prod_chat_input.pop();
+            }
+            KeyCode::PageUp => {
+                if self.prod_active_tab == 0
+                    && self.prod_active_adv.is_none()
+                    && self.prod_adv_detail.is_none()
+                {
+                    self.prod_chat_scroll =
+                        (self.prod_chat_scroll + 10).min(self.chat_scroll_max());
                 }
-            KeyCode::Backspace
-                if self.prod_active_tab == 0 => {
-                    self.prod_chat_input.pop();
+            }
+            KeyCode::PageDown => {
+                if self.prod_active_tab == 0
+                    && self.prod_active_adv.is_none()
+                    && self.prod_adv_detail.is_none()
+                {
+                    self.prod_chat_scroll = self.prod_chat_scroll.saturating_sub(10);
                 }
+            }
             KeyCode::Up => {
                 if self.prod_adv_detail.is_some() {
                     // no-op inside a subview (subviews own their own scroll later)
@@ -944,7 +1081,16 @@ impl App {
         let persona = self.agent_screen.persona_name().to_string();
         cfg.persona = Some(persona.clone());
         let agent = cfg.agent.get_or_insert_with(Default::default);
-        agent.name = Some(self.agent_screen.summary_name());
+        let wizard_name = self.agent_screen.summary_name();
+        let wizard_name_was_explicit = !self.agent_screen.name.trim().is_empty();
+        let existing_name_empty = agent
+            .name
+            .as_deref()
+            .map(|name| name.trim().is_empty())
+            .unwrap_or(true);
+        if wizard_name_was_explicit || existing_name_empty {
+            agent.name = Some(wizard_name);
+        }
         agent.persona = Some(persona);
 
         // ── workspace / sessions paths ──
@@ -1106,7 +1252,11 @@ impl App {
                     username: None,
                     channels,
                     use_tls: port == 6697,
-                    nickserv_password: if nickserv.is_empty() { None } else { Some(nickserv) },
+                    nickserv_password: if nickserv.is_empty() {
+                        None
+                    } else {
+                        Some(nickserv)
+                    },
                     policy: None,
                     allow_bots: bot_policy("irc"),
                 });
@@ -1252,9 +1402,10 @@ impl App {
 
         // Canonical id (display "glm" → "zai") so the review row matches the
         // persisted config.model exactly.
-        let provider_id =
-            zeus_core::Provider::from_prefix(screens::provider::provider_id_at(self.provider_selected))
-                .name();
+        let provider_id = zeus_core::Provider::from_prefix(screens::provider::provider_id_at(
+            self.provider_selected,
+        ))
+        .name();
         let auth_label = screens::auth::AUTH_MODES[self.auth_mode.min(2)].label;
         let voice_id = self.voice_screen.selected_id();
         let image_id = self.images_screen.selected_id();
@@ -1269,7 +1420,11 @@ impl App {
                 format!("{}/{}", provider_id, self.model_screen.selected_model_id()),
                 Configured,
             ),
-            row("Authentication", format!("{} · ✓ tested", auth_label), Configured),
+            row(
+                "Authentication",
+                format!("{} · ✓ tested", auth_label),
+                Configured,
+            ),
             row(
                 "Backup LLMs",
                 format!("{} configured", fallback_n),
@@ -1300,16 +1455,28 @@ impl App {
                 format!("aegis level: {}", self.security_screen.config_level_value()),
                 Configured,
             ),
-            row("Features", format!("{} subsystems on", features_n), Configured),
+            row(
+                "Features",
+                format!("{} subsystems on", features_n),
+                Configured,
+            ),
             row(
                 "Voice (TTS)",
                 voice_id.to_string(),
-                if voice_id == "none" { Skipped } else { Configured },
+                if voice_id == "none" {
+                    Skipped
+                } else {
+                    Configured
+                },
             ),
             row(
                 "Image Generator",
                 image_id.to_string(),
-                if image_id == "none" { Skipped } else { Configured },
+                if image_id == "none" {
+                    Skipped
+                } else {
+                    Configured
+                },
             ),
             row(
                 "Orchestration",
@@ -1382,7 +1549,10 @@ impl App {
             self.gateway_screen.host.trim()
         };
         let (passed, detail) = match self.gateway_screen.port.trim().parse::<u16>() {
-            Err(_) => (false, format!("invalid port '{}'", self.gateway_screen.port)),
+            Err(_) => (
+                false,
+                format!("invalid port '{}'", self.gateway_screen.port),
+            ),
             Ok(port) => {
                 use std::net::{TcpStream, ToSocketAddrs};
                 use std::time::Duration;
@@ -1485,8 +1655,7 @@ impl App {
     /// disagree. merakizzz's live test: a bare `"asdf"` advanced today because
     /// nothing gated the Auth Enter arm; this blocks that.
     pub fn auth_key_valid(&self) -> bool {
-        let (_name, _color, key_fmt) =
-            screens::provider::provider_display(self.provider_selected);
+        let (_name, _color, key_fmt) = screens::provider::provider_display(self.provider_selected);
         let key = self.auth_api_key.trim();
         if key.is_empty() {
             return false;
@@ -1539,8 +1708,7 @@ impl App {
                     ModelFetchState::Idle | ModelFetchState::Failed(_) => {
                         // Fire (or retry) the fetch; spinner renders next frame.
                         let provider_id =
-                            screens::provider::provider_id_at(self.provider_selected)
-                                .to_string();
+                            screens::provider::provider_id_at(self.provider_selected).to_string();
                         let key = self.auth_api_key.trim().to_string();
                         if let Some(tx) = &self.fetch_tx {
                             self.model_fetch_state = ModelFetchState::Fetching;
@@ -1564,7 +1732,7 @@ impl App {
                     }
                 }
             }
-        } else if self.current_step < 18 {
+        } else if self.current_step < Step::Complete as usize {
             self.current_step += 1;
             self.on_step_enter();
         }
@@ -1588,7 +1756,8 @@ impl App {
     fn footer_field_count(&self) -> usize {
         match Step::from_index(self.current_step) {
             // Screens whose Tab arm cycles internal fields (see handle_key Tab).
-            Some(Step::Agent) => 3,   // AgentScreen::FIELD_COUNT
+            Some(Step::Instance) => self.instance_screen.field_count(),
+            Some(Step::Agent) => 3, // AgentScreen::FIELD_COUNT
             Some(Step::Voice) => self.voice_screen.field_count(),
             Some(Step::Images) => self.images_screen.field_count(),
             Some(Step::Memory) => self.memory_screen.field_count(),
@@ -1643,11 +1812,10 @@ impl App {
             // ESC = back one step (does NOT quit). On the first step it is a
             // no-op. Mirrors the Left step-back idiom; on Mode it steps back
             // off the screen rather than moving the card selection.
-            KeyCode::Esc
-                if self.current_step > 0 => {
-                    self.current_step -= 1;
-                    self.on_step_enter();
-                }
+            KeyCode::Esc if self.current_step > 0 => {
+                self.current_step -= 1;
+                self.on_step_enter();
+            }
             KeyCode::Right => {
                 // Mode screen lays its 3 cards out horizontally → ←/→ move the
                 // card selection (not step-nav). Enter advances past Mode.
@@ -1679,7 +1847,7 @@ impl App {
                     // Skills: ←/→ switch the category tab (grid-local, not
                     // step-nav). Filter via typing; Space/Enter toggle install.
                     self.skills_screen.next_category();
-                } else if self.current_step < 18 {
+                } else if self.current_step < Step::Complete as usize {
                     self.advance_step();
                 }
             }
@@ -1702,9 +1870,7 @@ impl App {
                     // (Space owns toggle here — see the Char(' ') arm). This is
                     // the merakizzz wedge fix: Enter felt stuck because it was
                     // consumed by the per-screen toggle/test instead of nav.
-                    Some(Step::Channels)
-                    | Some(Step::Features)
-                    | Some(Step::Voice)
+                    Some(Step::Channels) | Some(Step::Features) | Some(Step::Voice)
                     | Some(Step::Images) => {
                         self.advance_step();
                     }
@@ -1761,7 +1927,7 @@ impl App {
                         self.advance_step();
                     }
                     _ => {
-                        if self.current_step < 18 {
+                        if self.current_step < Step::Complete as usize {
                             self.current_step += 1;
                             self.on_step_enter();
                         }
@@ -1802,130 +1968,128 @@ impl App {
                     self.on_step_enter();
                 }
             }
-            KeyCode::Up => {
-                match Step::from_index(self.current_step) {
-                    Some(Step::Mode) if self.mode_selected > 0 => {
-                        self.mode_selected -= 1;
-                    }
-                    Some(Step::Provider) if self.provider_selected > 0 => {
-                        self.provider_selected -= 1;
-                    }
-                    Some(Step::Model) => {
-                        self.model_screen.move_up();
-                    }
-                    Some(Step::Auth)
-                        if self.auth_mode > 0 => {
-                            self.auth_mode -= 1;
-                        }
-                    Some(Step::Fallback) => {
-                        self.fallback_screen.move_up();
-                    }
-                    Some(Step::Channels) => {
-                        self.channels_screen.move_up();
-                    }
-                    Some(Step::ChannelConfig) => {
-                        self.chanconfig_screen.focus_prev();
-                    }
-                    Some(Step::Gateway) => {
-                        self.gateway_screen.move_up();
-                    }
-                    Some(Step::Agent) => {
-                        self.agent_screen.move_up();
-                    }
-                    Some(Step::Workspace)
-                        if self.workspace_focused_field > 0 => {
-                            self.workspace_focused_field -= 1;
-                        }
-                    Some(Step::Security) => {
-                        self.security_screen.select_prev();
-                    }
-                    Some(Step::Features) => {
-                        self.features_screen.move_up();
-                    }
-                    Some(Step::Voice) => {
-                        self.voice_screen.select_prev();
-                    }
-                    Some(Step::Images) => {
-                        self.images_screen.select_prev();
-                    }
-                    Some(Step::Orchestration) => {
-                        self.orchestration_screen.handle_up();
-                    }
-                    Some(Step::Memory) => {
-                        self.memory_screen.select_prev();
-                    }
-                    Some(Step::Skills) => {
-                        self.skills_screen.move_up();
-                    }
-                    _ => {}
+            KeyCode::Up => match Step::from_index(self.current_step) {
+                Some(Step::Mode) if self.mode_selected > 0 => {
+                    self.mode_selected -= 1;
                 }
-            }
-            KeyCode::Down => {
-                match Step::from_index(self.current_step) {
-                    Some(Step::Mode) if self.mode_selected < 2 => {
-                        self.mode_selected += 1;
-                    }
-                    Some(Step::Provider)
-                        if self.provider_selected
-                            < crate::screens::providers::PROVIDERS.len() - 1 =>
-                    {
-                        self.provider_selected += 1;
-                    }
-                    Some(Step::Model) => {
-                        self.model_screen.move_down();
-                    }
-                    Some(Step::Auth)
-                        if self.auth_mode < 2 => {
-                            self.auth_mode += 1;
-                        }
-                    Some(Step::Fallback) => {
-                        self.fallback_screen.move_down();
-                    }
-                    Some(Step::Channels) => {
-                        self.channels_screen.move_down();
-                    }
-                    Some(Step::ChannelConfig) => {
-                        self.chanconfig_screen.focus_next();
-                    }
-                    Some(Step::Gateway) => {
-                        self.gateway_screen.move_down();
-                    }
-                    Some(Step::Agent) => {
-                        self.agent_screen.move_down();
-                    }
-                    Some(Step::Workspace)
-                        if self.workspace_focused_field < 2 => {
-                            self.workspace_focused_field += 1;
-                        }
-                    Some(Step::Security) => {
-                        self.security_screen.select_next();
-                    }
-                    Some(Step::Features) => {
-                        self.features_screen.move_down();
-                    }
-                    Some(Step::Voice) => {
-                        self.voice_screen.select_next();
-                    }
-                    Some(Step::Images) => {
-                        self.images_screen.select_next();
-                    }
-                    Some(Step::Orchestration) => {
-                        self.orchestration_screen.handle_down();
-                    }
-                    Some(Step::Memory) => {
-                        self.memory_screen.select_next();
-                    }
-                    Some(Step::Skills) => {
-                        self.skills_screen.move_down();
-                    }
-                    _ => {}
+                Some(Step::Provider) if self.provider_selected > 0 => {
+                    self.provider_selected -= 1;
                 }
-            }
+                Some(Step::Model) => {
+                    self.model_screen.move_up();
+                }
+                Some(Step::Auth) if self.auth_mode > 0 => {
+                    self.auth_mode -= 1;
+                }
+                Some(Step::Fallback) => {
+                    self.fallback_screen.move_up();
+                }
+                Some(Step::Channels) => {
+                    self.channels_screen.move_up();
+                }
+                Some(Step::ChannelConfig) => {
+                    self.chanconfig_screen.focus_prev();
+                }
+                Some(Step::Gateway) => {
+                    self.gateway_screen.move_up();
+                }
+                Some(Step::Agent) => {
+                    self.agent_screen.move_up();
+                }
+                Some(Step::Workspace) if self.workspace_focused_field > 0 => {
+                    self.workspace_focused_field -= 1;
+                }
+                Some(Step::Security) => {
+                    self.security_screen.select_prev();
+                }
+                Some(Step::Features) => {
+                    self.features_screen.move_up();
+                }
+                Some(Step::Voice) => {
+                    self.voice_screen.select_prev();
+                }
+                Some(Step::Images) => {
+                    self.images_screen.select_prev();
+                }
+                Some(Step::Orchestration) => {
+                    self.orchestration_screen.handle_up();
+                }
+                Some(Step::Memory) => {
+                    self.memory_screen.select_prev();
+                }
+                Some(Step::Skills) => {
+                    self.skills_screen.move_up();
+                }
+                _ => {}
+            },
+            KeyCode::Down => match Step::from_index(self.current_step) {
+                Some(Step::Mode) if self.mode_selected < 2 => {
+                    self.mode_selected += 1;
+                }
+                Some(Step::Provider)
+                    if self.provider_selected < crate::screens::providers::PROVIDERS.len() - 1 =>
+                {
+                    self.provider_selected += 1;
+                }
+                Some(Step::Model) => {
+                    self.model_screen.move_down();
+                }
+                Some(Step::Auth) if self.auth_mode < 2 => {
+                    self.auth_mode += 1;
+                }
+                Some(Step::Fallback) => {
+                    self.fallback_screen.move_down();
+                }
+                Some(Step::Channels) => {
+                    self.channels_screen.move_down();
+                }
+                Some(Step::ChannelConfig) => {
+                    self.chanconfig_screen.focus_next();
+                }
+                Some(Step::Gateway) => {
+                    self.gateway_screen.move_down();
+                }
+                Some(Step::Agent) => {
+                    self.agent_screen.move_down();
+                }
+                Some(Step::Workspace) if self.workspace_focused_field < 2 => {
+                    self.workspace_focused_field += 1;
+                }
+                Some(Step::Security) => {
+                    self.security_screen.select_next();
+                }
+                Some(Step::Features) => {
+                    self.features_screen.move_down();
+                }
+                Some(Step::Voice) => {
+                    self.voice_screen.select_next();
+                }
+                Some(Step::Images) => {
+                    self.images_screen.select_next();
+                }
+                Some(Step::Orchestration) => {
+                    self.orchestration_screen.handle_down();
+                }
+                Some(Step::Memory) => {
+                    self.memory_screen.select_next();
+                }
+                Some(Step::Skills) => {
+                    self.skills_screen.move_down();
+                }
+                _ => {}
+            },
             KeyCode::Char(c) => {
                 // Space activates a Tab-focused footer button (BACK/NEXT),
                 // mirroring the Enter footer arm. Only when the footer is
                 // focused — otherwise Space falls through to its per-screen use
                 // (toggle install on Skills/Channels/Features text input etc.).
+                if Step::from_index(self.current_step) == Some(Step::Instance)
+                    && c == ' '
+                    && self.footer_focus.is_none()
+                {
+                    self.instance_screen.toggle_target();
+                    return;
+                }
                 if let (' ', Some(f)) = (c, self.footer_focus) {
                     match f {
                         FooterFocus::Back => self.step_back(),
@@ -1933,10 +2097,12 @@ impl App {
                     }
                     return;
                 }
+                if Step::from_index(self.current_step) == Some(Step::Instance) {
+                    self.instance_screen.handle_char(c);
+                    return;
+                }
                 // Fallback: [ / ] reorder the chain (matches JSX hint).
-                if self.current_step == Step::Fallback as usize
-                    && (c == '[' || c == ']')
-                {
+                if self.current_step == Step::Fallback as usize && (c == '[' || c == ']') {
                     if c == '[' {
                         self.fallback_screen.chain_move_up();
                     } else {
@@ -2012,7 +2178,9 @@ impl App {
                 // run that screen's existing per-screen Tab arm.
                 self.tab_advance();
                 if self.footer_focus.is_none() {
-                    if self.current_step == Step::Agent as usize {
+                    if self.current_step == Step::Instance as usize {
+                        self.instance_screen.focus_next();
+                    } else if self.current_step == Step::Agent as usize {
                         self.agent_screen.focus_next_field();
                     } else if self.current_step == Step::Voice as usize {
                         self.voice_screen.focus_next();
@@ -2028,7 +2196,9 @@ impl App {
                 }
             }
             KeyCode::Backspace => {
-                if self.current_step == Step::Auth as usize {
+                if self.current_step == Step::Instance as usize {
+                    self.instance_screen.backspace();
+                } else if self.current_step == Step::Auth as usize {
                     self.auth_api_key.pop();
                     self.auth_test_status = None;
                 } else if self.current_step == Step::ChannelConfig as usize {
@@ -2045,9 +2215,15 @@ impl App {
                     }
                 } else if self.current_step == Step::Workspace as usize {
                     match self.workspace_focused_field {
-                        0 => { self.workspace_path.pop(); }
-                        1 => { self.sessions_path.pop(); }
-                        2 => { self.mnemosyne_path.pop(); }
+                        0 => {
+                            self.workspace_path.pop();
+                        }
+                        1 => {
+                            self.sessions_path.pop();
+                        }
+                        2 => {
+                            self.mnemosyne_path.pop();
+                        }
                         _ => {}
                     }
                 } else if self.current_step == Step::Voice as usize {
@@ -2116,7 +2292,7 @@ pub fn frame(f: &mut ratatui::Frame, app: &App) {
         .constraints([
             Constraint::Length(1), // TopBar
             Constraint::Length(1), // StepIndicator (windowed progress rail)
-            Constraint::Min(0),   // Body
+            Constraint::Min(0),    // Body
             Constraint::Length(1), // StatusBar
         ])
         .split(area);
@@ -2143,7 +2319,7 @@ pub fn frame(f: &mut ratatui::Frame, app: &App) {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3), // StepHeader
-                Constraint::Min(0),   // Screen content
+                Constraint::Min(0),    // Screen content
             ])
             .split(chrome[2]);
 
@@ -2181,6 +2357,13 @@ pub fn frame(f: &mut ratatui::Frame, app: &App) {
                     selected: app.mode_selected,
                 };
                 f.render_widget(screen, body[1]);
+            }
+            Step::Instance => {
+                app.instance_screen.render_with_cursor(
+                    body[1],
+                    f.buffer_mut(),
+                    app.cursor_visible(),
+                );
             }
             Step::Provider => {
                 let screen = ProviderScreen {
@@ -2227,8 +2410,11 @@ pub fn frame(f: &mut ratatui::Frame, app: &App) {
                 app.channels_screen.render(body[1], f.buffer_mut());
             }
             Step::ChannelConfig => {
-                app.chanconfig_screen
-                    .render_with_cursor(body[1], f.buffer_mut(), app.cursor_visible());
+                app.chanconfig_screen.render_with_cursor(
+                    body[1],
+                    f.buffer_mut(),
+                    app.cursor_visible(),
+                );
             }
             Step::Gateway => {
                 app.gateway_screen.render(body[1], f.buffer_mut());
@@ -2266,16 +2452,23 @@ pub fn frame(f: &mut ratatui::Frame, app: &App) {
                 app.voice_screen.render(body[1], f.buffer_mut());
             }
             Step::Images => {
-                app.images_screen.render_with_cursor(body[1], f.buffer_mut(), app.cursor_visible());
+                app.images_screen
+                    .render_with_cursor(body[1], f.buffer_mut(), app.cursor_visible());
             }
             Step::Orchestration => {
-                app.orchestration_screen.render_with_cursor(body[1], f.buffer_mut(), app.cursor_visible());
+                app.orchestration_screen.render_with_cursor(
+                    body[1],
+                    f.buffer_mut(),
+                    app.cursor_visible(),
+                );
             }
             Step::Memory => {
-                app.memory_screen.render_with_cursor(body[1], f.buffer_mut(), app.cursor_visible());
+                app.memory_screen
+                    .render_with_cursor(body[1], f.buffer_mut(), app.cursor_visible());
             }
             Step::Skills => {
-                app.skills_screen.render_with_cursor(body[1], f.buffer_mut(), app.cursor_visible());
+                app.skills_screen
+                    .render_with_cursor(body[1], f.buffer_mut(), app.cursor_visible());
             }
             Step::Complete => {
                 app.complete_screen.render(body[1], f.buffer_mut());
@@ -2286,7 +2479,7 @@ pub fn frame(f: &mut ratatui::Frame, app: &App) {
     // StatusBar
     let status_bar = StatusBar {
         can_back: app.current_step > 0,
-        can_continue: app.current_step < 18,
+        can_continue: app.current_step < Step::Complete as usize,
         footer_highlight: match app.footer_focus {
             Some(FooterFocus::Back) => crate::widgets::status_bar::FooterHighlight::Back,
             Some(FooterFocus::Next) => crate::widgets::status_bar::FooterHighlight::Next,
@@ -2351,7 +2544,7 @@ fn frame_prod(f: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect) {
         .constraints([
             Constraint::Length(1), // ProdTopBar
             Constraint::Length(1), // ProdTabBar
-            Constraint::Min(0),   // Tab content
+            Constraint::Min(0),    // Tab content
             Constraint::Length(1), // ProdStatusBar
         ])
         .split(area);
@@ -2435,14 +2628,15 @@ fn frame_prod(f: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect) {
             wallets: app.prod_economy_wallets.as_deref(),
             transactions: app.prod_economy_txs.as_deref(),
         };
-        let wallet = prod::WalletTab::with_live(app.prod_wallet_view, app.prod_wallet_titan_sel, live);
+        let wallet =
+            prod::WalletTab::with_live(app.prod_wallet_view, app.prod_wallet_titan_sel, live);
         f.render_widget(wallet, chrome[2]);
     } else if tab_id == Some("memory") {
         // Memory tab — overlay live gateway data (workspace files, sessions,
         // Mnemosyne hits) onto the JSX-parity schema. Each `MemoryLive` field
         // is `None` until its poll-worker (lib.rs run()) lands the first fetch;
         // the matching sub-tab falls back to const placeholders while absent.
-        use prod::memory_tab::{render_memory_tab, MemoryLive, MemorySubTab};
+        use prod::memory_tab::{MemoryLive, MemorySubTab, render_memory_tab};
         let live = MemoryLive {
             files: app.prod_memory_files.as_deref(),
             sessions: app.prod_sessions.as_deref(),
@@ -2496,7 +2690,12 @@ fn frame_prod(f: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect) {
 
 /// Render an advanced subview: JSX AdvancedTab detail header (line 1382)
 /// + the per-tab subview body (dispatched via prod::advanced_sub::render).
-fn render_advanced_detail(f: &mut ratatui::Frame, area: ratatui::layout::Rect, tab: &AdvTabDef, app: &App) {
+fn render_advanced_detail(
+    f: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    tab: &AdvTabDef,
+    app: &App,
+) {
     use ratatui::style::Modifier;
 
     if area.height < 3 || area.width < 12 {
@@ -2607,6 +2806,7 @@ pub fn run_loop(app: std::sync::Arc<std::sync::Mutex<App>>) -> io::Result<()> {
         let _ = crossterm::terminal::disable_raw_mode();
         let _ = crossterm::execute!(
             std::io::stdout(),
+            DisableMouseCapture,
             crossterm::terminal::LeaveAlternateScreen,
             crossterm::cursor::Show
         );
@@ -2619,6 +2819,7 @@ pub fn run_loop(app: std::sync::Arc<std::sync::Mutex<App>>) -> io::Result<()> {
     crossterm::execute!(
         stdout,
         crossterm::terminal::EnterAlternateScreen,
+        EnableMouseCapture,
         crossterm::cursor::Hide
     )?;
     let backend = CrosstermBackend::new(stdout);
@@ -2650,9 +2851,9 @@ pub fn run_loop(app: std::sync::Arc<std::sync::Mutex<App>>) -> io::Result<()> {
             }
         }
 
-        if event::poll(std::time::Duration::from_millis(100))?
-            && let Event::Key(key) = event::read()?
-                && key.kind == KeyEventKind::Press {
+        if event::poll(std::time::Duration::from_millis(100))? {
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
                     // Global hard-quit: Ctrl+C / Ctrl+Q always exits, on any
                     // screen (raw mode suppresses SIGINT, so we handle it here).
                     if key.modifiers.contains(KeyModifiers::CONTROL)
@@ -2664,11 +2865,20 @@ pub fn run_loop(app: std::sync::Arc<std::sync::Mutex<App>>) -> io::Result<()> {
                         .unwrap_or_else(|e| e.into_inner())
                         .handle_key_mods(key.code, key.modifiers);
                 }
+                Event::Mouse(mouse) => {
+                    app.lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .handle_mouse_prod(mouse.kind);
+                }
+                _ => {}
+            }
+        }
     }
 
     // Restore terminal
     crossterm::execute!(
         terminal.backend_mut(),
+        DisableMouseCapture,
         crossterm::terminal::LeaveAlternateScreen,
         crossterm::cursor::Show
     )?;
@@ -2690,6 +2900,108 @@ mod persist_tests {
     // Serializes every test that sets ZEUS_HOME (process-global).
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    /// #309: Re-running onboarding on an existing config must be a no-op for
+    /// wizard-owned top-level fields when the user just presses through it.
+    #[test]
+    fn new_from_disk_hydrates_existing_config_before_persist() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("ZEUS_HOME", tmp.path());
+        }
+
+        let home = dirs::home_dir().expect("home dir");
+        let workspace = home.join(".zeus/workspace-real");
+        let sessions = home.join(".zeus/sessions-real");
+        let seeded = format!(
+            r#"model = "sakana/fugu-ultra"
+onboarding_complete = false
+workspace = "{}"
+sessions = "{}"
+thinking_level = "xhigh"
+enabled_skills = ["custom-alpha", "custom-beta"]
+persona = "Innovator"
+
+[agent]
+name = "zeus-titan"
+persona = "Innovator"
+role = "Forensics lead"
+
+[gateway]
+host = "192.0.2.55"
+port = 9099
+"#,
+            workspace.display(),
+            sessions.display()
+        );
+        std::fs::write(tmp.path().join("config.toml"), seeded).unwrap();
+
+        let app = App::new_from_disk();
+        let cfg = app.collect_and_persist().expect("persist should succeed");
+
+        assert_eq!(cfg.model, "sakana/fugu-ultra");
+        assert_eq!(cfg.thinking_level.as_deref(), Some("xhigh"));
+        assert_eq!(cfg.enabled_skills, vec!["custom-alpha", "custom-beta"]);
+        assert_eq!(cfg.workspace, workspace);
+        assert_eq!(cfg.sessions, sessions);
+        assert_eq!(cfg.persona.as_deref(), Some("Innovator"));
+        let agent = cfg.agent.as_ref().expect("[agent] must survive");
+        assert_eq!(agent.name.as_deref(), Some("zeus-titan"));
+        assert_eq!(agent.persona.as_deref(), Some("Innovator"));
+        assert_eq!(agent.role.as_deref(), Some("Forensics lead"));
+        let gateway = cfg.gateway.as_ref().expect("[gateway] must survive");
+        assert_eq!(gateway.host, "192.0.2.55");
+        assert_eq!(gateway.port, 9099);
+
+        let saved = zeus_core::Config::load_from(tmp.path().join("config.toml"))
+            .expect("saved config should reload");
+        assert_eq!(saved.model, "sakana/fugu-ultra");
+        assert_eq!(
+            saved.agent.and_then(|a| a.name).as_deref(),
+            Some("zeus-titan")
+        );
+
+        unsafe {
+            std::env::remove_var("ZEUS_HOME");
+        }
+    }
+
+    /// #309 defense-in-depth: if persist is invoked with a fresh/default wizard
+    /// while a real config already has `[agent].name`, do not overwrite it with
+    /// the host-derived suggestion.
+    #[test]
+    fn persist_preserves_existing_agent_name_when_wizard_name_is_empty() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("ZEUS_HOME", tmp.path());
+        }
+
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            r#"model = "anthropic/claude-opus-4-8"
+onboarding_complete = false
+
+[agent]
+name = "zeus-real"
+persona = "Innovator"
+"#,
+        )
+        .unwrap();
+
+        let app = App::new();
+        assert!(
+            app.agent_screen.name.is_empty(),
+            "fresh wizard has no explicit name; summary_name would be suggested host name"
+        );
+        let cfg = app.collect_and_persist().expect("persist should succeed");
+        assert_eq!(cfg.agent.and_then(|a| a.name).as_deref(), Some("zeus-real"));
+
+        unsafe {
+            std::env::remove_var("ZEUS_HOME");
+        }
+    }
+
     /// 🔴 SACRED no-clobber guard at the config.toml layer: a pre-existing
     /// non-onboarding section (`[council]`) must survive the persist round-trip.
     /// Mirrors the 8 `.env`-merge tests that pin the no-clobber guarantee at the
@@ -2700,7 +3012,9 @@ mod persist_tests {
     fn council_section_survives_persist_round_trip() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("ZEUS_HOME", tmp.path()); }
+        unsafe {
+            std::env::set_var("ZEUS_HOME", tmp.path());
+        }
 
         // Seed a config.toml with a hand-set [council] section + a valid model
         // so Config::load() returns a real (non-default) config. The [council]
@@ -2744,7 +3058,9 @@ mod persist_tests {
             "persisted config must mark onboarding complete; got:\n{written}"
         );
 
-        unsafe { std::env::remove_var("ZEUS_HOME"); }
+        unsafe {
+            std::env::remove_var("ZEUS_HOME");
+        }
     }
 
     /// #290: a fresh onboarding config has no `[gateway]` section yet, so
@@ -2754,7 +3070,9 @@ mod persist_tests {
     fn gateway_host_port_persist_when_section_absent() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("ZEUS_HOME", tmp.path()); }
+        unsafe {
+            std::env::set_var("ZEUS_HOME", tmp.path());
+        }
 
         std::fs::write(
             tmp.path().join("config.toml"),
@@ -2785,7 +3103,9 @@ mod persist_tests {
             "persisted config must include custom gateway port; got:\n{written}"
         );
 
-        unsafe { std::env::remove_var("ZEUS_HOME"); }
+        unsafe {
+            std::env::remove_var("ZEUS_HOME");
+        }
     }
 
     /// P0 #185: a plain provider API key lands in config.toml `[credentials]`
@@ -2796,7 +3116,9 @@ mod persist_tests {
     fn plain_api_key_persists_to_config_credentials_not_env() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("ZEUS_HOME", tmp.path()); }
+        unsafe {
+            std::env::set_var("ZEUS_HOME", tmp.path());
+        }
 
         // Pre-existing .env with a Discord token that must NOT be touched.
         std::fs::write(
@@ -2833,7 +3155,9 @@ mod persist_tests {
             "no .env mirror — config.toml is the single source; got:\n{env}"
         );
 
-        unsafe { std::env::remove_var("ZEUS_HOME"); }
+        unsafe {
+            std::env::remove_var("ZEUS_HOME");
+        }
     }
 
     /// P0 #185: an OAuth setup-token (`sk-ant-oat…`) routes to
@@ -2844,7 +3168,9 @@ mod persist_tests {
     fn oauth_token_routes_to_provider_credentials_not_credentials() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("ZEUS_HOME", tmp.path()); }
+        unsafe {
+            std::env::set_var("ZEUS_HOME", tmp.path());
+        }
 
         std::fs::write(
             tmp.path().join("config.toml"),
@@ -2875,7 +3201,9 @@ mod persist_tests {
             "OAuth token must NOT go into [credentials] (→ x-api-key 401); got:\n{toml}"
         );
 
-        unsafe { std::env::remove_var("ZEUS_HOME"); }
+        unsafe {
+            std::env::remove_var("ZEUS_HOME");
+        }
     }
 
     /// MiniMax appears in the Auth screen as a normal API-key provider
@@ -2886,7 +3214,9 @@ mod persist_tests {
     fn minimax_plain_api_key_persists_to_config_credentials() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("ZEUS_HOME", tmp.path()); }
+        unsafe {
+            std::env::set_var("ZEUS_HOME", tmp.path());
+        }
 
         std::fs::write(
             tmp.path().join("config.toml"),
@@ -2914,7 +3244,9 @@ mod persist_tests {
             "plain MiniMax API keys must not be stored as OAuth/provider credentials; got:\n{toml}"
         );
 
-        unsafe { std::env::remove_var("ZEUS_HOME"); }
+        unsafe {
+            std::env::remove_var("ZEUS_HOME");
+        }
     }
 
     /// #257 OAuth-edge: a NON-Anthropic OAuth token (selected via auth_mode =
@@ -2950,7 +3282,9 @@ mod persist_tests {
 
         for (provider_idx, section, env_key) in cases {
             let tmp = tempfile::tempdir().unwrap();
-            unsafe { std::env::set_var("ZEUS_HOME", tmp.path()); }
+            unsafe {
+                std::env::set_var("ZEUS_HOME", tmp.path());
+            }
             std::fs::write(
                 tmp.path().join("config.toml"),
                 "model = \"anthropic/claude-opus-4-8\"\n",
@@ -2996,8 +3330,8 @@ mod persist_tests {
             // config.model, then runs the same branch-4 read the gateway uses.
             let cfg = zeus_core::Config::load_from(tmp.path().join("config.toml"))
                 .expect("reload persisted config");
-            let client = zeus_llm::LlmClient::from_config(&cfg)
-                .expect("from_config should build a client");
+            let client =
+                zeus_llm::LlmClient::from_config(&cfg).expect("from_config should build a client");
             assert!(
                 matches!(client.auth_method(), zeus_llm::AuthMethod::OAuth(t) if *t == token),
                 "provider[{provider_idx}] {section}: read-side must resolve [provider_credentials.{section}] \
@@ -3005,7 +3339,9 @@ mod persist_tests {
                 client.auth_method()
             );
 
-            unsafe { std::env::remove_var("ZEUS_HOME"); }
+            unsafe {
+                std::env::remove_var("ZEUS_HOME");
+            }
         }
     }
 
@@ -3015,7 +3351,9 @@ mod persist_tests {
     fn empty_api_key_does_not_touch_env() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("ZEUS_HOME", tmp.path()); }
+        unsafe {
+            std::env::set_var("ZEUS_HOME", tmp.path());
+        }
 
         std::fs::write(
             tmp.path().join("config.toml"),
@@ -3036,7 +3374,9 @@ mod persist_tests {
             );
         }
 
-        unsafe { std::env::remove_var("ZEUS_HOME"); }
+        unsafe {
+            std::env::remove_var("ZEUS_HOME");
+        }
     }
 
     /// Completion sites surface a persist error instead of silently
@@ -3049,7 +3389,8 @@ mod persist_tests {
         // disk-read lives in `new_from_disk()`, covered by onb_startup_routing.)
         let mut app = App::new();
         assert!(!app.onboarding_complete);
-        app.complete_screen.set_persist_error("disk full".to_string());
+        app.complete_screen
+            .set_persist_error("disk full".to_string());
         assert_eq!(
             app.complete_screen.persist_error.as_deref(),
             Some("disk full")
@@ -3075,7 +3416,10 @@ mod persist_tests {
 
         app.tick();
         assert_eq!(app.anim_tick, 2);
-        assert!(app.cursor_visible(), "phase 2 → caret visible again (2Hz blink)");
+        assert!(
+            app.cursor_visible(),
+            "phase 2 → caret visible again (2Hz blink)"
+        );
     }
 
     /// `tick()` must never panic at the u64 boundary — the loop runs unattended
@@ -3325,7 +3669,9 @@ mod persist_tests {
         // Failed must not advance …
         // (retry re-fires: Failed is handled like Idle → fires + Fetching).
         app.advance_step();
-        let sent = rx.try_recv().expect("Failed advance must re-fire the fetch (retry)");
+        let sent = rx
+            .try_recv()
+            .expect("Failed advance must re-fire the fetch (retry)");
         assert_eq!(sent.1, "sk-ant-realkey-123");
         assert_eq!(app.model_fetch_state, ModelFetchState::Fetching);
         assert_eq!(
@@ -3453,6 +3799,57 @@ mod persist_tests {
         );
     }
 
+    #[test]
+    fn chat_scroll_page_keys_and_escape_restore_bottom() {
+        let mut app = App::new();
+        app.onboarding_complete = true;
+        app.prod_active_tab = 0;
+        app.prod_chat_messages.push(ChatMessage {
+            role: Role::Assistant,
+            text: (0..80).map(|i| format!("line{i}\n")).collect::<String>(),
+            tool_name: None,
+        });
+
+        app.handle_key_prod(KeyCode::PageUp);
+        assert_eq!(app.prod_chat_scroll, 10);
+
+        app.handle_key_prod(KeyCode::PageDown);
+        assert_eq!(app.prod_chat_scroll, 0);
+
+        app.handle_key_prod(KeyCode::PageUp);
+        app.handle_key_prod(KeyCode::Esc);
+        assert_eq!(
+            app.prod_chat_scroll, 0,
+            "Esc on the scrolled chat tab should jump back to the live bottom"
+        );
+    }
+
+    #[test]
+    fn chat_mouse_wheel_scrolls_chat_only() {
+        let mut app = App::new();
+        app.onboarding_complete = true;
+        app.prod_active_tab = 0;
+        app.prod_active_adv = None;
+        app.prod_chat_messages.push(ChatMessage {
+            role: Role::Assistant,
+            text: (0..80).map(|i| format!("line{i}\n")).collect::<String>(),
+            tool_name: None,
+        });
+
+        app.handle_mouse_prod(MouseEventKind::ScrollUp);
+        assert_eq!(app.prod_chat_scroll, 3);
+
+        app.handle_mouse_prod(MouseEventKind::ScrollDown);
+        assert_eq!(app.prod_chat_scroll, 0);
+
+        app.prod_active_tab = 1;
+        app.handle_mouse_prod(MouseEventKind::ScrollUp);
+        assert_eq!(
+            app.prod_chat_scroll, 0,
+            "wheel scrolling is chat-tab only for now"
+        );
+    }
+
     /// The over-shadow guard's INVERSE: off the chat tab (tab != 0), the bare
     /// shortcuts must STILL fire — gating them must not break the shortcuts
     /// where they're meant to work. 'q' quits from a non-chat tab.
@@ -3546,9 +3943,7 @@ mod persist_tests {
         );
         assert_eq!(app.prod_chat_messages[2].role, Role::User);
 
-        app.push_assistant_reply(
-            "| Field | Value |\n| Binary | 0.1.2 |".to_string(),
-        );
+        app.push_assistant_reply("| Field | Value |\n| Binary | 0.1.2 |".to_string());
 
         assert_eq!(app.prod_stream_state, StreamState::Idle);
         assert_eq!(app.prod_chat_messages.len(), 3);
@@ -3726,21 +4121,35 @@ mod persist_tests {
             out
         }
 
-        let area = Rect { x: 0, y: 0, width: 100, height: 36 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 36,
+        };
 
         // DIRTY: Providers (long list) -> clear_body_region -> Welcome, all into
         // one persistent buffer (replicating the dispatcher's body[1] path).
         let mut dirty = Buffer::empty(area);
         ProviderScreen { selected: 0 }.render(area, &mut dirty);
         clear_body_region(area, &mut dirty);
-        WelcomeScreen { existing_config: false, anim_tick: 0 }.render(area, &mut dirty);
+        WelcomeScreen {
+            existing_config: false,
+            anim_tick: 0,
+        }
+        .render(area, &mut dirty);
 
         // FRESH: Welcome into a clean buffer.
         let mut fresh = Buffer::empty(area);
-        WelcomeScreen { existing_config: false, anim_tick: 0 }.render(area, &mut fresh);
+        WelcomeScreen {
+            existing_config: false,
+            anim_tick: 0,
+        }
+        .render(area, &mut fresh);
 
         assert_eq!(
-            buffer_text(&dirty), buffer_text(&fresh),
+            buffer_text(&dirty),
+            buffer_text(&fresh),
             "Providers glyphs bled through into the Welcome frame — the \
              dispatcher's clear_body_region on body[1] is missing or was \
              dropped (#270 regression)"
@@ -3755,7 +4164,9 @@ mod persist_tests {
     fn irc_and_matrix_channels_persist_round_trip() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("ZEUS_HOME", tmp.path()); }
+        unsafe {
+            std::env::set_var("ZEUS_HOME", tmp.path());
+        }
         std::fs::write(
             tmp.path().join("config.toml"),
             "model = \"anthropic/claude-opus-4-8\"\nonboarding_complete = false\n",
@@ -3778,7 +4189,10 @@ mod persist_tests {
 
         let ch = cfg.channels.as_ref().expect("[channels] must exist");
         let irc = ch.irc.as_ref().expect("[channels.irc] must persist");
-        assert_eq!(irc.server, "irc.libera.chat", "irc.server must flow through");
+        assert_eq!(
+            irc.server, "irc.libera.chat",
+            "irc.server must flow through"
+        );
         assert_eq!(irc.port, 6697, "irc.port must parse + flow through");
         assert_eq!(irc.nick, "zeusbot", "irc.nick must flow through");
         assert_eq!(
@@ -3798,7 +4212,9 @@ mod persist_tests {
         assert_eq!(matrix.username.as_deref(), Some("@zeus:matrix.org"));
         assert_eq!(matrix.password.as_deref(), Some("matrix-secret"));
 
-        unsafe { std::env::remove_var("ZEUS_HOME"); }
+        unsafe {
+            std::env::remove_var("ZEUS_HOME");
+        }
     }
 
     /// Bot-message policy (`allow_bots`) selected in the chanconfig step must be
@@ -3809,7 +4225,9 @@ mod persist_tests {
     fn allow_bots_policy_persists_verbatim() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("ZEUS_HOME", tmp.path()); }
+        unsafe {
+            std::env::set_var("ZEUS_HOME", tmp.path());
+        }
         std::fs::write(
             tmp.path().join("config.toml"),
             "model = \"anthropic/claude-opus-4-8\"\nonboarding_complete = false\n",
@@ -3830,7 +4248,10 @@ mod persist_tests {
 
         // (1) struct value carries the chosen policy verbatim.
         let ch = cfg.channels.as_ref().expect("[channels] must exist");
-        let discord = ch.discord.as_ref().expect("[channels.discord] must persist");
+        let discord = ch
+            .discord
+            .as_ref()
+            .expect("[channels.discord] must persist");
         assert_eq!(
             discord.allow_bots.as_deref(),
             Some("on"),
@@ -3844,7 +4265,9 @@ mod persist_tests {
             "config-gen must write `allow_bots = \"on\"` for a bot channel; got:\n{written}"
         );
 
-        unsafe { std::env::remove_var("ZEUS_HOME"); }
+        unsafe {
+            std::env::remove_var("ZEUS_HOME");
+        }
     }
 
     /// The default bot-message policy (when the user never touches the selector)
@@ -3853,7 +4276,9 @@ mod persist_tests {
     fn allow_bots_policy_defaults_to_mentions() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("ZEUS_HOME", tmp.path()); }
+        unsafe {
+            std::env::set_var("ZEUS_HOME", tmp.path());
+        }
         std::fs::write(
             tmp.path().join("config.toml"),
             "model = \"anthropic/claude-opus-4-8\"\nonboarding_complete = false\n",
@@ -3869,14 +4294,19 @@ mod persist_tests {
 
         let cfg = app.collect_and_persist().expect("persist should succeed");
         let ch = cfg.channels.as_ref().expect("[channels] must exist");
-        let discord = ch.discord.as_ref().expect("[channels.discord] must persist");
+        let discord = ch
+            .discord
+            .as_ref()
+            .expect("[channels.discord] must persist");
         assert_eq!(
             discord.allow_bots.as_deref(),
             Some("mentions"),
             "default allow_bots policy must be `mentions`"
         );
 
-        unsafe { std::env::remove_var("ZEUS_HOME"); }
+        unsafe {
+            std::env::remove_var("ZEUS_HOME");
+        }
     }
 
     /// X/Twitter onboarding must persist the official X credential names instead
@@ -3885,7 +4315,9 @@ mod persist_tests {
     fn x_twitter_official_credentials_persist() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("ZEUS_HOME", tmp.path()); }
+        unsafe {
+            std::env::set_var("ZEUS_HOME", tmp.path());
+        }
         std::fs::write(
             tmp.path().join("config.toml"),
             r#"model = "anthropic/claude-sonnet-4"
@@ -3902,15 +4334,17 @@ onboarding_complete = false
         app.chanconfig_screen
             .config_values
             .insert("x_twitter.consumer_key".into(), "consumer".into());
-        app.chanconfig_screen
-            .config_values
-            .insert("x_twitter.consumer_key_secret".into(), "consumer-secret".into());
+        app.chanconfig_screen.config_values.insert(
+            "x_twitter.consumer_key_secret".into(),
+            "consumer-secret".into(),
+        );
         app.chanconfig_screen
             .config_values
             .insert("x_twitter.access_token".into(), "access".into());
-        app.chanconfig_screen
-            .config_values
-            .insert("x_twitter.access_token_secret".into(), "access-secret".into());
+        app.chanconfig_screen.config_values.insert(
+            "x_twitter.access_token_secret".into(),
+            "access-secret".into(),
+        );
         app.chanconfig_screen
             .config_values
             .insert("x_twitter.client_id".into(), "client-id".into());
@@ -3947,7 +4381,9 @@ onboarding_complete = false
         assert_eq!(saved_x.client_id, "client-id");
         assert_eq!(saved_x.client_secret, "client-secret");
 
-        unsafe { std::env::remove_var("ZEUS_HOME"); }
+        unsafe {
+            std::env::remove_var("ZEUS_HOME");
+        }
     }
 
     /// #273 registry-completeness guard: EVERY channel id in the onboarding
@@ -3962,16 +4398,10 @@ onboarding_complete = false
         use std::collections::HashSet;
 
         // Channels with a live persist arm in `collect_and_persist`.
-        let persisted: HashSet<&str> = [
-            "telegram",
-            "discord",
-            "slack",
-            "irc",
-            "matrix",
-            "x_twitter",
-        ]
-        .into_iter()
-        .collect();
+        let persisted: HashSet<&str> =
+            ["telegram", "discord", "slack", "irc", "matrix", "x_twitter"]
+                .into_iter()
+                .collect();
         // Channels intentionally NOT persisted (see the DEFERRED comment block):
         //   email     — partial creds (no imap_*); whatsapp — field↔struct mismatch;
         //   signal/imessage — no struct-matching creds.

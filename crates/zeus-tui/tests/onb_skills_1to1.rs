@@ -9,7 +9,7 @@
 //!   • 2-col grid of skill cards (checkbox + name + ★ REC + category tag),
 //!   • Space/Enter toggle install (count tracks),
 //!   • ←/→ switch the category tab (grid-local, NOT step-nav) → Skills (step 17)
-//!     requires the goto_step s==17 cascade (proven by the full suite not hanging),
+//!     requires the goto_step s==18 cascade (proven by the full suite not hanging),
 //!   • typing feeds the live filter; Backspace pops it (char-safe),
 //!   • empty-state when the filter matches nothing,
 //!   • ESC backs out one step (does not quit).
@@ -23,7 +23,7 @@ use zeus_tui::app::frame;
 
 use crossterm::event::KeyCode;
 
-const SKILLS_STEP: usize = 17;
+const SKILLS_STEP: usize = 18;
 
 /// Walk to the Skills step (17). Mirrors the goto_step cascade: Skills is a GRID
 /// (←/→ switch category tabs), so the walker must bump past it directly rather
@@ -31,10 +31,15 @@ const SKILLS_STEP: usize = 17;
 fn goto_skills(app: &mut App) {
     let mut guard = 0;
     while app.current_step < SKILLS_STEP {
-        if app.current_step == 3 { app.current_step += 1; app.on_step_enter(); continue; }        let s = app.current_step;
+        if app.current_step == 4 {
+            app.current_step += 1;
+            app.on_step_enter();
+            continue;
+        }
+        let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
-        } else if s == 6 || s == 8 || s == 9 || s == 11 || s == 15 {
+        } else if s == 7 || s == 9 || s == 10 || s == 12 || s == 16 {
             app.current_step += 1;
             app.on_step_enter();
         } else {
@@ -102,13 +107,55 @@ fn skills_filter_placeholder_renders() {
 /// host's live `~/.zeus/skills` (which #247 now loads in production). Mirrors
 /// the original proto entries the 1:1 assertions were written against.
 const TEST_FIXTURE: &[(&str, &str, &str, &str, bool)] = &[
-    ("calendar-pro", "Calendar Pro", "Auto-schedule + conflict detection", "Productivity", true),
-    ("email-triage", "Email Triage", "Inbox prioritization", "Productivity", true),
-    ("todo-sync", "Todo Sync", "Cross-platform task sync", "Productivity", false),
-    ("git-flow", "Git Flow", "Branch + PR automation", "Dev", true),
-    ("ci-watch", "CI Watch", "Pipeline monitoring + fixes", "Dev", true),
-    ("openclaw-compat", "OpenClaw Compat", "Adds claw_* tools", "Dev", false),
-    ("test-gen", "Test Gen", "Auto-generate test cases", "Dev", false),
+    (
+        "calendar-pro",
+        "Calendar Pro",
+        "Auto-schedule + conflict detection",
+        "Productivity",
+        true,
+    ),
+    (
+        "email-triage",
+        "Email Triage",
+        "Inbox prioritization",
+        "Productivity",
+        true,
+    ),
+    (
+        "todo-sync",
+        "Todo Sync",
+        "Cross-platform task sync",
+        "Productivity",
+        false,
+    ),
+    (
+        "git-flow",
+        "Git Flow",
+        "Branch + PR automation",
+        "Dev",
+        true,
+    ),
+    (
+        "ci-watch",
+        "CI Watch",
+        "Pipeline monitoring + fixes",
+        "Dev",
+        true,
+    ),
+    (
+        "openclaw-compat",
+        "OpenClaw Compat",
+        "Adds claw_* tools",
+        "Dev",
+        false,
+    ),
+    (
+        "test-gen",
+        "Test Gen",
+        "Auto-generate test cases",
+        "Dev",
+        false,
+    ),
 ];
 
 fn seed_fixture(app: &mut App) {
@@ -127,7 +174,10 @@ fn skills_filter_typing_shows_text_and_narrows_grid() {
     }
     let s = render(&mut app);
     assert!(s.contains("git"), "filter text not shown\n{s}");
-    assert!(s.contains("Git Flow"), "matching skill should be visible\n{s}");
+    assert!(
+        s.contains("Git Flow"),
+        "matching skill should be visible\n{s}"
+    );
     assert!(
         !s.contains("Calendar Pro"),
         "non-matching skill should be filtered out\n{s}"
@@ -144,7 +194,10 @@ fn skills_filter_backspace_is_char_safe() {
     }
     app.handle_key(KeyCode::Backspace); // drop 'é'
     let s = render(&mut app);
-    assert!(s.contains("caf"), "filter should read 'caf' after backspace\n{s}");
+    assert!(
+        s.contains("caf"),
+        "filter should read 'caf' after backspace\n{s}"
+    );
     // No panic on render = char-safe.
     assert!(!s.trim().is_empty());
 }
@@ -170,7 +223,14 @@ fn skills_all_five_category_tabs_present() {
     let mut app = App::new();
     goto_skills(&mut app);
     let s = render(&mut app);
-    for tab in ["All", "Productivity", "Dev", "Marketing", "Security", "Research"] {
+    for tab in [
+        "All",
+        "Productivity",
+        "Dev",
+        "Marketing",
+        "Security",
+        "Research",
+    ] {
         assert!(s.contains(tab), "missing category tab {tab}\n{s}");
     }
 }
@@ -182,7 +242,10 @@ fn skills_tabs_show_per_category_counts() {
     seed_fixture(&mut app);
     let s = render(&mut app);
     // Fixture: Productivity has 3 skills, Dev has 4 → tabs render `(3)`/`(4)`.
-    assert!(s.contains("Productivity (3)"), "missing Productivity count\n{s}");
+    assert!(
+        s.contains("Productivity (3)"),
+        "missing Productivity count\n{s}"
+    );
     assert!(s.contains("Dev (4)"), "missing Dev count\n{s}");
     // "All" carries NO count (matches JSX).
     assert!(!s.contains("All ("), "All tab must not show a count\n{s}");
@@ -195,7 +258,10 @@ fn skills_summary_count_tracks_installs() {
     seed_fixture(&mut app); // 7-skill deterministic fixture, all installed by default
     let s0 = render(&mut app);
     // #263: opt-OUT default — every fixture skill starts selected.
-    assert!(s0.contains("7 selected"), "should start all 7 selected\n{s0}");
+    assert!(
+        s0.contains("7 selected"),
+        "should start all 7 selected\n{s0}"
+    );
     assert!(s0.contains("available"), "missing available summary\n{s0}");
     // Toggle the focused skill via Space OFF → 6 selected.
     app.handle_key(KeyCode::Char(' '));
@@ -225,15 +291,21 @@ fn skills_100x30_cards_keep_prototype_blurbs() {
     seed_fixture(&mut app);
     let s = render_size(&mut app, 100, 30);
 
-    assert!(s.contains("Calendar Pro"), "missing first skill card
-{s}");
+    assert!(
+        s.contains("Calendar Pro"),
+        "missing first skill card
+{s}"
+    );
     assert!(
         s.contains("Auto-schedule + conflict detection"),
         "100x30 card grid should retain the first skill blurb
 {s}"
     );
-    assert!(s.contains("Email Triage"), "missing second skill card
-{s}");
+    assert!(
+        s.contains("Email Triage"),
+        "missing second skill card
+{s}"
+    );
     assert!(
         s.contains("Inbox prioritization"),
         "100x30 card grid should retain the second skill blurb

@@ -34,8 +34,32 @@ fn ok_results() -> Vec<TestResult> {
 }
 
 use crossterm::event::KeyCode;
+use std::sync::Mutex;
 
-const COMPLETE_STEP: usize = 18;
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+fn with_isolated_zeus_home<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = tempfile::tempdir().expect("temp ZEUS_HOME");
+    let previous = std::env::var_os("ZEUS_HOME");
+    unsafe {
+        std::env::set_var("ZEUS_HOME", tmp.path());
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(tmp.path())));
+    unsafe {
+        if let Some(previous) = previous {
+            std::env::set_var("ZEUS_HOME", previous);
+        } else {
+            std::env::remove_var("ZEUS_HOME");
+        }
+    }
+    match result {
+        Ok(value) => value,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+const COMPLETE_STEP: usize = 19;
 
 /// Walk to the Complete step (18, the LAST step). Grid steps (1/6/8/9/11/15/17)
 /// consume ←/→ for in-screen focus and Enter for toggle, so we bump them
@@ -43,10 +67,15 @@ const COMPLETE_STEP: usize = 18;
 fn goto_complete(app: &mut App) {
     let mut guard = 0;
     while app.current_step < COMPLETE_STEP {
-        if app.current_step == 3 { app.current_step += 1; app.on_step_enter(); continue; }        let s = app.current_step;
+        if app.current_step == 4 {
+            app.current_step += 1;
+            app.on_step_enter();
+            continue;
+        }
+        let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
-        } else if s == 6 || s == 8 || s == 9 || s == 11 || s == 15 || s == 17 {
+        } else if s == 7 || s == 9 || s == 10 || s == 12 || s == 16 || s == 18 {
             app.current_step += 1;
             app.on_step_enter();
         } else {
@@ -56,9 +85,15 @@ fn goto_complete(app: &mut App) {
             app.handle_key(KeyCode::Enter);
         }
         guard += 1;
-        assert!(guard < 100, "goto_complete stalled before reaching Complete");
+        assert!(
+            guard < 100,
+            "goto_complete stalled before reaching Complete"
+        );
     }
-    assert_eq!(app.current_step, COMPLETE_STEP, "failed to reach Complete step");
+    assert_eq!(
+        app.current_step, COMPLETE_STEP,
+        "failed to reach Complete step"
+    );
 }
 
 fn render(app: &mut App) -> String {
@@ -128,7 +163,10 @@ fn complete_zeusface_ready_state() {
     // Idle/ready: the ZeusFace glyph + the "ready to wake" label must render
     // BEFORE the header (JSX 1751 leads the left column with the face).
     assert!(s.contains("(◉‿◉)"), "ZeusFace ready glyph missing\n{s}");
-    assert!(s.contains("ready to wake"), "ZeusFace ready label missing\n{s}");
+    assert!(
+        s.contains("ready to wake"),
+        "ZeusFace ready label missing\n{s}"
+    );
 }
 
 #[test]
@@ -139,7 +177,10 @@ fn complete_zeusface_success_state() {
     let s = render_screen(&scr);
     // Tested/success: glyph gains the ✓ and the label flips to "all systems go".
     assert!(s.contains("(◉‿◉)✓"), "ZeusFace success glyph missing\n{s}");
-    assert!(s.contains("all systems go"), "ZeusFace success label missing\n{s}");
+    assert!(
+        s.contains("all systems go"),
+        "ZeusFace success label missing\n{s}"
+    );
 }
 
 // ── header + sub ──────────────────────────────────────────────────────────────
@@ -171,7 +212,10 @@ fn complete_summary_badges_all_three_statuses() {
     assert!(s.contains("⏭ SKIPPED"), "skipped badge missing\n{s}");
     assert!(s.contains("✕ ERROR"), "error badge missing\n{s}");
     // names + a value render too.
-    assert!(s.contains("LLM Provider"), "configured row name missing\n{s}");
+    assert!(
+        s.contains("LLM Provider"),
+        "configured row name missing\n{s}"
+    );
     assert!(s.contains("Voice (TTS)"), "skipped row name missing\n{s}");
     assert!(s.contains("Gateway"), "error row name missing\n{s}");
 }
@@ -183,13 +227,25 @@ fn complete_100x30_keeps_prototype_summary_stack() {
     let s = render_screen_at(&scr, 100, 30);
 
     for expected in ["LLM Provider", "Voice (TTS)", "Gateway"] {
-        assert!(s.contains(expected), "summary row {expected:?} missing at 100x30\n{s}");
+        assert!(
+            s.contains(expected),
+            "summary row {expected:?} missing at 100x30\n{s}"
+        );
     }
     for expected in ["✓ READY", "⏭ SKIPPED", "✕ ERROR"] {
-        assert!(s.contains(expected), "summary badge {expected:?} missing at 100x30\n{s}");
+        assert!(
+            s.contains(expected),
+            "summary badge {expected:?} missing at 100x30\n{s}"
+        );
     }
-    assert!(s.contains("TEST ALL BACKENDS"), "backend-test affordance missing at 100x30\n{s}");
-    assert!(s.contains("AWAKEN ZEUS"), "awaken affordance missing at 100x30\n{s}");
+    assert!(
+        s.contains("TEST ALL BACKENDS"),
+        "backend-test affordance missing at 100x30\n{s}"
+    );
+    assert!(
+        s.contains("AWAKEN ZEUS"),
+        "awaken affordance missing at 100x30\n{s}"
+    );
 }
 
 #[test]
@@ -199,11 +255,23 @@ fn complete_app_100x30_renders_dense_summary_stack() {
     let s = render_app_at(&mut app, 100, 30);
 
     for expected in ["LLM Provider", "Gateway", "Skills"] {
-        assert!(s.contains(expected), "wizard summary row {expected:?} missing at 100x30\n{s}");
+        assert!(
+            s.contains(expected),
+            "wizard summary row {expected:?} missing at 100x30\n{s}"
+        );
     }
-    assert!(s.contains("✓ READY"), "configured summary badge missing at 100x30\n{s}");
-    assert!(s.contains("TEST ALL BACKENDS"), "backend-test affordance missing at 100x30\n{s}");
-    assert!(s.contains("AWAKEN ZEUS"), "awaken affordance missing at 100x30\n{s}");
+    assert!(
+        s.contains("✓ READY"),
+        "configured summary badge missing at 100x30\n{s}"
+    );
+    assert!(
+        s.contains("TEST ALL BACKENDS"),
+        "backend-test affordance missing at 100x30\n{s}"
+    );
+    assert!(
+        s.contains("AWAKEN ZEUS"),
+        "awaken affordance missing at 100x30\n{s}"
+    );
 }
 
 #[test]
@@ -214,7 +282,10 @@ fn complete_summary_from_wizard_state() {
     goto_complete(&mut app);
     let s = render(&mut app);
     assert!(s.contains("LLM Provider"), "wizard summary not built\n{s}");
-    assert!(s.contains("✓ READY"), "configured badge from wizard missing\n{s}");
+    assert!(
+        s.contains("✓ READY"),
+        "configured badge from wizard missing\n{s}"
+    );
 }
 
 // ── buttons ──────────────────────────────────────────────────────────────────
@@ -231,10 +302,7 @@ fn complete_both_buttons_render() {
         s.contains("▶ TEST ALL BACKENDS"),
         "focused TEST ALL BACKENDS button (with ▶ marker) missing\n{s}"
     );
-    assert!(
-        s.contains("AWAKEN ZEUS"),
-        "AWAKEN ZEUS button missing\n{s}"
-    );
+    assert!(s.contains("AWAKEN ZEUS"), "AWAKEN ZEUS button missing\n{s}");
 }
 
 #[test]
@@ -244,7 +312,10 @@ fn complete_test_button_idle_to_passed() {
     // Idle label.
     let s0 = render_screen(&scr);
     // TEST is the default-focused button → carries the ▶ focus marker.
-    assert!(s0.contains("▶ TEST ALL BACKENDS"), "idle test label missing\n{s0}");
+    assert!(
+        s0.contains("▶ TEST ALL BACKENDS"),
+        "idle test label missing\n{s0}"
+    );
     assert!(
         !s0.contains("ALL BACKENDS PASSED"),
         "passed label leaked before test\n{s0}"
@@ -266,7 +337,12 @@ fn complete_next_steps_commands() {
     let mut app = App::new();
     goto_complete(&mut app);
     let s = render(&mut app);
-    for cmd in ["zeus start", "zeus chat", "zeus pantheon", "zeus onboard --resume"] {
+    for cmd in [
+        "zeus start",
+        "zeus chat",
+        "zeus pantheon",
+        "zeus onboard --resume",
+    ] {
         assert!(s.contains(cmd), "NEXT STEPS missing `{cmd}`\n{s}");
     }
 }
@@ -277,7 +353,10 @@ fn complete_next_steps_commands() {
 fn complete_tab_cycles_buttons() {
     let mut app = App::new();
     goto_complete(&mut app);
-    assert_eq!(app.complete_screen.focused_button, 0, "default focus = TEST");
+    assert_eq!(
+        app.complete_screen.focused_button, 0,
+        "default focus = TEST"
+    );
     app.handle_key(KeyCode::Tab);
     assert_eq!(app.complete_screen.focused_button, 1, "Tab -> AWAKEN");
     app.handle_key(KeyCode::Tab);
@@ -286,33 +365,36 @@ fn complete_tab_cycles_buttons() {
 
 #[test]
 fn complete_enter_on_awaken_enters_production() {
-    let mut app = App::new();
-    goto_complete(&mut app);
-    app.handle_key(KeyCode::Tab); // focus AWAKEN
-    assert_eq!(app.complete_screen.focused_button, 1);
-    assert!(!app.onboarding_complete, "not done before AWAKEN");
+    with_isolated_zeus_home(|_| {
+        let mut app = App::new();
+        goto_complete(&mut app);
+        app.handle_key(KeyCode::Tab); // focus AWAKEN
+        assert_eq!(app.complete_screen.focused_button, 1);
+        assert!(!app.onboarding_complete, "not done before AWAKEN");
 
-    // AWAKEN now starts a VISIBLE handoff (the "⚡ Launching Zeus…" splash)
-    // instead of an instant silent swap — pressing it must clearly DO something.
-    app.handle_key(KeyCode::Enter);
-    assert!(
-        app.is_launching(),
-        "Enter on AWAKEN must start the visible launching handoff"
-    );
-    assert!(
-        !app.onboarding_complete,
-        "prod UI must not take over until the handoff dwell elapses"
-    );
+        // AWAKEN persists config before starting the visible handoff; keep that
+        // write inside a temp ZEUS_HOME so this integration test cannot touch a
+        // developer/agent's real ~/.zeus/config.toml.
+        app.handle_key(KeyCode::Enter);
+        assert!(
+            app.is_launching(),
+            "Enter on AWAKEN must start the visible launching handoff"
+        );
+        assert!(
+            !app.onboarding_complete,
+            "prod UI must not take over until the handoff dwell elapses"
+        );
 
-    // The tick-driven dwell completes the transition into the production UI.
-    for _ in 0..8 {
-        app.tick();
-    }
-    assert!(
-        app.onboarding_complete,
-        "after the handoff dwell, AWAKEN enters the production UI"
-    );
-    assert!(!app.is_launching(), "splash clears once prod takes over");
+        // The tick-driven dwell completes the transition into the production UI.
+        for _ in 0..8 {
+            app.tick();
+        }
+        assert!(
+            app.onboarding_complete,
+            "after the handoff dwell, AWAKEN enters the production UI"
+        );
+        assert!(!app.is_launching(), "splash clears once prod takes over");
+    });
 }
 
 #[test]

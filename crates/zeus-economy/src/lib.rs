@@ -304,6 +304,22 @@ const ECONOMY_MIGRATIONS: &[&str] = &[
                 created_at, updated_at, token FROM wallets;
      DROP TABLE wallets;
      ALTER TABLE wallets_v4 RENAME TO wallets;",
+    // v5: C1 signed-transfer authz. Adds a per-wallet Ed25519 public key so the
+    // server can verify that a value-moving request was signed by the owner of
+    // the `from` wallet (binds caller → wallet; kills the spoofable-sender hole).
+    // `used_nonces` gives replay protection (folds in H2 idempotency): every
+    // signed request carries a unique nonce, recorded here on first use and
+    // rejected on reuse. `seen_at` bounds table growth for pruning stale rows.
+    // A NULL pubkey means the wallet has not registered a key yet — signed
+    // routes fail closed for such wallets until they call register-key.
+    "ALTER TABLE wallets ADD COLUMN pubkey TEXT;
+     CREATE TABLE IF NOT EXISTS used_nonces (
+                nonce TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                seen_at TEXT NOT NULL,
+                PRIMARY KEY (nonce, agent_id)
+            );
+     CREATE INDEX IF NOT EXISTS idx_nonce_seen ON used_nonces(seen_at);",
 ];
 
 impl TokenLedger {
@@ -1260,6 +1276,67 @@ impl TokenLedger {
             )
             .map_err(|e| Error::Database(format!("Balance query failed: {e}")))?;
         Ok(balance as u64)
+    }
+
+    // -----------------------------------------------------------------------
+    // C1 — signed-transfer authz: per-wallet pubkey + nonce replay guard
+    // -----------------------------------------------------------------------
+
+    /// Register (or rotate) the Ed25519 public key bound to `agent_id`'s wallet.
+    /// The key is stored hex-encoded. Creates the wallet row if absent so a
+    /// fresh agent can register before its first credit. Callers MUST verify a
+    /// self-signed proof-of-possession before invoking this — the ledger only
+    /// persists; it does not prove ownership of the key.
+    pub fn set_pubkey(&self, agent_id: &str, pubkey_hex: &str) -> Result<()> {
+        let conn = self.conn()?;
+        Self::ensure_wallet(&conn, agent_id)?;
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE wallets SET pubkey = ?2, updated_at = ?3 WHERE agent_id = ?1",
+            params![agent_id, pubkey_hex, now],
+        )
+        .map_err(|e| Error::Database(format!("Failed to set pubkey: {e}")))?;
+        Ok(())
+    }
+
+    /// Fetch the hex-encoded Ed25519 public key registered for `agent_id`, or
+    /// `None` if the wallet is absent or has not registered a key. Signed routes
+    /// treat `None` as fail-closed.
+    pub fn get_pubkey(&self, agent_id: &str) -> Result<Option<String>> {
+        let conn = self.conn()?;
+        let pubkey: Option<String> = conn
+            .query_row(
+                "SELECT pubkey FROM wallets WHERE agent_id = ?1",
+                params![agent_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| Error::Database(format!("Pubkey query failed: {e}")))?
+            .flatten();
+        Ok(pubkey)
+    }
+
+    /// Atomically record a nonce as used for `agent_id`. Returns `Ok(())` on
+    /// first use and an error if the `(nonce, agent_id)` pair was already
+    /// recorded — this is the replay guard (folds in H2 idempotency). The
+    /// INSERT's PRIMARY KEY constraint makes the check-and-record a single
+    /// atomic step, so two concurrent replays cannot both succeed.
+    pub fn record_nonce(&self, agent_id: &str, nonce: &str) -> Result<()> {
+        let conn = self.conn()?;
+        let now = Utc::now().to_rfc3339();
+        let rows = conn
+            .execute(
+                "INSERT OR IGNORE INTO used_nonces (nonce, agent_id, seen_at)
+                 VALUES (?1, ?2, ?3)",
+                params![nonce, agent_id, now],
+            )
+            .map_err(|e| Error::Database(format!("Nonce record failed: {e}")))?;
+        if rows == 0 {
+            return Err(Error::Validation(format!(
+                "Nonce already used for agent {agent_id} (replay rejected)"
+            )));
+        }
+        Ok(())
     }
 
     fn row_to_tx(row: &rusqlite::Row) -> rusqlite::Result<Transaction> {
@@ -2316,6 +2393,38 @@ mod tests {
         assert!(r.is_err(), "over-cap transfer must be rejected");
         // Sender balance unchanged — validation runs pre-mutation.
         assert_eq!(ledger.balance("rich").expect("bal"), 1000);
+    }
+
+    #[test]
+    fn test_pubkey_register_and_lookup() {
+        // A registered pubkey round-trips; an unregistered wallet returns None.
+        let (_tmp, ledger) = temp_ledger();
+        assert_eq!(ledger.get_pubkey("nokey").expect("get"), None);
+        ledger.set_pubkey("alice", "deadbeef").expect("set");
+        assert_eq!(
+            ledger.get_pubkey("alice").expect("get"),
+            Some("deadbeef".to_string())
+        );
+        // Rotation overwrites.
+        ledger.set_pubkey("alice", "cafef00d").expect("rotate");
+        assert_eq!(
+            ledger.get_pubkey("alice").expect("get"),
+            Some("cafef00d".to_string())
+        );
+    }
+
+    #[test]
+    fn test_nonce_replay_rejected() {
+        // First use of a nonce succeeds; the second use for the same agent is
+        // rejected (the H2 replay guard). A different agent may reuse the value.
+        let (_tmp, ledger) = temp_ledger();
+        ledger.record_nonce("alice", "n1").expect("first use ok");
+        assert!(
+            ledger.record_nonce("alice", "n1").is_err(),
+            "replayed nonce must be rejected"
+        );
+        // Same nonce string, different agent → independent namespace, allowed.
+        ledger.record_nonce("bob", "n1").expect("different agent ok");
     }
 
     #[test]

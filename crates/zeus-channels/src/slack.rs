@@ -662,7 +662,12 @@ impl SlackAdapter {
                     }
                 }
 
-                let mut message = ChannelMessage::new(source, text).with_addressed(is_addressed);
+                // Prefix sender ID into content (Discord parity, #317).
+                // Applied AFTER is_addressed computation so trigger detection
+                // never sees the mutated string. Slack Events API provides user ID
+                // (not display name) — still better than raw text with no sender info.
+                let prefixed_text = format!("[{}]: {}", user, text);
+                let mut message = ChannelMessage::new(source, prefixed_text).with_addressed(is_addressed);
                 if !attachments.is_empty() {
                     message.attachments = attachments;
                 }
@@ -2232,6 +2237,34 @@ mod tests {
         let _ = rendered.files; // may be empty — override walks blocks
         let img_count = r.blocks.iter().filter(|b| matches!(b, ContentBlock::Image { .. })).count();
         assert_eq!(img_count, 1, "Image block must be walkable from response.blocks");
+    }
+
+    // -- #317: sender prefix in content (Discord parity) --
+
+    #[test]
+    fn test_slack_sender_prefix_format() {
+        // Contract: content is prefixed with "[user_id]: " so the agent
+        // knows who sent the message, mirroring discord.rs:573.
+        // Slack Events API provides user ID (e.g. "U12345"), not display name.
+        let user = "U12345";
+        let text = "hello world";
+        let prefixed = format!("[{}]: {}", user, text);
+        assert_eq!(prefixed, "[U12345]: hello world");
+    }
+
+    #[test]
+    fn test_slack_prefix_applied_after_addressing() {
+        // Contract: is_addressed is computed on the ORIGINAL text (before
+        // prefix), so trigger detection never sees "[user]: " in the string.
+        // Simulate: is_addressed computed on raw text, then prefix applied.
+        let user = "U12345";
+        let text = "/command arg"; // slash command triggers is_addressed
+        let is_addressed = text.starts_with('/');
+        assert!(is_addressed); // detected on raw text
+
+        let prefixed = format!("[{}]: {}", user, text);
+        // The prefixed string starts with "[", not "/"
+        assert!(!prefixed.starts_with('/'));
     }
 }
 

@@ -21,16 +21,21 @@ use zeus_tui::app::frame;
 
 use crossterm::event::KeyCode;
 
-const GATEWAY_STEP: usize = 8;
+const GATEWAY_STEP: usize = 9;
 
 /// Walk to the Gateway step. Grid steps (Channels=6, Gateway=8) consume Right
 /// for in-screen focus, so we bump those directly — mirrors goto_step in onb_106.
 fn goto_gateway(app: &mut App) {
     while app.current_step < GATEWAY_STEP {
-        if app.current_step == 3 { app.current_step += 1; app.on_step_enter(); continue; }        let s = app.current_step;
+        if app.current_step == 4 {
+            app.current_step += 1;
+            app.on_step_enter();
+            continue;
+        }
+        let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
-        } else if s == 6 {
+        } else if s == 7 {
             app.current_step += 1;
             app.on_step_enter();
         } else {
@@ -40,7 +45,10 @@ fn goto_gateway(app: &mut App) {
             app.handle_key(KeyCode::Enter);
         }
     }
-    assert_eq!(app.current_step, GATEWAY_STEP, "failed to reach Gateway step");
+    assert_eq!(
+        app.current_step, GATEWAY_STEP,
+        "failed to reach Gateway step"
+    );
 }
 
 /// Render the current app into a 120×44 TestBackend → newline-joined String.
@@ -79,7 +87,10 @@ fn gateway_renders_header_and_three_sections() {
     );
     // The three section labels, 1:1 with JSX.
     assert!(screen.contains("BIND"), "BIND section label missing");
-    assert!(screen.contains("FEATURES"), "FEATURES section label missing");
+    assert!(
+        screen.contains("FEATURES"),
+        "FEATURES section label missing"
+    );
     assert!(
         screen.contains("INSTALL AS SERVICE"),
         "INSTALL AS SERVICE section label missing"
@@ -140,7 +151,10 @@ fn gateway_features_render_with_defaults() {
         screen.contains("Agent Processing Loop"),
         "Agent Processing Loop label missing"
     );
-    assert!(screen.contains("WebUI Co-host"), "WebUI Co-host label missing");
+    assert!(
+        screen.contains("WebUI Co-host"),
+        "WebUI Co-host label missing"
+    );
     assert!(screen.contains("MCP Server"), "MCP Server label missing");
     // A couple of the descriptions (1:1 copy).
     assert!(
@@ -176,7 +190,10 @@ fn gateway_feature_toggle_keys_flip_pills() {
         "'1' should toggle Agent Processing Loop OFF"
     );
     // Still on the Gateway step — toggles don't step-nav.
-    assert_eq!(app.current_step, GATEWAY_STEP, "toggles must not change step");
+    assert_eq!(
+        app.current_step, GATEWAY_STEP,
+        "toggles must not change step"
+    );
 }
 
 // ── INSTALL AS SERVICE: 4-col grid + WILL INSTALL box ──────────────────────
@@ -208,10 +225,16 @@ fn gateway_service_grid_and_will_install_box() {
 fn gateway_arrow_moves_service_not_step() {
     let mut app = App::new();
     goto_gateway(&mut app);
-    assert_eq!(app.gateway_screen.service_mode, 0, "default service = launchd");
+    assert_eq!(
+        app.gateway_screen.service_mode, 0,
+        "default service = launchd"
+    );
     // → moves to systemd (idx 1), step unchanged.
     app.handle_key(KeyCode::Right);
-    assert_eq!(app.gateway_screen.service_mode, 1, "→ should select systemd");
+    assert_eq!(
+        app.gateway_screen.service_mode, 1,
+        "→ should select systemd"
+    );
     assert_eq!(app.current_step, GATEWAY_STEP, "→ must not step-nav");
     // → again to rc.d (idx 2). Its install path replaces the WILL INSTALL box.
     app.handle_key(KeyCode::Right);
@@ -223,7 +246,10 @@ fn gateway_arrow_moves_service_not_step() {
     );
     // ← moves back to systemd, step still unchanged.
     app.handle_key(KeyCode::Left);
-    assert_eq!(app.gateway_screen.service_mode, 1, "← should move back to systemd");
+    assert_eq!(
+        app.gateway_screen.service_mode, 1,
+        "← should move back to systemd"
+    );
     assert_eq!(app.current_step, GATEWAY_STEP, "← must not step-back");
 }
 

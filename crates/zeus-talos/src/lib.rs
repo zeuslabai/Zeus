@@ -63,6 +63,7 @@ pub mod video;
 pub mod voice;
 pub mod webchat_tools;
 pub mod whatsapp_tools;
+pub mod x_tools;
 pub mod youtube_tools;
 pub mod zalo_tools;
 
@@ -346,6 +347,13 @@ impl TalosRegistry {
         // MQTT tools (cross-platform, mosquitto CLI)
         self.register(Box::new(mqtt_tools::MqttPublishTool));
         self.register(Box::new(mqtt_tools::MqttSubscribeTool));
+
+        // X (Twitter) tools (cross-platform, X API v2 via zeus-channels XAdapter)
+        self.register(Box::new(x_tools::XPostTool));
+        self.register(Box::new(x_tools::XReplyTool));
+        self.register(Box::new(x_tools::XThreadTool));
+        self.register(Box::new(x_tools::XDeleteTool));
+        self.register(Box::new(x_tools::XMetricsTool));
 
         // Feishu/Lark tools (cross-platform, Feishu Open API)
         self.register(Box::new(feishu_tools::FeishuSendMessageTool));

@@ -16,11 +16,11 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use std::sync::Mutex;
 use zeus_tui::App;
 
-const AUTH: usize = 3;
-const CHANNELS: usize = 6;
-const FEATURES: usize = 12;
-const VOICE: usize = 13;
-const COMPLETE: usize = 18;
+const AUTH: usize = 4;
+const CHANNELS: usize = 7;
+const FEATURES: usize = 13;
+const VOICE: usize = 14;
+const COMPLETE: usize = 19;
 
 // `ctrl_n_on_complete_awakens` drives the real Complete/AWAKEN path, which
 // persists through `Config::load()`/`save_unchecked()` and therefore respects

@@ -56,7 +56,7 @@ fn goto_step(app: &mut App, target: usize) {
         let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
-        } else if s == 3 || s == 6 || s == 8 || s == 9 || s == 11 || s == 15 || s == 17 {
+        } else if s == 4 || s == 7 || s == 9 || s == 10 || s == 12 || s == 16 || s == 18 {
             // Channels (6), Gateway (8), Agent (9), Security (11) and
             // Orchestration (15) are GRIDs: Right=column focus (Gateway's 4-col
             // picker, Security's 4-col level grid, Orchestration's 3-col mode
@@ -112,7 +112,10 @@ fn step1_mode_lr_moves_cards_enter_advances() {
     assert_eq!(app.current_step, 1, "Left on Mode must NOT advance step");
     // Enter leaves Mode.
     press(&mut app, &[KeyCode::Enter]);
-    assert_eq!(app.current_step, 2, "Enter should advance off Mode");
+    assert_eq!(
+        app.current_step, 2,
+        "Enter should advance off Mode to Instance"
+    );
 }
 
 // ---- step 2: Provider (render/nav/propagation only — list content on HOLD) --
@@ -120,12 +123,12 @@ fn step1_mode_lr_moves_cards_enter_advances() {
 #[test]
 fn step2_provider_nav_and_renders() {
     let mut app = App::new();
-    goto_step(&mut app, 2);
+    goto_step(&mut app, 3);
     let frame = render(&app);
     assert!(!frame.trim().is_empty(), "provider frame should render");
     // Up/Down move provider selection without panic; step stays put.
     press(&mut app, &[KeyCode::Down, KeyCode::Down, KeyCode::Up]);
-    assert_eq!(app.current_step, 2, "provider nav must not change step");
+    assert_eq!(app.current_step, 3, "provider nav must not change step");
     let _ = render(&app);
 }
 
@@ -134,7 +137,7 @@ fn step2_provider_nav_and_renders() {
 #[test]
 fn step3_auth_paste_no_panic() {
     let mut app = App::new();
-    goto_step(&mut app, 3);
+    goto_step(&mut app, 4);
     // Long + multibyte API-key paste, then over-backspace.
     press(&mut app, &paste_blob());
     for _ in 0..6000 {
@@ -142,7 +145,7 @@ fn step3_auth_paste_no_panic() {
     }
     let frame = render(&app);
     assert!(!frame.trim().is_empty(), "auth frame should survive paste");
-    assert_eq!(app.current_step, 3);
+    assert_eq!(app.current_step, 4);
 }
 
 // ---- step 4: Model ---------------------------------------------------------
@@ -150,11 +153,11 @@ fn step3_auth_paste_no_panic() {
 #[test]
 fn step4_model_nav_and_renders() {
     let mut app = App::new();
-    goto_step(&mut app, 4);
+    goto_step(&mut app, 5);
     press(&mut app, &[KeyCode::Down, KeyCode::Up]);
     let frame = render(&app);
     assert!(!frame.trim().is_empty(), "model frame should render");
-    assert_eq!(app.current_step, 4);
+    assert_eq!(app.current_step, 5);
 }
 
 // ---- step 5: Fallback ------------------------------------------------------
@@ -162,12 +165,15 @@ fn step4_model_nav_and_renders() {
 #[test]
 fn step5_fallback_toggle_no_panic() {
     let mut app = App::new();
-    goto_step(&mut app, 5);
+    goto_step(&mut app, 6);
     // Enter toggles a candidate into the chain; nav + toggle must not panic.
-    press(&mut app, &[KeyCode::Down, KeyCode::Enter, KeyCode::Up, KeyCode::Enter]);
+    press(
+        &mut app,
+        &[KeyCode::Down, KeyCode::Enter, KeyCode::Up, KeyCode::Enter],
+    );
     let frame = render(&app);
     assert!(!frame.trim().is_empty(), "fallback frame should render");
-    assert_eq!(app.current_step, 5);
+    assert_eq!(app.current_step, 6);
 }
 
 // ---- step 12: Features -----------------------------------------------------
@@ -175,11 +181,11 @@ fn step5_fallback_toggle_no_panic() {
 #[test]
 fn step12_features_nav_and_renders() {
     let mut app = App::new();
-    goto_step(&mut app, 12);
+    goto_step(&mut app, 13);
     press(&mut app, &[KeyCode::Down, KeyCode::Up]);
     let frame = render(&app);
     assert!(!frame.trim().is_empty(), "features frame should render");
-    assert_eq!(app.current_step, 12);
+    assert_eq!(app.current_step, 13);
 }
 
 // ---- step 13: Voice (input wiring + paste safety) --------------------------
@@ -187,7 +193,7 @@ fn step12_features_nav_and_renders() {
 #[test]
 fn step13_voice_input_and_paste_no_panic() {
     let mut app = App::new();
-    goto_step(&mut app, 13);
+    goto_step(&mut app, 14);
     // Tab focuses a config field; typed chars + multibyte paste must land
     // without panic (regression: Voice previously had no Char wiring at all).
     press(&mut app, &[KeyCode::Tab]);
@@ -197,7 +203,7 @@ fn step13_voice_input_and_paste_no_panic() {
     }
     let frame = render(&app);
     assert!(!frame.trim().is_empty(), "voice frame should survive input");
-    assert_eq!(app.current_step, 13);
+    assert_eq!(app.current_step, 14);
 }
 
 // ---- step 14: Images (paste safety) ----------------------------------------
@@ -205,15 +211,18 @@ fn step13_voice_input_and_paste_no_panic() {
 #[test]
 fn step14_images_input_no_panic() {
     let mut app = App::new();
-    goto_step(&mut app, 14);
+    goto_step(&mut app, 15);
     press(&mut app, &[KeyCode::Tab]);
     press(&mut app, &paste_blob());
     for _ in 0..6000 {
         app.handle_key(KeyCode::Backspace);
     }
     let frame = render(&app);
-    assert!(!frame.trim().is_empty(), "images frame should survive input");
-    assert_eq!(app.current_step, 14);
+    assert!(
+        !frame.trim().is_empty(),
+        "images frame should survive input"
+    );
+    assert_eq!(app.current_step, 15);
 }
 
 // ---- step 15: Orchestration ------------------------------------------------
@@ -221,11 +230,14 @@ fn step14_images_input_no_panic() {
 #[test]
 fn step15_orchestration_nav_and_renders() {
     let mut app = App::new();
-    goto_step(&mut app, 15);
+    goto_step(&mut app, 16);
     press(&mut app, &[KeyCode::Down, KeyCode::Up, KeyCode::Tab]);
     let frame = render(&app);
-    assert!(!frame.trim().is_empty(), "orchestration frame should render");
-    assert_eq!(app.current_step, 15);
+    assert!(
+        !frame.trim().is_empty(),
+        "orchestration frame should render"
+    );
+    assert_eq!(app.current_step, 16);
 }
 
 // ---- step 16: Memory (paste safety) ----------------------------------------
@@ -233,15 +245,18 @@ fn step15_orchestration_nav_and_renders() {
 #[test]
 fn step16_memory_input_no_panic() {
     let mut app = App::new();
-    goto_step(&mut app, 16);
+    goto_step(&mut app, 17);
     press(&mut app, &[KeyCode::Tab]);
     press(&mut app, &paste_blob());
     for _ in 0..6000 {
         app.handle_key(KeyCode::Backspace);
     }
     let frame = render(&app);
-    assert!(!frame.trim().is_empty(), "memory frame should survive input");
-    assert_eq!(app.current_step, 16);
+    assert!(
+        !frame.trim().is_empty(),
+        "memory frame should survive input"
+    );
+    assert_eq!(app.current_step, 17);
 }
 
 // ---- step 17: Skills -------------------------------------------------------
@@ -249,11 +264,11 @@ fn step16_memory_input_no_panic() {
 #[test]
 fn step17_skills_nav_and_renders() {
     let mut app = App::new();
-    goto_step(&mut app, 17);
+    goto_step(&mut app, 18);
     press(&mut app, &[KeyCode::Down, KeyCode::Up, KeyCode::Tab]);
     let frame = render(&app);
     assert!(!frame.trim().is_empty(), "skills frame should render");
-    assert_eq!(app.current_step, 17);
+    assert_eq!(app.current_step, 18);
 }
 
 // ---- step 18: Complete (PROPAGATION) ---------------------------------------
@@ -262,7 +277,7 @@ fn step17_skills_nav_and_renders() {
 fn step18_complete_summary_propagates_earlier_choices() {
     let mut app = App::new();
     // Walk the full flow so each screen's state feeds build_summary().
-    goto_step(&mut app, 18);
+    goto_step(&mut app, 19);
     let frame = render(&app);
     assert!(!frame.trim().is_empty(), "complete frame should render");
     // The summary stack mirrors earlier-screen state — these labels are built
@@ -292,9 +307,12 @@ fn step18_complete_multibyte_summary_does_not_panic() {
     // multibyte value into the Auth key (flows into no summary row directly,
     // but exercises the full walk + render with multibyte state present).
     let mut app = App::new();
-    goto_step(&mut app, 3);
+    goto_step(&mut app, 4);
     press(&mut app, &paste_blob());
-    goto_step(&mut app, 18);
+    goto_step(&mut app, 19);
     let frame = render(&app);
-    assert!(!frame.trim().is_empty(), "complete must render with multibyte state");
+    assert!(
+        !frame.trim().is_empty(),
+        "complete must render with multibyte state"
+    );
 }

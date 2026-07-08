@@ -50,7 +50,12 @@ fn press(app: &mut App, keys: &[KeyCode]) {
 fn goto_mode(app: &mut App) {
     let mut guard = 0;
     while app.current_step < 1 && guard < 10 {
-        if app.current_step == 3 { app.current_step += 1; app.on_step_enter(); continue; }        app.handle_key(KeyCode::Right);
+        if app.current_step == 4 {
+            app.current_step += 1;
+            app.on_step_enter();
+            continue;
+        }
+        app.handle_key(KeyCode::Right);
         guard += 1;
     }
     assert_eq!(app.current_step, 1, "should land on Mode (step 1)");
@@ -80,7 +85,10 @@ fn mode_cards_render_as_3col_horizontal_grid() {
     let qs = row.find("QuickStart").unwrap();
     let fu = row.find("Full Setup").unwrap();
     let cu = row.find("Custom").unwrap();
-    assert!(qs < fu && fu < cu, "cards must be ordered QuickStart → Full Setup → Custom left-to-right");
+    assert!(
+        qs < fu && fu < cu,
+        "cards must be ordered QuickStart → Full Setup → Custom left-to-right"
+    );
 }
 
 // ---- ←/→ selection moves (not step-nav) -----------------------------------
@@ -92,11 +100,16 @@ fn mode_right_left_move_selection_not_step() {
 
     // Selection starts at QuickStart (0); SELECTED badge sits on its column.
     let row = selected_badge_row(&render_lines(&app)).expect("SELECTED badge must render");
-    let qs_col = row.find("QuickStart").map(|_| col_of(&row, "\u{25b8} SELECTED"));
+    let qs_col = row
+        .find("QuickStart")
+        .map(|_| col_of(&row, "\u{25b8} SELECTED"));
 
     // Right → selection moves to Full Setup; step unchanged.
     press(&mut app, &[KeyCode::Right]);
-    assert_eq!(app.current_step, 1, "Right on Mode must NOT advance the step");
+    assert_eq!(
+        app.current_step, 1,
+        "Right on Mode must NOT advance the step"
+    );
     let after = selected_badge_row(&render_lines(&app)).expect("SELECTED badge after Right");
     let fu_badge_col = col_of(&after, "\u{25b8} SELECTED");
     assert!(
@@ -111,7 +124,10 @@ fn mode_right_left_move_selection_not_step() {
         &selected_badge_row(&render_lines(&app)).unwrap(),
         "\u{25b8} SELECTED",
     );
-    assert!(custom_col > fu_badge_col, "→ again moves to Custom (rightmost card)");
+    assert!(
+        custom_col > fu_badge_col,
+        "→ again moves to Custom (rightmost card)"
+    );
 
     press(&mut app, &[KeyCode::Left]);
     assert_eq!(app.current_step, 1, "Left on Mode must NOT change the step");
@@ -147,7 +163,10 @@ fn mode_esc_goes_back_one_step_not_quit() {
     // ESC steps back (Mode → Welcome). A quit would leave the step unchanged
     // and exit instead; the decrement is the observable proof it did NOT quit.
     app.handle_key(KeyCode::Esc);
-    assert_eq!(app.current_step, 0, "ESC on Mode must step back to Welcome (0), not quit");
+    assert_eq!(
+        app.current_step, 0,
+        "ESC on Mode must step back to Welcome (0), not quit"
+    );
 
     // ESC on the first step is a no-op (clamped) — no underflow, no quit.
     app.handle_key(KeyCode::Esc);
@@ -158,7 +177,10 @@ fn mode_esc_goes_back_one_step_not_quit() {
 
 /// Find the rendered row containing the `▸ SELECTED` badge.
 fn selected_badge_row(lines: &[String]) -> Option<String> {
-    lines.iter().find(|r| r.contains("\u{25b8} SELECTED")).cloned()
+    lines
+        .iter()
+        .find(|r| r.contains("\u{25b8} SELECTED"))
+        .cloned()
 }
 
 /// Column index of `needle` within `row` (panics if absent — caller asserts).

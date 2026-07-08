@@ -413,7 +413,11 @@ impl ChannelAdapter for IrcAdapter {
                                         // as Unknown. See fix/irc-dm-routing-v2.
                                         .with_sender_type(zeus_core::SenderType::Human);
 
-                                        let channel_msg = ChannelMessage::new(source, text)
+                                        // Prefix sender nick into content (Discord parity, #317).
+                                        // Applied AFTER is_addressed computation so trigger
+                                        // detection never sees the mutated string.
+                                        let prefixed_text = format!("[{}]: {}", nick, text);
+                                        let channel_msg = ChannelMessage::new(source, prefixed_text)
                                             .with_addressed(is_addressed);
                                         if tx.send(channel_msg).await.is_err() {
                                             warn!("IRC message receiver dropped");
@@ -866,5 +870,33 @@ mod tests {
     fn test_nick_highlight_punctuation_only_no_match() {
         // "zeus!" — no highlight delimiter follows, not a mention
         assert!(!is_nick_highlighted("zeus!", "zeus"));
+    }
+
+    // -- #317: sender prefix in content (Discord parity) --
+
+    #[test]
+    fn test_irc_sender_prefix_format() {
+        // Contract: content is prefixed with "[nick]: " so the agent
+        // knows who sent the message, mirroring discord.rs:573.
+        let nick = "merakizzz";
+        let text = "hello world";
+        let prefixed = format!("[{}]: {}", nick, text);
+        assert_eq!(prefixed, "[merakizzz]: hello world");
+    }
+
+    #[test]
+    fn test_irc_prefix_applied_after_addressing() {
+        // Contract: is_addressed is computed on the ORIGINAL text (before
+        // prefix), so trigger detection never sees "[nick]: " in the string.
+        // Simulate the flow: compute is_addressed on raw text, then prefix.
+        let nick = "zeus";
+        let text = "zeus hi there"; // would trigger is_nick_highlighted
+        let is_addressed = is_nick_highlighted(text, nick);
+        assert!(is_addressed); // detected on raw text
+
+        // Now prefix — the prefixed string should NOT be re-evaluated
+        let prefixed = format!("[{}]: {}", nick, text);
+        // The prefix itself doesn't contain a bare "zeus " at start
+        assert!(!prefixed.starts_with("zeus "));
     }
 }

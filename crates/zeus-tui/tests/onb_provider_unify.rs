@@ -64,7 +64,14 @@ fn registry_is_exactly_our_twelve() {
 #[test]
 fn dropped_providers_are_gone() {
     let ids: Vec<&str> = PROVIDERS.iter().map(|p| p.id).collect();
-    for gone in ["groq", "mistral", "together", "fireworks", "deepseek", "azure"] {
+    for gone in [
+        "groq",
+        "mistral",
+        "together",
+        "fireworks",
+        "deepseek",
+        "azure",
+    ] {
         assert!(
             !ids.contains(&gone),
             "`{gone}` must be dropped from the canonical 12"
@@ -75,7 +82,11 @@ fn dropped_providers_are_gone() {
 #[test]
 fn flagships_are_current() {
     let f = |id: &str| providers::by_id(id).map(|p| p.flagship).unwrap_or("");
-    assert_eq!(f("anthropic"), "claude-opus-4-8", "anthropic flagship stale");
+    assert_eq!(
+        f("anthropic"),
+        "claude-opus-4-8",
+        "anthropic flagship stale"
+    );
     assert_eq!(f("glm"), "glm-5.2", "glm flagship stale");
     assert_eq!(f("minimax"), "MiniMax-M3", "minimax flagship stale");
     assert_eq!(f("kimi"), "kimi-k2.7-code", "kimi flagship stale");
@@ -86,12 +97,15 @@ fn flagships_are_current() {
 fn provider_screen_renders_from_shared_const() {
     // Provider = step 2.
     let mut app = App::new();
-    app.current_step = 2;
+    app.current_step = 3;
     let screen = render(&app);
 
     // Our 12 names should be present somewhere on the Provider screen — and the
     // dropped ones should not. (At least the first-column names are visible.)
-    assert!(screen.contains("Anthropic"), "Provider screen must list Anthropic");
+    assert!(
+        screen.contains("Anthropic"),
+        "Provider screen must list Anthropic"
+    );
     // Grok/xAI is in; Groq is out — the historically-conflated pair.
     assert!(
         !screen.contains("Groq"),
@@ -104,7 +118,7 @@ fn fallback_candidates_derive_from_shared_const() {
     // Fallback = step 5. Its candidate list is now `providers::PROVIDERS`
     // filtered by primary, so the dropped providers can never reappear here.
     let mut app = App::new();
-    app.current_step = 5;
+    app.current_step = 6;
     let screen = render(&app);
 
     assert!(

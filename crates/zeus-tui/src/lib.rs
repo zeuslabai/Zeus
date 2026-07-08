@@ -10,8 +10,10 @@ pub mod prod;
 pub mod app;
 pub mod model_fetch;
 pub mod awaken;
+pub mod gateway_target;
 
 pub use app::{App, FooterFocus};
+pub use gateway_target::{GatewayTargetOverride, resolve_gateway_target};
 
 /// Launch the Zeus TUI integrated with the gateway described by `config`.
 ///
@@ -43,22 +45,22 @@ pub async fn run_with_force(
     config: zeus_core::Config,
     force_onboard: bool,
 ) -> anyhow::Result<bool> {
+    run_with_force_and_gateway(config, force_onboard, None).await
+}
+
+/// Like [`run_with_force`], but with an optional non-persistent gateway target
+/// override from `zeus tui --port/--gateway-url`.
+pub async fn run_with_force_and_gateway(
+    config: zeus_core::Config,
+    force_onboard: bool,
+    gateway_override: Option<GatewayTargetOverride>,
+) -> anyhow::Result<bool> {
     use std::sync::{Arc, Mutex};
 
-    // Resolve gateway endpoint + agent identity from config (a 0.0.0.0 bind
-    // address is not a connect address → use loopback), mirroring the prior TUI.
-    let (host, port): (String, u16) = config
-        .gateway
-        .as_ref()
-        .map(|g| {
-            let h = if g.host == "0.0.0.0" {
-                "127.0.0.1".to_string()
-            } else {
-                g.host.clone()
-            };
-            (h, g.port)
-        })
-        .unwrap_or_else(|| ("localhost".to_string(), 8080u16));
+    let gateway_target = resolve_gateway_target(&config, gateway_override.as_ref());
+    let host = gateway_target.display_host.clone();
+    let port = gateway_target.display_port;
+    let gateway_url = gateway_target.base_url;
     let agent_name = config
         .agent
         .as_ref()
@@ -67,7 +69,6 @@ pub async fn run_with_force(
         // #296: no match-all "zeus" default — sentinel for an unnamed agent.
         .unwrap_or("<unnamed agent>")
         .to_string();
-    let gateway_url = format!("http://{host}:{port}");
 
     // Shared app state: background tasks update it while the render loop reads.
     let app = Arc::new(Mutex::new(app::App::new_from_disk()));

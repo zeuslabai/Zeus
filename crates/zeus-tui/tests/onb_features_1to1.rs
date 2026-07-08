@@ -19,17 +19,22 @@ use zeus_tui::app::frame;
 
 use crossterm::event::KeyCode;
 
-const FEATURES_STEP: usize = 12;
+const FEATURES_STEP: usize = 13;
 
 /// Walk to the Features step (12). Steps 1/6/8/9/11 consume Right/Enter for
 /// in-screen focus (grid-local), so we bump those directly — mirrors goto_step
 /// in onb_106. Features itself is the target; we stop AT it.
 fn goto_features(app: &mut App) {
     while app.current_step < FEATURES_STEP {
-        if app.current_step == 3 { app.current_step += 1; app.on_step_enter(); continue; }        let s = app.current_step;
+        if app.current_step == 4 {
+            app.current_step += 1;
+            app.on_step_enter();
+            continue;
+        }
+        let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
-        } else if s == 6 || s == 8 || s == 9 || s == 11 {
+        } else if s == 7 || s == 9 || s == 10 || s == 12 {
             app.current_step += 1;
             app.on_step_enter();
         } else {
@@ -39,7 +44,10 @@ fn goto_features(app: &mut App) {
             app.handle_key(KeyCode::Enter);
         }
     }
-    assert_eq!(app.current_step, FEATURES_STEP, "failed to reach Features step");
+    assert_eq!(
+        app.current_step, FEATURES_STEP,
+        "failed to reach Features step"
+    );
 }
 
 fn render(app: &mut App) -> String {
@@ -145,7 +153,10 @@ fn features_talos_reads_on_even_when_toggle_false() {
     goto_features(&mut app);
     app.features_screen.platform = "macOS";
     // Default toggled[0] (talos) is false — but mandatory must override → ● ON.
-    assert!(!app.features_screen.toggled[0], "precondition: talos toggle is false");
+    assert!(
+        !app.features_screen.toggled[0],
+        "precondition: talos toggle is false"
+    );
     let s = render(&mut app);
     // The talos row must show ● ON (not ○ OFF), proving is_mandatory || toggled.
     let talos_row = s
@@ -153,8 +164,16 @@ fn features_talos_reads_on_even_when_toggle_false() {
         .position(|l| l.contains("Talos"))
         .expect("Talos row");
     // ● ON appears in the banding of the talos card (its row + status row).
-    let band: String = s.lines().skip(talos_row).take(4).collect::<Vec<_>>().join("\n");
-    assert!(band.contains("● ON"), "talos must read ● ON when mandatory\n{band}");
+    let band: String = s
+        .lines()
+        .skip(talos_row)
+        .take(4)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        band.contains("● ON"),
+        "talos must read ● ON when mandatory\n{band}"
+    );
 }
 
 #[test]

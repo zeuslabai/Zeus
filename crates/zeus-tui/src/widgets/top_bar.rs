@@ -5,10 +5,11 @@ use ratatui::widgets::Widget;
 
 use crate::theme;
 
-/// 19 onboarding steps — matches STEPS array in zeus-tui-onboarding.jsx line 74.
+/// 20 onboarding steps — matches STEPS array in zeus-tui-onboarding.jsx line 74.
 pub const STEPS: &[(&str, &str)] = &[
     ("welcome", "WLCM"),
     ("mode", "MODE"),
+    ("instance", "INST"),
     ("provider", "PROV"),
     ("auth", "AUTH"),
     ("model", "MODL"),
@@ -29,7 +30,7 @@ pub const STEPS: &[(&str, &str)] = &[
 ];
 
 /// TopBar widget — matches JSX TopBar (line 206).
-/// Renders: `ZEUS │ ONBOARDING │ Step N of 19 │ CODE │ [face] │ ● config draft │ ~/.zeus/config.toml`
+/// Renders: `ZEUS │ ONBOARDING │ Step N of 20 │ CODE │ [face] │ ● config draft │ ~/.zeus/config.toml`
 pub struct TopBar {
     pub step_idx: usize,
     pub hostname: String,
@@ -68,8 +69,12 @@ impl Widget for TopBar {
         ));
         spans.push(Span::styled("│ ", Style::default().fg(theme::MUTED)));
 
-        // Step N of 19
-        let step_text = format!("Step {} of {} ", step_idx_display(self.step_idx), STEPS.len());
+        // Step N of 20
+        let step_text = format!(
+            "Step {} of {} ",
+            step_idx_display(self.step_idx),
+            STEPS.len()
+        );
         spans.push(Span::styled(step_text, Style::default().fg(theme::DIM)));
         spans.push(Span::styled("│ ", Style::default().fg(theme::MUTED)));
 
@@ -77,7 +82,9 @@ impl Widget for TopBar {
         if let Some((_, code)) = STEPS.get(self.step_idx) {
             spans.push(Span::styled(
                 format!("{} ", code),
-                Style::default().fg(theme::ACCENT_DIM).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme::ACCENT_DIM)
+                    .add_modifier(Modifier::BOLD),
             ));
         }
 
@@ -85,7 +92,10 @@ impl Widget for TopBar {
         spans.push(Span::raw("  "));
         spans.push(Span::styled("│ ", Style::default().fg(theme::MUTED)));
         spans.push(Span::styled("● ", Style::default().fg(theme::GREEN)));
-        spans.push(Span::styled("config draft ", Style::default().fg(theme::DIM)));
+        spans.push(Span::styled(
+            "config draft ",
+            Style::default().fg(theme::DIM),
+        ));
         spans.push(Span::styled("│ ", Style::default().fg(theme::MUTED)));
         spans.push(Span::styled(
             "~/.zeus/config.toml",

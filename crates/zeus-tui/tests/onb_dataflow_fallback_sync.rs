@@ -22,7 +22,9 @@ use zeus_tui::screens::FallbackScreen;
 fn render(app: &mut App) -> String {
     let backend = TestBackend::new(140, 44);
     let mut terminal = Terminal::new(backend).expect("terminal");
-    terminal.draw(|f| frame(f, app)).expect("draw must not panic");
+    terminal
+        .draw(|f| frame(f, app))
+        .expect("draw must not panic");
     let buf = terminal.backend().buffer().clone();
     let mut out = String::new();
     for y in 0..buf.area.height {
@@ -34,19 +36,20 @@ fn render(app: &mut App) -> String {
     out
 }
 
-/// Drive Welcome → Mode → Provider, pick the Nth provider, advance through
+/// Drive Welcome → Mode → Instance → Provider, pick the Nth provider, advance through
 /// Auth → Model → Fallback. on_step_enter(Fallback) must sync the primary.
 fn walk_to_fallback_with_provider(provider_down_presses: usize) -> App {
     let mut app = App::new();
-    app.handle_key(KeyCode::Right); // Welcome(0) -> Mode(1)
-    app.handle_key(KeyCode::Enter); // Mode(1) -> Provider(2)
+    app.handle_key(KeyCode::Right); // Welcome -> Mode
+    app.handle_key(KeyCode::Enter); // Mode -> Instance
+    app.handle_key(KeyCode::Right); // Instance -> Provider
     for _ in 0..provider_down_presses {
         app.handle_key(KeyCode::Down); // pick non-default provider
     }
-    app.handle_key(KeyCode::Right); // Provider(2) -> Auth(3)
+    app.handle_key(KeyCode::Right); // Provider -> Auth
     app.current_step += 1;
-    app.on_step_enter(); // Auth(3) -> Model(4): probe-gated (#240), bump past directly
-    app.handle_key(KeyCode::Right); // Model(4) -> Fallback(5): on_step_enter syncs
+    app.on_step_enter(); // Auth -> Model: probe-gated (#240), bump past directly
+    app.handle_key(KeyCode::Right); // Model -> Fallback: on_step_enter syncs
     app
 }
 

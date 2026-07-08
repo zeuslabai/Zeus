@@ -240,6 +240,30 @@ WEBUI_LISTEN="localhost"
 ZEUS_HOME="${HOME}/.zeus"
 INSTALL_DIR="/usr/local/bin"
 
+# OS-aware LAN IP detection (FreeBSD has neither `ipconfig getifaddr` nor `hostname -I`)
+detect_lan_ip() {
+    case "$(uname -s)" in
+        Darwin)  ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null ;;
+        FreeBSD) ifconfig 2>/dev/null | awk '/inet /&&!/127\.0/{print $2; exit}' ;;
+        *)       hostname -I 2>/dev/null | awk '{print $1}' ;;
+    esac
+}
+
+# Host to show in printed URLs: honours the actual listen address instead of
+# hardcoding localhost. Wildcard binds display the LAN IP so the URL works
+# from another machine; explicit binds display themselves.
+webui_display_host() {
+    case "$WEBUI_LISTEN" in
+        0.0.0.0|::|\*)
+            _lan_ip=$(detect_lan_ip)
+            if [ -n "$_lan_ip" ]; then printf '%s\n' "$_lan_ip"; else echo "localhost"; fi ;;
+        ''|localhost|127.0.0.1)
+            echo "localhost" ;;
+        *)
+            printf '%s\n' "$WEBUI_LISTEN" ;;
+    esac
+}
+
 # ── Parse flags ─────────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -796,8 +820,7 @@ if $DO_BUILD; then
                 cp -r "$WEBUI_DIR/dist/"* "$ZEUS_HOME/web/"
                 ok "WebUI installed to $ZEUS_HOME/web/"
                 # Get local IP for URL
-                LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
-                WEBUI_URL="http://${LOCAL_IP}:8081"
+                WEBUI_URL="http://$(webui_display_host):8081"
                 WEBUI_SIZE=$(du -sh "$ZEUS_HOME/web/" 2>/dev/null | awk '{print $1}')
                 printf "\n"
                 printf "  ${CS}┌─────────────────────────────────────────────────┐${N}\n"
@@ -1823,11 +1846,26 @@ if $DO_LAUNCH; then
                 sudo sysrc zeus_gateway_enable=YES 2>/dev/null || true
                 sudo sysrc zeus_gateway_user="$(id -un)" 2>/dev/null || true
                 sudo sysrc zeus_gateway_home="$HOME" 2>/dev/null || true
-                sudo service zeus_gateway restart 2>/dev/null && ok "Gateway via rc.d (zeus_gateway)" || {
+                # #311 launch UX: capture the service's actual error output —
+                # a silent `2>/dev/null` here is why failed launches ended
+                # with no explanation and no URL.
+                SVC_OUT=$(sudo service zeus_gateway restart 2>&1) && SVC_OK=true || SVC_OK=false
+                if $SVC_OK; then
+                    ok "Gateway via rc.d (zeus_gateway)"
+                else
+                    warn "rc.d launch failed:"
+                    printf '%s\n' "$SVC_OUT" | tail -5 | sed 's/^/      /'
+                    [ -f /var/log/zeus_gateway.log ] && {
+                        info "Service log tail (/var/log/zeus_gateway.log):"
+                        tail -5 /var/log/zeus_gateway.log 2>/dev/null | sed 's/^/      /' || true
+                    }
+                    info "Falling back to nohup (login-shell env)"
+                    mkdir -p "$ZEUS_HOME/logs"
                     nohup zeus gateway > "$ZEUS_HOME/logs/gateway.out.log" 2> "$ZEUS_HOME/logs/gateway.err.log" &
                     ok "Gateway via nohup"
-                }
+                fi
             else
+                mkdir -p "$ZEUS_HOME/logs"
                 nohup zeus gateway > "$ZEUS_HOME/logs/gateway.out.log" 2> "$ZEUS_HOME/logs/gateway.err.log" &
                 ok "Gateway via nohup"
             fi ;;
@@ -1850,14 +1888,14 @@ if $DO_LAUNCH; then
         ok "Gateway running (PID $GATEWAY_PID)"
 
         if $WITH_WEBUI && [ -d "$ZEUS_HOME/web" ] && [ -f "$ZEUS_HOME/web/index.html" ]; then
-            ok "WebUI at http://localhost:8081/"
+            ok "WebUI at http://$(webui_display_host):8081/"
             # Bootstrap mode serves on 8081 — check that port
             HEALTH=$(curl -s --max-time 5 http://127.0.0.1:8081/health 2>/dev/null || echo "")
             if echo "$HEALTH" | grep -q '"ok"'; then
                 ok "Health check (8081): ${G}OK${N}"
             else
                 # Gateway may still be initialising — not fatal
-                info "Gateway started; WebUI onboarding at http://localhost:8081/"
+                info "Gateway started; WebUI onboarding at http://$(webui_display_host):8081/"
             fi
         else
             # Try port 8080 for standard gateway mode
@@ -1869,8 +1907,21 @@ if $DO_LAUNCH; then
             fi
         fi
     else
+        # #311 launch UX: never end URL-less and silent — say WHY (surface
+        # the freshest error lines) and print the manual fallback + URLs.
         warn "Gateway failed to start"
-        info "Logs: tail -f $ZEUS_HOME/logs/gateway.err.log"
+        for lf in "$ZEUS_HOME/logs/gateway.err.log" "$ZEUS_HOME/logs/gateway.out.log" /var/log/zeus_gateway.log; do
+            [ -s "$lf" ] || continue
+            info "Last lines of $lf:"
+            tail -5 "$lf" 2>/dev/null | sed 's/^/      /' || true
+            break
+        done
+        printf "\n"
+        info "Manual fallback (login-shell env sidesteps most service issues):"
+        printf "      ${CS}mkdir -p %s/logs && nohup zeus gateway > %s/logs/gateway.out.log 2>&1 &${N}\n" "$ZEUS_HOME" "$ZEUS_HOME"
+        info "Then browse:  http://$(webui_display_host):8080/  (gateway)"
+        $WITH_WEBUI && info "WebUI onboarding: http://$(webui_display_host):8081/"
+        info "Diagnose:     zeus doctor   ·   Logs: tail -f $ZEUS_HOME/logs/gateway.err.log"
     fi
 else
     phase "SKIP LAUNCH"
@@ -1897,8 +1948,7 @@ box_mid "$(printf "  ${D}Config:${N}     ${W}%s/config.toml${N}" "$ZEUS_HOME")"
 box_mid "$(printf "  ${D}Logs:${N}       ${W}%s/logs/${N}" "$ZEUS_HOME")"
 box_mid "$(printf "  ${D}Skills:${N}     ${W}%s/skills/${N}" "$ZEUS_HOME")"
 if $WITH_WEBUI; then
-    LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
-    WEBUI_FINAL_URL="http://${LOCAL_IP}:8081"
+    WEBUI_FINAL_URL="http://$(webui_display_host):8081"
     box_mid ""
     box_sep
     box_mid "$(printf "  ${CS}${B}⚡ WebUI:${N}    ${W}%s${N}" "$WEBUI_FINAL_URL")"

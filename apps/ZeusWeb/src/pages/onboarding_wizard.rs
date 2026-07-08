@@ -3985,6 +3985,34 @@ fn StepLaunch(config: RwSignal<OnboardConfig>) -> impl IntoView {
                                             .iter()
                                             .map(|f| (f.id.to_string(), c.features.iter().any(|x| x == f.id)))
                                             .collect();
+                                        // #313: persist use_oauth per the auth method actually chosen
+                                        let use_oauth = c.auth_types.get("anthropic")
+                                            .map(|t| t == "oauth_token" || t == "oauth_browser" || t == "oauth_device")
+                                            .unwrap_or(false);
+                                        // #312 batch②: derive voice/image/embedding/workspace
+                                        // from wizard state for TUI parity.
+                                        let voice_prov = if !c.elevenlabs_api_key.is_empty() {
+                                            Some("elevenlabs")
+                                        } else if !c.piper_url.is_empty() {
+                                            Some("piper")
+                                        } else {
+                                            None
+                                        };
+                                        let img_prov = if c.image_gen_provider.is_empty() || c.image_gen_provider == "none" {
+                                            None
+                                        } else {
+                                            Some(c.image_gen_provider.as_str())
+                                        };
+                                        let emb_prov = if c.memory_embedding_provider.is_empty() || c.memory_embedding_provider == "none" {
+                                            None
+                                        } else {
+                                            Some(c.memory_embedding_provider.as_str())
+                                        };
+                                        let ws_path = if c.qs_workspace.is_empty() {
+                                            None
+                                        } else {
+                                            Some(c.qs_workspace.as_str())
+                                        };
                                         if let Err(e) = api::onboarding_setup(
                                             &provider,
                                             &model,
@@ -3994,6 +4022,12 @@ fn StepLaunch(config: RwSignal<OnboardConfig>) -> impl IntoView {
                                             &c.agent_name,
                                             ollama_url,
                                             true,
+                                            use_oauth,
+                                            voice_prov,
+                                            img_prov,
+                                            emb_prov,
+                                            ws_path,
+                                            Some(&c.personality),
                                         ).await {
                                             web_sys::console::warn_1(&format!("Zeus: onboarding setup failed: {}", e).into());
                                             save_status.set(SaveStatus::Error(format!("Onboarding save failed: {}", e)));

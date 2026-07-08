@@ -20,17 +20,22 @@ use zeus_tui::app::frame;
 
 use crossterm::event::KeyCode;
 
-const ORCH_STEP: usize = 15;
+const ORCH_STEP: usize = 16;
 
 /// Walk to the Orchestration step (15). Steps 1/6/8/9/11 consume Right for
 /// in-screen focus, so we bump those directly — mirrors goto_step in onb_106.
 /// Orchestration itself is the target, so we stop AT it.
 fn goto_orchestration(app: &mut App) {
     while app.current_step < ORCH_STEP {
-        if app.current_step == 3 { app.current_step += 1; app.on_step_enter(); continue; }        let s = app.current_step;
+        if app.current_step == 4 {
+            app.current_step += 1;
+            app.on_step_enter();
+            continue;
+        }
+        let s = app.current_step;
         if s == 1 {
             app.handle_key(KeyCode::Enter);
-        } else if s == 6 || s == 8 || s == 9 || s == 11 {
+        } else if s == 7 || s == 9 || s == 10 || s == 12 {
             app.current_step += 1;
             app.on_step_enter();
         } else {
@@ -40,7 +45,10 @@ fn goto_orchestration(app: &mut App) {
             app.handle_key(KeyCode::Enter);
         }
     }
-    assert_eq!(app.current_step, ORCH_STEP, "failed to reach Orchestration step");
+    assert_eq!(
+        app.current_step, ORCH_STEP,
+        "failed to reach Orchestration step"
+    );
 }
 
 fn render(app: &mut App) -> String {
@@ -92,8 +100,14 @@ fn orch_three_col_grid_names_share_row() {
     let r_all = row_of(&s, "All-on").expect("All-on present");
     let r_hb = row_of(&s, "Heartbeat-only").expect("Heartbeat-only present");
     let r_off = row_of(&s, "Disabled").expect("Disabled present");
-    assert_eq!(r_all, r_hb, "All-on and Heartbeat-only not on same row\n{s}");
-    assert_eq!(r_hb, r_off, "Heartbeat-only and Disabled not on same row\n{s}");
+    assert_eq!(
+        r_all, r_hb,
+        "All-on and Heartbeat-only not on same row\n{s}"
+    );
+    assert_eq!(
+        r_hb, r_off,
+        "Heartbeat-only and Disabled not on same row\n{s}"
+    );
 }
 
 // ── glyph badges present ─────────────────────────────────────────────────────
@@ -116,7 +130,10 @@ fn orch_selected_badge_on_default_recommended() {
     goto_orchestration(&mut app);
     // Default selection = All-on (index 0, recommended) → ▸ SELECTED, no ★ REC.
     let s = render(&mut app);
-    assert!(s.contains("▸ SELECTED"), "missing ▸ SELECTED on default\n{s}");
+    assert!(
+        s.contains("▸ SELECTED"),
+        "missing ▸ SELECTED on default\n{s}"
+    );
     assert!(
         !s.contains("★ REC"),
         "★ REC should be hidden while the recommended card IS selected\n{s}"
@@ -131,8 +148,14 @@ fn orch_rec_badge_appears_when_recommended_unselected() {
     // ▸ SELECTED follows the new pick.
     app.handle_key(KeyCode::Right);
     let s = render(&mut app);
-    assert!(s.contains("★ REC"), "★ REC missing after moving off recommended\n{s}");
-    assert!(s.contains("▸ SELECTED"), "▸ SELECTED missing on new pick\n{s}");
+    assert!(
+        s.contains("★ REC"),
+        "★ REC missing after moving off recommended\n{s}"
+    );
+    assert!(
+        s.contains("▸ SELECTED"),
+        "▸ SELECTED missing on new pick\n{s}"
+    );
 }
 
 // ── HEARTBEAT TIMING fields shown for All-on / Heartbeat-only ────────────────
@@ -143,7 +166,10 @@ fn orch_timing_fields_shown_when_not_disabled() {
     goto_orchestration(&mut app);
     // Default = All-on → timing fields visible.
     let s = render(&mut app);
-    assert!(s.contains("HEARTBEAT TIMING"), "missing timing section\n{s}");
+    assert!(
+        s.contains("HEARTBEAT TIMING"),
+        "missing timing section\n{s}"
+    );
     assert!(s.contains("Interval"), "missing Interval field\n{s}");
     assert!(s.contains("Quiet Start"), "missing Quiet Start field\n{s}");
     assert!(s.contains("Quiet End"), "missing Quiet End field\n{s}");
@@ -189,10 +215,16 @@ fn orch_left_right_move_selection_not_step() {
     let r_sel = row_of(&s, "▸ SELECTED").expect("▸ SELECTED present");
     let r_hb = row_of(&s, "Heartbeat-only").expect("Heartbeat-only present");
     // Both should be in the same card column band → roughly same row region.
-    assert!(r_sel <= r_hb, "▸ SELECTED should sit above the HB name\n{s}");
+    assert!(
+        r_sel <= r_hb,
+        "▸ SELECTED should sit above the HB name\n{s}"
+    );
     // Left moves back; step still unchanged.
     app.handle_key(KeyCode::Left);
-    assert_eq!(app.current_step, ORCH_STEP, "Left must not step-back on the grid");
+    assert_eq!(
+        app.current_step, ORCH_STEP,
+        "Left must not step-back on the grid"
+    );
 }
 
 #[test]
@@ -201,11 +233,20 @@ fn orch_left_clamps_no_wrap() {
     goto_orchestration(&mut app);
     // At index 0, Left should clamp (no wrap to Disabled) and not step-back.
     app.handle_key(KeyCode::Left);
-    assert_eq!(app.current_step, ORCH_STEP, "Left at index 0 must clamp, not step-back");
+    assert_eq!(
+        app.current_step, ORCH_STEP,
+        "Left at index 0 must clamp, not step-back"
+    );
     let s = render(&mut app);
     // Still on All-on (recommended + selected → ▸ SELECTED, no ★ REC).
-    assert!(s.contains("▸ SELECTED"), "should still be selected on All-on\n{s}");
-    assert!(!s.contains("★ REC"), "no ★ REC while All-on is selected\n{s}");
+    assert!(
+        s.contains("▸ SELECTED"),
+        "should still be selected on All-on\n{s}"
+    );
+    assert!(
+        !s.contains("★ REC"),
+        "no ★ REC while All-on is selected\n{s}"
+    );
 }
 
 // ── ESC backs out one step (does not quit) ──────────────────────────────────

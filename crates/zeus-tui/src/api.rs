@@ -4,7 +4,14 @@
 //! All API calls are async via reqwest. Results update the App state.
 //! No rendering code here — pure data fetching.
 
+use reqwest::{header::RETRY_AFTER, StatusCode};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+const CHAT_RATE_LIMIT_MAX_RETRIES: usize = 3;
+const CHAT_RATE_LIMIT_DEFAULT_DELAY: Duration = Duration::from_secs(1);
+const CHAT_RATE_LIMIT_MAX_DELAY: Duration = Duration::from_secs(5);
+
 
 /// Typed SSE events emitted by `chat_stream`.
 ///
@@ -31,6 +38,66 @@ pub struct ApiClient {
     base_url: String,
     client: reqwest::Client,
 }
+
+#[derive(Debug, Clone)]
+struct RateLimitRetry {
+    delay: Duration,
+    body: String,
+}
+
+fn parse_retry_after_header(resp: &reqwest::Response) -> Option<Duration> {
+    resp.headers()
+        .get(RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+}
+
+fn parse_retry_after_body(body: &str) -> Option<Duration> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let retry = value
+        .get("retry_after")
+        .or_else(|| value.pointer("/error/retry_after"))?;
+    if let Some(secs) = retry.as_u64() {
+        return Some(Duration::from_secs(secs));
+    }
+    if let Some(secs) = retry.as_f64() {
+        return Some(Duration::from_millis((secs.max(0.0) * 1000.0).ceil() as u64));
+    }
+    if let Some(secs) = retry.as_str().and_then(|s| s.trim().parse::<f64>().ok()) {
+        return Some(Duration::from_millis((secs.max(0.0) * 1000.0).ceil() as u64));
+    }
+    None
+}
+
+fn clamp_rate_limit_delay(delay: Duration) -> Duration {
+    delay.min(CHAT_RATE_LIMIT_MAX_DELAY)
+}
+
+async fn parse_rate_limit_response(resp: reqwest::Response) -> RateLimitRetry {
+    let header_delay = parse_retry_after_header(&resp);
+    let body = resp.text().await.unwrap_or_else(|_| "<no body>".to_string());
+    let delay = header_delay
+        .or_else(|| parse_retry_after_body(&body))
+        .unwrap_or(CHAT_RATE_LIMIT_DEFAULT_DELAY);
+    RateLimitRetry { delay: clamp_rate_limit_delay(delay), body }
+}
+
+async fn sleep_rate_limit(delay: Duration) {
+    if !delay.is_zero() {
+        tokio::time::sleep(delay).await;
+    }
+}
+
+fn rate_limit_error(prefix: &str, retry: &RateLimitRetry) -> String {
+    format!(
+        "{prefix} rate limit exceeded after {} retries; retry_after={}s: {}",
+        CHAT_RATE_LIMIT_MAX_RETRIES,
+        retry.delay.as_secs_f32(),
+        retry.body.trim()
+    )
+}
+
 
 #[derive(Debug, Deserialize, Default)]
 pub struct StatusResponse {
@@ -852,26 +919,38 @@ impl ApiClient {
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()
             .unwrap_or_default();
-        let resp = chat_client
-            .post(format!("{}/v1/chat", self.base_url))
-            .timeout(std::time::Duration::from_secs(1800))
-            .json(&req)
-            .send()
-            .await
-            .map_err(|e| format!("Request failed: {}", e))?;
-        // The gateway's `chat()` returns `Result<Json<ChatResponse>, (StatusCode,
-        // String)>` — on error that's a non-2xx status + a PLAIN-TEXT body. Without
-        // this status check, `.json::<ChatResponse>()` tries to JSON-decode that
-        // text → "error decoding response body" → the misleading "Parse failed: …"
-        // that masks the real gateway error (#282). Surface the body verbatim.
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("[gateway {}] {}", status.as_u16(), body));
+        let mut attempt = 0usize;
+        loop {
+            let resp = chat_client
+                .post(format!("{}/v1/chat", self.base_url))
+                .timeout(Duration::from_secs(1800))
+                .json(&req)
+                .send()
+                .await
+                .map_err(|e| format!("Request failed: {}", e))?;
+            // The gateway's `chat()` returns `Result<Json<ChatResponse>, (StatusCode,
+            // String)>` — on error that's a non-2xx status + a PLAIN-TEXT body. Without
+            // this status check, `.json::<ChatResponse>()` tries to JSON-decode that
+            // text → "error decoding response body" → the misleading "Parse failed: …"
+            // that masks the real gateway error (#282). Surface the body verbatim.
+            let status = resp.status();
+            if status == StatusCode::TOO_MANY_REQUESTS {
+                let retry = parse_rate_limit_response(resp).await;
+                if attempt < CHAT_RATE_LIMIT_MAX_RETRIES {
+                    attempt += 1;
+                    sleep_rate_limit(retry.delay).await;
+                    continue;
+                }
+                return Err(rate_limit_error("[gateway 429]", &retry));
+            }
+            if !status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                return Err(format!("[gateway {}] {}", status.as_u16(), body));
+            }
+            return resp.json::<ChatResponse>()
+                .await
+                .map_err(|e| format!("Parse failed: {}", e));
         }
-        resp.json::<ChatResponse>()
-            .await
-            .map_err(|e| format!("Parse failed: {}", e))
     }
 
     /// Stream a chat response token-by-token via OpenAI-compatible SSE.
@@ -927,20 +1006,33 @@ impl ApiClient {
             session_id,
         };
 
-        let resp = self.client
-            .post(format!("{}/v1/chat/completions", self.base_url))
-            .json(&req)
-            .send()
-            .await
-            .map_err(|e| format!("Stream request failed: {e}"))?;
+        let mut attempt = 0usize;
+        let resp = loop {
+            let resp = self.client
+                .post(format!("{}/v1/chat/completions", self.base_url))
+                .json(&req)
+                .send()
+                .await
+                .map_err(|e| format!("Stream request failed: {e}"))?;
 
-        // Check HTTP status before streaming — return error body for 4xx/5xx
-        // instead of streaming garbage that produces blank messages in the TUI.
-        if !resp.status().is_success() {
+            // Check HTTP status before streaming — return error body for 4xx/5xx
+            // instead of streaming garbage that produces blank messages in the TUI.
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_else(|_| "<no body>".to_string());
-            return Err(format!("HTTP {}: {}", status, body.trim()));
-        }
+            if status == StatusCode::TOO_MANY_REQUESTS {
+                let retry = parse_rate_limit_response(resp).await;
+                if attempt < CHAT_RATE_LIMIT_MAX_RETRIES {
+                    attempt += 1;
+                    sleep_rate_limit(retry.delay).await;
+                    continue;
+                }
+                return Err(rate_limit_error("HTTP 429", &retry));
+            }
+            if !status.is_success() {
+                let body = resp.text().await.unwrap_or_else(|_| "<no body>".to_string());
+                return Err(format!("HTTP {}: {}", status, body.trim()));
+            }
+            break resp;
+        };
 
         let mut stream = resp.bytes_stream();
         let mut full = String::new();
@@ -1305,6 +1397,7 @@ mod chat_error_tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::oneshot;
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 
     /// Spawn a one-shot HTTP server that replies with the given status line and
     /// plain-text body, then returns its base URL. No mock-HTTP dependency — a
@@ -1330,6 +1423,41 @@ mod chat_error_tests {
             }
         });
         format!("http://{}", addr)
+    }
+
+    fn raw_response(status_line: &str, content_type: &str, headers: &[(&str, &str)], body: &str) -> String {
+        let mut resp = format!(
+            "HTTP/1.1 {status_line}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n",
+            body.len()
+        );
+        for (name, value) in headers {
+            resp.push_str(name);
+            resp.push_str(": ");
+            resp.push_str(value);
+            resp.push_str("\r\n");
+        }
+        resp.push_str("\r\n");
+        resp.push_str(body);
+        resp
+    }
+
+    async fn spawn_response_sequence(responses: Vec<String>) -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let count = Arc::new(AtomicUsize::new(0));
+        let count_for_task = Arc::clone(&count);
+        tokio::spawn(async move {
+            for resp in responses {
+                if let Ok((mut sock, _)) = listener.accept().await {
+                    let mut buf = [0u8; 4096];
+                    let _ = sock.read(&mut buf).await;
+                    count_for_task.fetch_add(1, Ordering::SeqCst);
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.flush().await;
+                }
+            }
+        });
+        (format!("http://{}", addr), count)
     }
 
 
@@ -1437,6 +1565,63 @@ mod chat_error_tests {
         assert_eq!(payload["messages"][1]["content"], "noted");
         assert_eq!(payload["messages"][2]["role"], "user");
         assert_eq!(payload["messages"][2]["content"], "go check it");
+    }
+
+    #[tokio::test]
+    async fn chat_retries_short_429_then_succeeds() {
+        let too_many = raw_response(
+            "429 Too Many Requests",
+            "application/json",
+            &[("Retry-After", "0")],
+            r#"{"error":{"message":"Rate limit exceeded","type":"rate_limit_error","retry_after":0}}"#,
+        );
+        let ok = raw_response(
+            "200 OK",
+            "application/json",
+            &[],
+            r#"{"response":"ok after retry","session_id":"agent:main:main"}"#,
+        );
+        let (base, count) = spawn_response_sequence(vec![too_many, ok]).await;
+        let client = ApiClient::new(&base);
+
+        let resp = client.chat("hi", None).await.expect("429 should retry once");
+
+        assert_eq!(resp.response, "ok after retry");
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn chat_stream_retries_short_429_then_succeeds() {
+        let sessions = raw_response(
+            "200 OK",
+            "application/json",
+            &[],
+            r#"{"messages":[]}"#,
+        );
+        let too_many = raw_response(
+            "429 Too Many Requests",
+            "application/json",
+            &[("Retry-After", "0")],
+            r#"{"error":{"message":"Rate limit exceeded","type":"rate_limit_error","retry_after":0}}"#,
+        );
+        let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n";
+        let ok = raw_response("200 OK", "text/event-stream", &[], sse);
+        let (base, count) = spawn_response_sequence(vec![sessions, too_many, ok]).await;
+        let client = ApiClient::new(&base);
+        let mut tokens = Vec::new();
+
+        let reply = client
+            .chat_stream("hi", |event| {
+                if let SseEvent::Token(token) = event {
+                    tokens.push(token);
+                }
+            })
+            .await
+            .expect("429 should retry once before streaming");
+
+        assert_eq!(reply, "ok");
+        assert_eq!(tokens, vec!["ok".to_string()]);
+        assert_eq!(count.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]

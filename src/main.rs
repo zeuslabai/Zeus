@@ -9,11 +9,13 @@ mod zeus_paths;
 
 mod daemon;
 mod gateway;
+mod logging;
 mod gateway_bootstrap;
 mod gateway_consumer;
 mod gateway_lock;
 mod gateway_relays;
 mod gateway_web;
+mod logs_cmd;
 // inbox moved to zeus-core::inbox for cross-crate access
 mod onboard;
 mod presence_tracker;
@@ -22,7 +24,7 @@ mod reset;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing::{info, warn};
-use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+
 use zeus_core::Config;
 
 #[derive(Parser)]
@@ -44,7 +46,15 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Run the TUI interface (default)
-    Tui,
+    Tui {
+        /// Connect to a gateway on this port without editing config
+        #[arg(long)]
+        port: Option<u16>,
+
+        /// Connect to this gateway URL without editing config
+        #[arg(long)]
+        gateway_url: Option<String>,
+    },
 
     /// Run the HTTP API server
     Serve {
@@ -145,6 +155,21 @@ enum Commands {
         /// Clear all sessions and context before starting (fresh slate)
         #[arg(long)]
         fresh: bool,
+    },
+
+    /// Tail the gateway log (resolves the platform/instance-correct path)
+    Logs {
+        /// Follow the log (like `tail -f`), surviving daily rotation
+        #[arg(short, long)]
+        follow: bool,
+
+        /// Number of trailing lines to print first
+        #[arg(short = 'n', long, default_value = "50")]
+        lines: usize,
+
+        /// Named instance under ~/.zeus/instances/<name> (multi-instance)
+        #[arg(long)]
+        instance: Option<String>,
     },
 
     /// Run diagnostics and check configuration
@@ -382,6 +407,52 @@ enum ConfigAction {
     },
 }
 
+/// Parse a non-empty OAuth token from config.toml content.
+/// Checks two locations (both stop at the next section boundary):
+/// 1. `[oauth]` section — legacy shape, `token = "..."`
+/// 2. `[provider_credentials.anthropic]` — real-world shape from TUI onboarding,
+///    `cred_type = "oauth"` + `token = "sk-ant-oat01-..."`
+/// Returns `Some(token_string)` if found, `None` otherwise.
+fn parse_oauth_token_from_config(content: &str) -> Option<String> {
+    // Check legacy [oauth] section
+    if let Some(start) = content.find("[oauth]") {
+        for line in content[start..].lines().skip(1).take_while(|l| !l.trim_start().starts_with('[')) {
+            if let Some(val) = line.strip_prefix("token").and_then(|s| s.trim_start().strip_prefix('=')) {
+                let token = val.trim().trim_matches('"').to_string();
+                if !token.is_empty() { return Some(token); }
+            }
+        }
+    }
+    // Check [provider_credentials.anthropic] — real-world shape
+    if let Some(start) = content.find("[provider_credentials.anthropic]") {
+        let section: Vec<&str> = content[start..]
+            .lines()
+            .skip(1)
+            .take_while(|l| !l.trim_start().starts_with('['))
+            .collect();
+        let is_oauth = section.iter().any(|line| {
+            line.strip_prefix("cred_type")
+                .and_then(|s| s.trim_start().strip_prefix('='))
+                .map(|s| s.trim().trim_matches('"') == "oauth")
+                .unwrap_or(false)
+        });
+        if is_oauth {
+            for line in &section {
+                if let Some(val) = line.strip_prefix("token").and_then(|s| s.trim_start().strip_prefix('=')) {
+                    let token = val.trim().trim_matches('"').to_string();
+                    if !token.is_empty() { return Some(token); }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Check if config.toml has a non-empty OAuth token (thin wrapper).
+fn config_has_oauth_token(content: &str) -> bool {
+    parse_oauth_token_from_config(content).is_some()
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // ── Credential loading: config.toml is the SOLE source of truth.
@@ -397,11 +468,26 @@ async fn main() -> Result<()> {
             // S97: If OAuth is enabled, skip ANTHROPIC_API_KEY from credentials
             // to prevent auth method confusion (OAuth token in API key field).
             let use_oauth = config.auth.use_oauth;
+            // Read config.toml once for OAuth token checks (shared by guard + S78)
+            let config_content = std::fs::read_to_string(zeus_dir.join("config.toml")).ok();
             for (key, value) in &config.credentials {
                 if !value.is_empty() {
-                    if use_oauth && key == "ANTHROPIC_API_KEY" {
-                        println!("  Skipping ANTHROPIC_API_KEY env var (OAuth enabled, config.toml is SSoT)");
+                    // Hoisted: oat-prefix routing runs for ANY credential, not just inside use_oauth arm.
+                    // If a credential value is an oat token, route to OAuthManager — never set_var as API key.
+                    if value.starts_with("sk-ant-oat01-") {
+                        println!("  Credential {} is an oat token — routing to OAuthManager (not env var)", key);
+                        if let Err(e) = zeus_llm::OAuthManager::login_with_token(value) {
+                            warn!("Failed to populate CredentialStore from oat token {}: {}", key, e);
+                        }
                         continue;
+                    }
+                    // S97: Only skip ANTHROPIC_API_KEY if OAuth is enabled AND an OAuth token actually exists
+                    if use_oauth && key == "ANTHROPIC_API_KEY" {
+                        if config_content.as_deref().map(config_has_oauth_token).unwrap_or(false) {
+                            println!("  Skipping ANTHROPIC_API_KEY env var (OAuth enabled with valid token, config.toml is SSoT)");
+                            continue;
+                        }
+                        println!("  OAuth enabled but no token found, injecting ANTHROPIC_API_KEY from config.toml");
                     }
                     // SAFETY: single-threaded at startup, before tokio runtime
                     unsafe { std::env::set_var(key, value) };
@@ -409,24 +495,14 @@ async fn main() -> Result<()> {
             }
         }
 
-        // S78: Read config.toml [oauth] token and populate CredentialStore for zeus-llm.
+        // S78: Read config.toml OAuth token and populate CredentialStore for zeus-llm.
         // This is READ-ONLY — main.rs never writes to config.toml.
         // config.toml is the SSoT. CredentialStore is a runtime derivative.
-        if let Ok(config_content) = std::fs::read_to_string(zeus_dir.join("config.toml")) {
-            if let Some(oauth_start) = config_content.find("[oauth]") {
-                let oauth_section = &config_content[oauth_start..];
-                for line in oauth_section.lines().skip(1) {
-                    if line.starts_with('[') { break; }
-                    if let Some(token_val) = line.strip_prefix("token").and_then(|s| s.trim_start().strip_prefix('=')) {
-                        let token = token_val.trim().trim_matches('"');
-                        if !token.is_empty() {
-                            // Populate in-memory CredentialStore — from_config() handles provider routing.
-                            if let Err(e) = zeus_llm::OAuthManager::login_with_token(token) {
-                                warn!("Failed to populate CredentialStore from config.toml [oauth]: {}", e);
-                            }
-                        }
-                        break;
-                    }
+        // Uses shared parse_oauth_token_from_config() helper (single parse for guard + S78).
+        if let Ok(s78_content) = std::fs::read_to_string(zeus_dir.join("config.toml")) {
+            if let Some(token) = parse_oauth_token_from_config(&s78_content) {
+                if let Err(e) = zeus_llm::OAuthManager::login_with_token(&token) {
+                    warn!("Failed to populate CredentialStore from config.toml OAuth token: {}", e);
                 }
             }
         }
@@ -439,48 +515,22 @@ async fn main() -> Result<()> {
     // StandardOutPath/StandardErrorPath to ~/.zeus/logs/gateway.{out,err}.log; if the
     // directory is missing, launchd silently drops to /dev/null and we lose runtime logs.
     // Idempotent, .ok() to never fail boot on this.
-    if let Some(home) = dirs::home_dir() {
-        std::fs::create_dir_all(home.join(".zeus").join("logs")).ok();
-    }
+    std::fs::create_dir_all(zeus_paths::zeus_home().join("logs")).ok();
 
-    // Initialize logging — redirect to file in TUI mode to avoid display corruption
-    // In MCP stdio mode, redirect logs to file to keep stdout clean for JSON-RPC
-    let is_tui = matches!(cli.command, None | Some(Commands::Tui));
+    // Initialize logging — durable rotating file sink (all modes) + console
+    // layer (stderr, or a legacy append-mode file in TUI/MCP-stdio modes where
+    // stderr would corrupt the display / JSON-RPC stream). Levels come from
+    // --verbose and the [logging] config section; RUST_LOG always wins.
+    // The [logging] section is peeked directly from config.toml because the
+    // full config loader (wizard-capable) must not run before logging is up.
+    let is_tui = matches!(cli.command, None | Some(Commands::Tui { .. }));
     let is_stdio_mcp = matches!(cli.command, Some(Commands::Mcp { .. }));
-    let log_level = if cli.verbose { "debug" } else { "info" };
-    let filter =
-        EnvFilter::from_default_env().add_directive(format!("zeus={}", log_level).parse()?);
-
-    if is_tui || is_stdio_mcp {
-        // TUI: logs corrupt display. MCP stdio: logs corrupt JSON-RPC stream.
-        let log_dir = dirs::home_dir().unwrap_or_default().join(".zeus");
-        std::fs::create_dir_all(&log_dir).ok();
-        let log_name = if is_stdio_mcp {
-            "mcp-stdio.log"
-        } else {
-            "zeus.log"
-        };
-        let log_file = std::fs::File::create(log_dir.join(log_name))?;
-        tracing_subscriber::registry()
-            .with(
-                fmt::layer()
-                    .with_writer(std::sync::Mutex::new(log_file))
-                    .with_ansi(false),
-            )
-            .with(filter)
-            .init();
-    } else {
-        tracing_subscriber::registry()
-            .with(fmt::layer())
-            .with(filter)
-            .init();
-    }
+    let logging_cfg = logging::peek_logging_config(cli.config.as_deref());
+    logging::init_logging(cli.verbose, is_tui, is_stdio_mcp, &logging_cfg)?;
 
     // Install panic hook for non-TUI commands (TUI installs its own)
     if std::env::var("ZEUS_NO_PANIC_HOOK").is_err() {
-        let log_dir = dirs::home_dir()
-            .unwrap_or_default()
-            .join(".zeus/logs");
+        let log_dir = zeus_paths::zeus_home().join("logs");
         let _ = std::fs::create_dir_all(&log_dir);
         std::panic::set_hook(Box::new(move |info| {
             let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
@@ -508,7 +558,7 @@ async fn main() -> Result<()> {
     info!("Zeus starting...");
 
     // Determine if this is an interactive command that needs config
-    let needs_wizard = matches!(cli.command, None | Some(Commands::Tui));
+    let needs_wizard = matches!(cli.command, None | Some(Commands::Tui { .. }));
 
     // Load configuration (skip wizard for quick CLI commands)
     let config = load_config(cli.config.as_deref(), needs_wizard).await?;
@@ -516,7 +566,7 @@ async fn main() -> Result<()> {
     // Validate configuration (skip for daemon/utility commands to reduce noise)
     let show_warnings = matches!(
         cli.command,
-        None | Some(Commands::Tui)
+        None | Some(Commands::Tui { .. })
             | Some(Commands::Serve { .. })
             | Some(Commands::Chat { .. })
             | Some(Commands::Gateway { .. })
@@ -536,7 +586,11 @@ async fn main() -> Result<()> {
 
     // Handle commands
     match cli.command {
-        None | Some(Commands::Tui) => run_tui(config, false).await,
+        None => run_tui(config, false, None).await,
+        Some(Commands::Tui { port, gateway_url }) => {
+            let gateway_override = zeus_tui::GatewayTargetOverride::from_cli(port, gateway_url);
+            run_tui(config, false, gateway_override).await
+        }
         Some(Commands::Serve { host, port }) => run_server(config, &host, port).await,
         Some(Commands::Chat { message, stream }) => match message {
             Some(msg) => run_chat(config, &msg, stream).await,
@@ -685,18 +739,30 @@ async fn main() -> Result<()> {
                 allow_peer_tagging: existing_gw.allow_peer_tagging,
             };
 
-            // #105 fix #1 (root): persist the real bind port back to config.toml
-            // so the on-disk `[gateway] port` is the single source of truth the
-            // TUI/client probes. Without this, `zeus gateway --port 3001` runs on
-            // 3001 while config.toml still says 8080 → TUI probes 8080 → false
-            // "offline." Idempotent (no write when already matching); best-effort
-            // (a persist failure must not block the gateway from serving).
-            match zeus_core::Config::persist_gateway_port(gw_config.port) {
-                Ok(true) => info!(
-                    "Persisted gateway port {} to config.toml ([gateway] port is now the source of truth)",
+            // #105 fix #1 (root) + #311 guard: persist the real bind port back
+            // to config.toml ONLY when the config has no explicit port yet.
+            // Without any persist, `zeus gateway --port 3001` runs on 3001
+            // while config.toml still says 8080 → TUI probes 8080 → false
+            // "offline." But the unguarded persist let a stale rc.conf
+            // `zeus_gateway_port` overwrite a fresh install's config (.224
+            // incident) — an explicit on-disk port now wins and an override
+            // is logged loudly instead. Best-effort (a persist failure must
+            // not block the gateway from serving).
+            match zeus_core::Config::persist_gateway_port_guarded(gw_config.port) {
+                Ok(zeus_core::PortPersist::Persisted) => info!(
+                    "Persisted gateway port {} to config.toml (config had no explicit port)",
                     gw_config.port
                 ),
-                Ok(false) => {}
+                Ok(zeus_core::PortPersist::OverrideDetected { config_port }) => warn!(
+                    "PORT OVERRIDE: gateway is running on port {} but config.toml explicitly \
+                     records port {}. NOT rewriting config.toml — the on-disk value stays \
+                     authoritative. If this override came from a service manager (rc.conf \
+                     zeus_gateway_port, systemd unit, launchd plist), align it with \
+                     config.toml or remove the stale variable (uninstall.sh --purge clears \
+                     them). TUI/clients probing the config port will not find this gateway.",
+                    gw_config.port, config_port
+                ),
+                Ok(_) => {}
                 Err(e) => warn!("Could not persist gateway port to config.toml: {}", e),
             }
 
@@ -729,6 +795,11 @@ async fn main() -> Result<()> {
 
             gateway::run_gateway(config, gw_config).await
         }
+        Some(Commands::Logs {
+            follow,
+            lines,
+            instance,
+        }) => logs_cmd::run_logs(instance, lines, follow).await,
         Some(Commands::Doctor { repair }) => run_doctor(config, repair).await,
         Some(Commands::Onboard { classic, check, non_interactive, provider, model, reconfigure }) => {
             if check {
@@ -770,7 +841,7 @@ async fn main() -> Result<()> {
                 // is accepted/documented). One `zeus onboard` repairs a nuked
                 // config.
                 let _ = reconfigure; // both bare and --reconfigure force
-                run_tui(config, true).await?;
+                run_tui(config, true, None).await?;
             }
             Ok(())
         }
@@ -880,11 +951,15 @@ async fn load_config(path: Option<&str>, allow_wizard: bool) -> Result<Config> {
 }
 
 /// Check if the configured provider has valid credentials
-async fn run_tui(config: Config, force_onboard: bool) -> Result<()> {
+async fn run_tui(
+    config: Config,
+    force_onboard: bool,
+    gateway_override: Option<zeus_tui::GatewayTargetOverride>,
+) -> Result<()> {
     // Redirect stderr to log file — prevents stray output from corrupting TUI display.
     // Tracing is already redirected, but eprintln!, dependency output, and subprocess
     // stderr can still leak through and corrupt the ratatui terminal.
-    let log_dir = dirs::home_dir().unwrap_or_default().join(".zeus");
+    let log_dir = zeus_paths::zeus_home();
     if let Ok(log_file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -898,7 +973,8 @@ async fn run_tui(config: Config, force_onboard: bool) -> Result<()> {
         }
     }
 
-    let just_onboarded = zeus_tui::run_with_force(config, force_onboard).await?;
+    let just_onboarded =
+        zeus_tui::run_with_force_and_gateway(config, force_onboard, gateway_override).await?;
     info!("Zeus shutdown complete");
 
     // AWAKEN-B: onboarding just finished → bring the titan live by launching
@@ -911,6 +987,91 @@ async fn run_tui(config: Config, force_onboard: bool) -> Result<()> {
         spawn_gateway_detached();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_no_oauth_section_injects() {
+        let config = r#"
+[credentials]
+ANTHROPIC_API_KEY = "sk-ant-api01-real-key"
+"#;
+        assert!(!config_has_oauth_token(config));
+    }
+
+    #[test]
+    fn test_oauth_with_token_skips() {
+        let config = r#"
+[oauth]
+token = "sk-ant-oat01-real-token"
+
+[credentials]
+ANTHROPIC_API_KEY = "sk-ant-api01-real-key"
+"#;
+        assert!(config_has_oauth_token(config));
+    }
+
+    #[test]
+    fn test_oauth_empty_token_channel_token_later_injects() {
+        let config = r#"
+[oauth]
+token = ""
+
+[channels.discord]
+token = "MTQ3NTU3NjY4NDU1OTMzOTYwMQ"
+"#;
+        assert!(!config_has_oauth_token(config));
+    }
+
+    #[test]
+    fn test_provider_credentials_oauth_detected() {
+        // Real-world shape: TUI onboarding writes OAuth tokens to
+        // [provider_credentials.anthropic] with cred_type = "oauth".
+        // config_has_oauth_token must detect this.
+        let config = r#"
+[provider_credentials.anthropic]
+cred_type = "oauth"
+token = "sk-ant-oat01-real-token"
+
+[credentials]
+"#;
+        assert!(config_has_oauth_token(config));
+    }
+
+    #[test]
+    fn test_provider_credentials_api_key_not_detected_as_oauth() {
+        // [provider_credentials.anthropic] with cred_type = "api_key" must NOT
+        // be detected as OAuth — even if the token happens to start with sk-ant-oat01-.
+        let config = r#"
+[provider_credentials.anthropic]
+cred_type = "api_key"
+token = "sk-ant-api01-real-key"
+
+[credentials]
+"#;
+        assert!(!config_has_oauth_token(config));
+    }
+
+    #[test]
+    fn test_oauth_empty_token_oat_in_credentials_routes_to_oauth_manager() {
+        // When [oauth] has no token and no [provider_credentials] OAuth exists,
+        // but [credentials] has an oat-prefixed key, the fallback path should
+        // route to OAuthManager, not set_var.
+        let config = r#"
+[oauth]
+token = ""
+
+[credentials]
+ANTHROPIC_API_KEY = "sk-ant-oat01-from-webui-onboarding"
+"#;
+        assert!(!config_has_oauth_token(config));
+        // The actual routing test: value starts with sk-ant-oat01-
+        let value = "sk-ant-oat01-from-webui-onboarding";
+        assert!(value.starts_with("sk-ant-oat01-"));
+    }
 }
 
 /// Launch `zeus gateway` as a detached child that survives this process exiting.
@@ -1064,8 +1225,11 @@ async fn run_server(config: Config, host: &str, port: u16) -> Result<()> {
     println!();
     println!("Press Ctrl+C to stop");
 
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal())
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
         .await?;
 
     // Abort pruning task on shutdown

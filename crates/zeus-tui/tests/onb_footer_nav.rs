@@ -17,9 +17,9 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use zeus_tui::App;
 
 const MODE: usize = 1;
-const CHANNELS: usize = 6;
-const AGENT: usize = 9;
-const VOICE: usize = 13;
+const CHANNELS: usize = 7;
+const AGENT: usize = 10;
+const VOICE: usize = 14;
 
 fn tab(app: &mut App) {
     app.handle_key(KeyCode::Tab);
@@ -137,11 +137,22 @@ fn agent_tab_walks_fields_before_footer() {
         );
     }
     tab(&mut app);
-    assert_eq!(app.footer_focus, Some(zeus_tui::FooterFocus::Back), "Tab #4 = BACK");
+    assert_eq!(
+        app.footer_focus,
+        Some(zeus_tui::FooterFocus::Back),
+        "Tab #4 = BACK"
+    );
     tab(&mut app);
-    assert_eq!(app.footer_focus, Some(zeus_tui::FooterFocus::Next), "Tab #5 = NEXT");
+    assert_eq!(
+        app.footer_focus,
+        Some(zeus_tui::FooterFocus::Next),
+        "Tab #5 = NEXT"
+    );
     tab(&mut app);
-    assert_eq!(app.footer_focus, None, "Tab #6 wraps back to the screen fields");
+    assert_eq!(
+        app.footer_focus, None,
+        "Tab #6 wraps back to the screen fields"
+    );
 }
 
 // ─── footer_focus resets on screen-enter (Zeus100's edge note) ───
@@ -182,7 +193,11 @@ fn ctrl_n_and_esc_shortcuts_still_work() {
     let mut app = App::new();
     goto(&mut app, CHANNELS);
     ctrl_n(&mut app);
-    assert_eq!(app.current_step, CHANNELS + 1, "Ctrl+N shortcut still advances");
+    assert_eq!(
+        app.current_step,
+        CHANNELS + 1,
+        "Ctrl+N shortcut still advances"
+    );
     app.handle_key(KeyCode::Esc);
     assert_eq!(app.current_step, CHANNELS, "ESC shortcut still steps back");
 }

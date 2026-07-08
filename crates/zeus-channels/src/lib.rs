@@ -757,13 +757,47 @@ impl ChannelManager {
         self.adapters.push(adapter);
     }
 
+    /// Channel types of all registered adapters, sorted and de-duplicated.
+    ///
+    /// This is the agent-facing "what channels can I actually reach via the
+    /// `message` tool" list (channel self-visibility): it reflects the *live*
+    /// adapter set, not raw config, so an adapter that failed to construct
+    /// never appears. Multiple adapters of the same type (multi-account)
+    /// collapse to one entry.
+    pub fn configured_channel_types(&self) -> Vec<String> {
+        let mut types: Vec<String> = self
+            .adapters
+            .iter()
+            .map(|a| a.channel_type().to_string())
+            .collect();
+        types.sort();
+        types.dedup();
+        types
+    }
+
     /// Start all channels
     pub async fn start_all(&self) -> Result<()> {
         let mut started = 0usize;
         for adapter in &self.adapters {
             match adapter.start(self.tx.clone()).await {
-                Ok(()) => started += 1,
+                Ok(()) => {
+                    started += 1;
+                    // P2 observability: stable greppable adapter-lifecycle line.
+                    tracing::info!(
+                        target: "adapter",
+                        channel = adapter.channel_type(),
+                        event = "connected",
+                        "adapter connected"
+                    );
+                }
                 Err(e) => {
+                    tracing::info!(
+                        target: "adapter",
+                        channel = adapter.channel_type(),
+                        event = "dropped",
+                        error = %e,
+                        "adapter failed to start"
+                    );
                     tracing::warn!(
                         "Channel adapter '{}' failed to start: {} — skipping",
                         adapter.channel_type(),
@@ -879,6 +913,15 @@ impl ChannelManager {
         let adapter = self.find_adapter(to).ok_or_else(|| {
             zeus_core::Error::Channel(format!("No adapter for channel: {}", to.channel_type()))
         })?;
+        // P2 observability: stable greppable outbound-message line.
+        tracing::info!(
+            target: "msg",
+            dir = "out",
+            channel = %to.channel_type,
+            peer = %to.user_id,
+            len = content.len(),
+            "msg out"
+        );
         adapter.send(to, content).await
     }
 
@@ -1623,6 +1666,29 @@ mod tests {
     async fn test_resolve_identity_no_store() {
         let manager = ChannelManager::new(10);
         assert!(manager.resolve_identity("any-id").await.is_none());
+    }
+
+    // ── Channel self-visibility: configured_channel_types() ──
+
+    #[test]
+    fn test_configured_channel_types_empty() {
+        let manager = ChannelManager::new(10);
+        assert!(manager.configured_channel_types().is_empty());
+    }
+
+    #[test]
+    fn test_configured_channel_types_sorted_deduped() {
+        let mut manager = ChannelManager::new(10);
+        let buf = Arc::new(std::sync::Mutex::new(vec![]));
+        // Registered out of order + a duplicate type (multi-account discord)
+        manager.add_adapter(Box::new(RecordingAdapter::new("x_twitter", buf.clone())));
+        manager.add_adapter(Box::new(RecordingAdapter::new("discord", buf.clone())));
+        manager.add_adapter(Box::new(RecordingAdapter::new("discord", buf.clone())));
+        manager.add_adapter(Box::new(RecordingAdapter::new("telegram", buf)));
+        assert_eq!(
+            manager.configured_channel_types(),
+            vec!["discord".to_string(), "telegram".to_string(), "x_twitter".to_string()]
+        );
     }
 
     #[tokio::test]

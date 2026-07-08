@@ -14,9 +14,9 @@
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use zeus_tui::App;
 use zeus_tui::app::frame;
 use zeus_tui::screens::ModelScreen;
-use zeus_tui::App;
 
 /// Render a ModelScreen for `provider` into an 80×30 TestBackend; joined text.
 fn render_model(provider: &str) -> String {
@@ -37,11 +37,13 @@ fn render_model_live(provider: &str, models: &[&str]) -> String {
 /// Render the full onboarding App at 100×30 for compact chrome + body fidelity.
 fn render_model_app_100x30() -> String {
     let mut app = App::new();
-    app.current_step = 4;
+    app.current_step = 5;
 
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).expect("terminal");
-    terminal.draw(|f| frame(f, &app)).expect("draw must not panic");
+    terminal
+        .draw(|f| frame(f, &app))
+        .expect("draw must not panic");
     let buf = terminal.backend().buffer().clone();
 
     let mut out = String::new();
@@ -97,27 +99,39 @@ fn model_100x30_keeps_search_filter_and_detail_affordance() {
 #[test]
 fn anthropic_catalog_current() {
     let s = render_model("anthropic");
-    assert!(s.contains("Opus 4.8"), "anthropic must list current Opus 4.8");
+    assert!(
+        s.contains("Opus 4.8"),
+        "anthropic must list current Opus 4.8"
+    );
     assert!(!s.contains("4.7"), "stale Opus 4.7 must be gone");
 }
 
 #[test]
 fn glm_catalog_dispatches() {
     let s = render_model("glm");
-    assert!(s.contains("GLM-5.2"), "glm must dispatch to GLM-5.2 catalog");
+    assert!(
+        s.contains("GLM-5.2"),
+        "glm must dispatch to GLM-5.2 catalog"
+    );
 }
 
 #[test]
 fn minimax_catalog_current() {
     let s = render_model("minimax");
-    assert!(s.contains("MiniMax-M3"), "minimax flagship must be MiniMax-M3");
+    assert!(
+        s.contains("MiniMax-M3"),
+        "minimax flagship must be MiniMax-M3"
+    );
     assert!(!s.contains("abab-7"), "stale abab-7-chat must be gone");
 }
 
 #[test]
 fn kimi_catalog_dispatches() {
     let s = render_model("kimi");
-    assert!(s.contains("Kimi K2.7"), "kimi must dispatch to k2.7-code catalog");
+    assert!(
+        s.contains("Kimi K2.7"),
+        "kimi must dispatch to k2.7-code catalog"
+    );
 }
 
 #[test]
@@ -171,7 +185,10 @@ fn glm_live_fetch_zai_endpoint() {
         live.contains("● LIVE FETCH"),
         "glm with seeded live models must show the LIVE FETCH badge"
     );
-    assert!(live.contains("api.z.ai"), "glm live-fetch must name api.z.ai");
+    assert!(
+        live.contains("api.z.ai"),
+        "glm live-fetch must name api.z.ai"
+    );
 }
 
 #[test]

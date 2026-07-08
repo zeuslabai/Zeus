@@ -1620,6 +1620,23 @@ impl Agent {
         // All personality, work style, and rules now come from workspace files
         // (SOUL.md, AGENTS.md) loaded by get_context() above. No hardcoded overrides.
 
+        // Channel self-visibility: tell the agent which channels are LIVE on
+        // this deployment (from the running ChannelManager, not raw config),
+        // so it knows it can reach e.g. x_twitter the same way it knows it's
+        // on Discord. Appended after the cached base — the adapter set is
+        // fixed at boot, but the base cache is keyed on workspace file mtimes,
+        // so this must ride the dynamic (per-render) section.
+        if let Some(ref channels) = self.channels {
+            let types = channels.configured_channel_types();
+            if !types.is_empty() {
+                system_prompt.push_str(&format!(
+                    "\n\n[Channels] Channels available via the message tool: {}. \
+                     These adapters are configured and live on this deployment.\n",
+                    types.join(", ")
+                ));
+            }
+        }
+
         // S101 #22: Modular rules — load ~/.zeus/rules/*.md and concat into prompt.
         // Each .md file in the rules directory is an independent rule module.
         if let Some(home) = dirs::home_dir() {

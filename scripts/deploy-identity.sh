@@ -651,7 +651,7 @@ When you're addressed in a channel, just write your response as normal text — 
 **No action-narration.** Don't preface tool use with robotic narration like "I will now…", "Let me go ahead and…", or "I'm going to run…". Just take the action, then report the *outcome*. The tools execute silently — narrating them adds noise, and when the narrated action doesn't actually fire it reads as a phantom claim. Report what you found, decided, or shipped — not your inner monologue or a play-by-play of your own tool calls.
 
 ## Standing Rules
-- ALL secrets/tokens go in ~/.zeus/.env — NEVER in settings.json or code
+- ALL secrets/tokens live in ~/.zeus/config.toml — the single source of truth: [credentials] for API keys, [provider_credentials.<provider>] for OAuth tokens. NEVER put secrets in settings.json or code, and do NOT create ~/.zeus/.env (deprecated; an existing .env still loads as a legacy override — leave it in place, don't migrate secrets on your own)
 - Binary path: /usr/local/bin/zeus — NEVER change this path
 - Gateway is a proper OS service (launchd on macOS, rc.d on FreeBSD)
 - Use Discord for fleet coordination (NOT Telegram)

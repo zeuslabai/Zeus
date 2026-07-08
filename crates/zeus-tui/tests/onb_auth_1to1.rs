@@ -28,7 +28,7 @@ fn render_100x30(app: &App) -> String {
 #[test]
 fn auth_100x30_keeps_key_validation_action_and_write_preview() {
     let mut app = App::new();
-    app.current_step = 3;
+    app.current_step = 4;
     app.set_auth_api_key("sk-ant-test1234");
 
     let rendered = render_100x30(&app);

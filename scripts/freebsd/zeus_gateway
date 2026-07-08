@@ -47,6 +47,13 @@ zeus_gateway_prestart()
     install -d -o ${zeus_gateway_user} -g wheel -m 0755 "${zeus_gateway_home}/.zeus"
     install -d -o ${zeus_gateway_user} -g wheel -m 0755 "${zeus_gateway_home}/.zeus/logs"
 
+    # #248: daemon(8) creates the child pidfile as root:wheel 0600 BEFORE
+    # dropping to -u ${zeus_gateway_user}, so the gateway's own PID-lock
+    # write hits EACCES ("os error 13"). Pre-create it owned by the service
+    # user — root's daemon(8) writes it regardless of ownership, and the
+    # gateway can then re-write/remove its lock normally.
+    install -o ${zeus_gateway_user} -g wheel -m 0644 /dev/null "${pidfile}"
+
     # Durable service log sink. daemon(8) redirects stdout/stderr here; newsyslog
     # rotates it when available (standard on FreeBSD base systems).
     install -d -o root -g wheel -m 0755 "$(dirname "${zeus_gateway_logfile}")"

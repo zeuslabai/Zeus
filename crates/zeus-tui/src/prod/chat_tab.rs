@@ -158,6 +158,49 @@ fn line_cell_width(line: &Line<'static>) -> usize {
         .sum()
 }
 
+struct ChatBox<'a> {
+    label: &'a str,
+    label_color: ratatui::style::Color,
+    body: Vec<Line<'static>>,
+}
+
+fn push_chat_box(all: &mut Vec<(u16, Line<'static>)>, x: u16, width: u16, box_: ChatBox<'_>) {
+    let inner = width.saturating_sub(4).max(8) as usize;
+    let border_w = inner + 2;
+    all.push((
+        x,
+        Line::from(Span::styled(
+            format!("╭{}╮", "─".repeat(border_w)),
+            Style::default().fg(theme::MUTED),
+        )),
+    ));
+    all.push((
+        x,
+        Line::from(vec![
+            Span::styled("│ ", Style::default().fg(theme::MUTED)),
+            Span::styled(
+                box_.label.to_string(),
+                Style::default()
+                    .fg(box_.label_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+    ));
+    for line in box_.body {
+        let mut spans = Vec::with_capacity(line.spans.len() + 1);
+        spans.push(Span::styled("│ ", Style::default().fg(theme::MUTED)));
+        spans.extend(line.spans);
+        all.push((x, Line::from(spans)));
+    }
+    all.push((
+        x,
+        Line::from(Span::styled(
+            format!("╰{}╯", "─".repeat(border_w)),
+            Style::default().fg(theme::MUTED),
+        )),
+    ));
+}
+
 struct ToolCard<'a> {
     name: &'a str,
     args_or_input: &'a str,
@@ -380,7 +423,6 @@ impl<'a> Widget for ChatTab<'a> {
         // pins the newest line on screen as content streams in (auto-follow).
         // Scrolling up (offset > 0) pauses the follow; jumping to bottom
         // (offset → 0) resumes it.
-        let text_x = msg_area.x + 4;
         let text_width = msg_area.width.saturating_sub(4);
 
         // Each entry is (x-origin, line) so prefixes (col 0) and wrapped body
@@ -461,21 +503,12 @@ impl<'a> Widget for ChatTab<'a> {
         }
 
         for msg in self.messages {
-            let (prefix, prefix_color) = match msg.role {
-                Role::User => ("  ▸ you ", theme::ACCENT),
-                Role::Assistant => ("  ◈ zeus ", theme::CYAN),
-                Role::ToolCall => ("  ⚙ tool ", theme::YELLOW),
-                Role::System => ("  ● sys ", theme::DIM),
+            let (label, label_color) = match msg.role {
+                Role::User => ("▸ you", theme::ACCENT),
+                Role::Assistant => ("◈ zeus", theme::CYAN),
+                Role::ToolCall => ("⚙ tool", theme::YELLOW),
+                Role::System => ("● sys", theme::DIM),
             };
-            all.push((
-                msg_area.x,
-                Line::from(Span::styled(
-                    prefix.to_string(),
-                    Style::default()
-                        .fg(prefix_color)
-                        .add_modifier(Modifier::BOLD),
-                )),
-            ));
 
             let text_color = match msg.role {
                 Role::User => theme::TEXT,
@@ -484,30 +517,39 @@ impl<'a> Widget for ChatTab<'a> {
                 Role::System => theme::DIM,
             };
 
-            // Assistant/system bubbles render markdown; user stays plain. Tool calls
-            // render as prototype-style bordered cards, not raw JSON/plain text.
+            // User/assistant/system messages render in bordered chat boxes.
+            // Assistant/system content still goes through markdown; user input stays plain.
+            // Tool calls keep their richer prototype-style bordered cards.
             match msg.role {
                 Role::Assistant | Role::System => {
+                    let mut body = Vec::new();
                     if msg.role == Role::Assistant {
                         let badge = self.model_badge.unwrap_or("model:unknown");
-                        all.push((
-                            text_x,
-                            Line::from(vec![
-                                Span::styled("model ", Style::default().fg(theme::DIM)),
-                                Span::styled(
-                                    badge.to_string(),
-                                    Style::default()
-                                        .fg(theme::ACCENT)
-                                        .add_modifier(Modifier::BOLD),
-                                ),
-                            ]),
-                        ));
+                        body.push(Line::from(vec![
+                            Span::styled("model ", Style::default().fg(theme::DIM)),
+                            Span::styled(
+                                badge.to_string(),
+                                Style::default()
+                                    .fg(theme::ACCENT)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        ]));
                     }
-                    for line in
-                        crate::prod::markdown::render_markdown(&msg.text, text_width, text_color)
-                    {
-                        all.push((text_x, line));
-                    }
+                    body.extend(crate::prod::markdown::render_markdown(
+                        &msg.text,
+                        text_width.saturating_sub(4),
+                        text_color,
+                    ));
+                    push_chat_box(
+                        &mut all,
+                        msg_area.x + 2,
+                        text_width,
+                        ChatBox {
+                            label,
+                            label_color,
+                            body,
+                        },
+                    );
                 }
                 Role::ToolCall => {
                     let tool = msg.tool_name.as_deref().unwrap_or("tool");
@@ -516,7 +558,7 @@ impl<'a> Widget for ChatTab<'a> {
                         lower.contains("error") || lower.contains("failed") || lower.contains("✗");
                     push_tool_card(
                         &mut all,
-                        text_x,
+                        msg_area.x + 2,
                         text_width,
                         ToolCard {
                             name: tool,
@@ -528,11 +570,21 @@ impl<'a> Widget for ChatTab<'a> {
                     );
                 }
                 Role::User => {
-                    for line in
-                        wrap_plain_lines(&msg.text, text_width, Style::default().fg(text_color))
-                    {
-                        all.push((text_x, line));
-                    }
+                    let body = wrap_plain_lines(
+                        &msg.text,
+                        text_width.saturating_sub(4),
+                        Style::default().fg(text_color),
+                    );
+                    push_chat_box(
+                        &mut all,
+                        msg_area.x + 2,
+                        text_width,
+                        ChatBox {
+                            label,
+                            label_color,
+                            body,
+                        },
+                    );
                 }
             }
 
@@ -600,11 +652,38 @@ impl<'a> Widget for ChatTab<'a> {
         let total_lines = all.len();
         let max_offset = total_lines.saturating_sub(visible_height);
         let offset = self.scroll_offset.min(max_offset);
+        let indicator = offset > 0 && msg_area.height > 0;
+        let content_height = if indicator {
+            visible_height.saturating_sub(1)
+        } else {
+            visible_height
+        };
         let end = total_lines.saturating_sub(offset);
-        let start = end.saturating_sub(visible_height);
+        let start = end.saturating_sub(content_height);
 
         for (row, (x, line)) in (msg_area.top()..msg_area.bottom()).zip(all[start..end].iter()) {
             buf.set_line(*x, row, line, msg_area.width);
+        }
+
+        if indicator {
+            let pct = if max_offset == 0 {
+                0
+            } else {
+                ((offset * 100) / max_offset).min(100)
+            };
+            let label = format!("↑ scrolled up — {pct}% — Esc to jump to bottom");
+            let y = msg_area.bottom().saturating_sub(1);
+            buf.set_line(
+                msg_area.x + 2,
+                y,
+                &Line::from(Span::styled(
+                    label,
+                    Style::default()
+                        .fg(theme::CYAN)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                msg_area.width.saturating_sub(4),
+            );
         }
 
         // ── Input bar ──
@@ -728,7 +807,12 @@ mod cursor_tests {
         out
     }
 
-    fn render_cursor(input: &str, cursor_on: bool, stream_state: StreamState, anim_tick: u64) -> String {
+    fn render_cursor(
+        input: &str,
+        cursor_on: bool,
+        stream_state: StreamState,
+        anim_tick: u64,
+    ) -> String {
         let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
         term.draw(|f| {
             let chat = ChatTab {
@@ -937,6 +1021,25 @@ mod autoscroll_tests {
 
     /// Scrolling up (offset > 0) reveals older lines and drops the newest —
     /// manual scroll pauses the follow.
+    #[test]
+    fn scrolling_up_shows_resume_hint() {
+        let body: String = (0..40).map(|i| format!("line{i}\n\n")).collect();
+        let msgs = vec![ChatMessage {
+            role: Role::Assistant,
+            text: body,
+            tool_name: None,
+        }];
+        let out = render_scroll(&msgs, 12, 10);
+        assert!(
+            out.contains("↑ scrolled up"),
+            "scrolling up should show the resume hint, got:\n{out}"
+        );
+        assert!(
+            out.contains("Esc to jump to bottom"),
+            "resume hint should advertise Esc-to-bottom, got:\n{out}"
+        );
+    }
+
     #[test]
     fn scrolling_up_reveals_older_lines() {
         let body: String = (0..40).map(|i| format!("line{i}\n\n")).collect();
@@ -1240,6 +1343,53 @@ mod markdown_bleed_tests {
         assert!(
             zmod.contains(Modifier::BOLD),
             "assistant markdown should stay rendered, got {zmod:?}"
+        );
+    }
+
+    #[test]
+    fn user_assistant_and_system_messages_render_in_boxes() {
+        let msgs = vec![
+            ChatMessage {
+                role: Role::User,
+                text: "hello from user".to_string(),
+                tool_name: None,
+            },
+            ChatMessage {
+                role: Role::Assistant,
+                text: "**boxed** assistant".to_string(),
+                tool_name: None,
+            },
+            ChatMessage {
+                role: Role::System,
+                text: "system notice".to_string(),
+                tool_name: None,
+            },
+        ];
+        let buf = render_msgs(&msgs);
+        let text = buf_text(&buf);
+
+        for label in ["▸ you", "◈ zeus", "● sys"] {
+            assert!(
+                text.contains(label),
+                "chat box label {label:?} missing:
+{text}"
+            );
+        }
+        assert!(
+            text.matches('╭').count() >= 3,
+            "each non-tool message should have a top border:
+{text}"
+        );
+        assert!(
+            text.matches('╰').count() >= 3,
+            "each non-tool message should have a bottom border:
+{text}"
+        );
+
+        let boxed = modifier_of(&buf, 'b').expect("assistant markdown rendered inside box");
+        assert!(
+            boxed.contains(Modifier::BOLD),
+            "assistant markdown styling should survive boxed rendering, got {boxed:?}"
         );
     }
 

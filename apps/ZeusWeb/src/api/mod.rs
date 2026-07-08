@@ -2685,6 +2685,12 @@ pub async fn onboarding_setup(
     name: &str,
     ollama_url: Option<&str>,
     complete: bool,
+    use_oauth: bool,
+    voice_provider: Option<&str>,
+    image_gen_provider: Option<&str>,
+    embedding_provider: Option<&str>,
+    workspace_path: Option<&str>,
+    persona: Option<&str>,
 ) -> Result<serde_json::Value, String> {
     let mut body = serde_json::json!({
         "provider": provider,
@@ -2694,9 +2700,25 @@ pub async fn onboarding_setup(
         "features": features,
         "name": name,
         "complete": complete,
+        "use_oauth": use_oauth,
     });
     if let Some(u) = ollama_url {
         body["ollama_url"] = serde_json::Value::String(u.to_string());
+    }
+    if let Some(v) = voice_provider {
+        body["voice_provider"] = serde_json::Value::String(v.to_string());
+    }
+    if let Some(v) = image_gen_provider {
+        body["image_gen_provider"] = serde_json::Value::String(v.to_string());
+    }
+    if let Some(v) = embedding_provider {
+        body["embedding_provider"] = serde_json::Value::String(v.to_string());
+    }
+    if let Some(v) = workspace_path {
+        body["workspace_path"] = serde_json::Value::String(v.to_string());
+    }
+    if let Some(v) = persona {
+        body["persona"] = serde_json::Value::String(v.to_string());
     }
     post_json("/v1/onboarding/setup", &body).await
 }
