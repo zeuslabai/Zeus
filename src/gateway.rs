@@ -1788,11 +1788,15 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
                         });
                     }
 
-                    // Cache Discord messages to SQLite for context across restarts (S52-T2)
-                    if msg.source.channel_type() == "discord" {
+                    // Cache channel messages to SQLite for context across restarts (S52-T2, #317)
+                    {
+                        let channel_type = msg.source.channel_type();
+                        let chat_id = msg.source.chat_id.clone().unwrap_or_default();
+                        // Prefix key with channel_type to avoid cross-channel collisions
+                        let prefixed_channel_id = format!("{}:{}", channel_type, chat_id);
                         let cached = zeus_api::CachedMessage {
                             id: msg.platform_message_id.clone().unwrap_or_else(|| msg.id.clone()),
-                            channel_id: msg.source.chat_id.clone().unwrap_or_default(),
+                            channel_id: prefixed_channel_id,
                             author_id: msg.source.user_id.clone(),
                             author_name: String::new(), // extracted from content prefix "[Name]: ..."
                             content: msg.content.clone(),

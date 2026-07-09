@@ -1336,7 +1336,15 @@ impl App {
         //    (branch-4 → AuthMethod::OAuth). No `.env` mirror — config.toml is
         //    the single source of truth. ──
         let key = self.auth_api_key.trim();
-        if !key.is_empty() {
+        if self.selected_provider_is_ollama() {
+            let host = self.ollama_host_input();
+            cfg.credentials
+                .insert("OLLAMA_HOST".to_string(), host.clone());
+            cfg.ollama.url = host.clone();
+            if let Some(mnemosyne) = cfg.mnemosyne.as_mut() {
+                mnemosyne.ollama_url = host;
+            }
+        } else if !key.is_empty() {
             let (provider, _) = cfg.parse_model();
             // OAuth tokens MUST route to `[provider_credentials.{provider}]`
             // cred_type="oauth" — the ONLY onboarding-reachable store the gateway
@@ -1646,6 +1654,18 @@ impl App {
         self.auth_api_key = key.into();
     }
 
+    fn selected_provider_id(&self) -> &'static str {
+        screens::provider::provider_id_at(self.provider_selected)
+    }
+
+    fn selected_provider_is_ollama(&self) -> bool {
+        self.selected_provider_id() == "ollama"
+    }
+
+    fn ollama_host_input(&self) -> String {
+        crate::model_fetch::normalize_ollama_host(&self.auth_api_key)
+    }
+
     /// Whether the entered API key is valid enough to advance past the Auth
     /// step (#240). A lightweight, network-free format gate: non-empty AND
     /// matches the selected provider's expected prefix (`key_fmt`, e.g.
@@ -1655,6 +1675,12 @@ impl App {
     /// disagree. merakizzz's live test: a bare `"asdf"` advanced today because
     /// nothing gated the Auth Enter arm; this blocks that.
     pub fn auth_key_valid(&self) -> bool {
+        if self.selected_provider_is_ollama() {
+            // Ollama has no API key. A blank input means the default/env host
+            // (`http://localhost:11434`), and nonblank input is normalized as a
+            // URL/host:port before `/api/tags` polling.
+            return true;
+        }
         let (_name, _color, key_fmt) = screens::provider::provider_display(self.provider_selected);
         let key = self.auth_api_key.trim();
         if key.is_empty() {
@@ -1707,9 +1733,12 @@ impl App {
                 match &self.model_fetch_state {
                     ModelFetchState::Idle | ModelFetchState::Failed(_) => {
                         // Fire (or retry) the fetch; spinner renders next frame.
-                        let provider_id =
-                            screens::provider::provider_id_at(self.provider_selected).to_string();
-                        let key = self.auth_api_key.trim().to_string();
+                        let provider_id = self.selected_provider_id().to_string();
+                        let key = if self.selected_provider_is_ollama() {
+                            self.ollama_host_input()
+                        } else {
+                            self.auth_api_key.trim().to_string()
+                        };
                         if let Some(tx) = &self.fetch_tx {
                             self.model_fetch_state = ModelFetchState::Fetching;
                             let _ = tx.send((provider_id, key));
@@ -2327,7 +2356,11 @@ pub fn frame(f: &mut ratatui::Frame, app: &App) {
         let header = StepHeader {
             step_idx: app.current_step,
             title: step.title(),
-            subtitle: step.subtitle(),
+            subtitle: if step == Step::Auth && app.selected_provider_is_ollama() {
+                "Enter Ollama URL + port"
+            } else {
+                step.subtitle()
+            },
         };
         f.render_widget(header, body[0]);
 

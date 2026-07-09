@@ -1,9 +1,11 @@
-//! SQLite-backed Discord message history cache (S52-T2).
+//! SQLite-backed channel message history cache (S52-T2, #317).
 //!
-//! Caches inbound Discord messages so agents have conversation context
-//! after gateway restarts. Follows the TaskStore/DeployStore pattern.
+//! Caches inbound messages from all channels (Discord, IRC, Telegram, Slack)
+//! so agents have conversation context after gateway restarts.
+//! Follows the TaskStore/DeployStore pattern.
 //!
 //! Table: `discord_messages` — cached channel messages with author metadata.
+//! Channel IDs are prefixed with `"{channel_type}:"` to avoid cross-channel collisions.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -449,5 +451,36 @@ mod tests {
         assert_eq!(store.last_bot_response_timestamp("ch1").await, Some(1500));
         // Channel isolation
         assert_eq!(store.last_bot_response_timestamp("ch-other").await, None);
+    }
+
+    #[tokio::test]
+    async fn test_prefixed_channel_key_cross_channel() {
+        // Contract test for #317: insert a telegram-typed CachedMessage with
+        // prefixed channel_id, assert get_history_since returns it under that key.
+        let store = test_store().await;
+        let telegram_msg = CachedMessage {
+            id: "tg1".to_string(),
+            channel_id: "telegram:12345".to_string(), // prefixed key
+            author_id: "user_tg".to_string(),
+            author_name: "TelegramUser".to_string(),
+            content: "Hello from Telegram".to_string(),
+            timestamp: 2000,
+            is_bot: false,
+        };
+        store.insert(&telegram_msg).await;
+
+        // Should be retrievable under the prefixed key
+        let history = store.get_history_since("telegram:12345", 10, 0).await;
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].content, "Hello from Telegram");
+        assert_eq!(history[0].channel_id, "telegram:12345");
+
+        // Should NOT be retrievable under a discord-prefixed key for same numeric id
+        let discord_history = store.get_history_since("discord:12345", 10, 0).await;
+        assert_eq!(discord_history.len(), 0);
+
+        // Should NOT be retrievable under unprefixed key
+        let unprefixed_history = store.get_history_since("12345", 10, 0).await;
+        assert_eq!(unprefixed_history.len(), 0);
     }
 }

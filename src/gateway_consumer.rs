@@ -326,9 +326,12 @@ pub async fn inject_channel_history(
     if session_message_count > 20 {
         return final_content;
     }
-    if channel_type != "discord" || chat_id.is_empty() {
+    if chat_id.is_empty() {
         return final_content;
     }
+
+    // Prefix key with channel_type to match write-side format (#317)
+    let prefixed_channel_id = format!("{}:{}", channel_type, chat_id);
 
     let now_epoch = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -336,12 +339,12 @@ pub async fn inject_channel_history(
         .unwrap_or(0);
     let ten_min_ago = now_epoch - 600;
     let last_bot_ts = discord_history
-        .last_bot_response_timestamp(chat_id)
+        .last_bot_response_timestamp(&prefixed_channel_id)
         .await
         .unwrap_or(0);
     let since_ts = ten_min_ago.max(last_bot_ts);
     let history = discord_history
-        .get_history_since(chat_id, 15, since_ts)
+        .get_history_since(&prefixed_channel_id, 15, since_ts)
         .await;
 
     if history.len() <= 1 {

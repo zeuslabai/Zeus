@@ -146,7 +146,7 @@ box_bot() {
 # install_newsyslog_conf <repo_root> <log_dir>
 #   Substitutes placeholders in packaging/macos/newsyslog-zeus-gateway.conf.tmpl
 #   and installs into /etc/newsyslog.d/com.zeus.gateway.conf. Rotates
-#   zeus-gateway.out.log at 50 MB and zeus-gateway.err.log at 10 MB,
+#   gateway.log at 50 MB and error.log at 10 MB (size backstop; daily rotation is in-process per #321),
 #   keeping 5 compressed archives each. Requires sudo.
 #
 #   REGRESSION FENCE: if you change log paths in the plist template above,
@@ -932,7 +932,7 @@ if $UPDATE_ONLY; then
 
             # Cleanup: delete stale 0-byte legacy log files that predate
             # the newsyslog-managed naming convention. Harmless on fresh installs.
-            for stale in "$ZEUS_HOME/logs"/gateway.out.log "$ZEUS_HOME/logs"/gateway.err.log; do
+            for stale in "$ZEUS_HOME/logs"/gateway.out.log "$ZEUS_HOME/logs"/gateway.err.log "$ZEUS_HOME/logs"/zeus-gateway.out.log "$ZEUS_HOME/logs"/zeus-gateway.err.log "$ZEUS_HOME"/zeus.log "$ZEUS_HOME"/mcp-stdio.log; do
                 if [ -f "$stale" ] && [ ! -s "$stale" ]; then
                     rm -f "$stale" && info "Removed stale 0-byte legacy log: $stale"
                 fi
@@ -945,7 +945,7 @@ if $UPDATE_ONLY; then
                 ok "Gateway service loaded"
             else
                 warn "launchd bootstrap failed — falling back to nohup"
-                nohup zeus gateway > "$ZEUS_HOME/logs/gateway.out.log" 2> "$ZEUS_HOME/logs/gateway.err.log" &
+                nohup zeus gateway >> "$ZEUS_HOME/logs/gateway.log" 2>> "$ZEUS_HOME/logs/error.log" &
                 ok "Gateway started via nohup"
             fi ;;
         FreeBSD)
@@ -974,7 +974,7 @@ if $UPDATE_ONLY; then
                 warn "service zeus_gateway restart failed:"
                 sed 's/^/    /' "$restart_log"
                 warn "Falling back to nohup"
-                nohup zeus gateway > "$ZEUS_HOME/logs/gateway.out.log" 2> "$ZEUS_HOME/logs/gateway.err.log" &
+                nohup zeus gateway >> "$ZEUS_HOME/logs/gateway.log" 2>> "$ZEUS_HOME/logs/error.log" &
                 ok "Gateway started via nohup (run 'sudo zeus daemon install' to register rc.d service)"
             fi
             rm -f "$restart_log" ;;
@@ -994,15 +994,15 @@ if $UPDATE_ONLY; then
                     ok "Gateway restarted via systemd user unit"
                 else
                     warn "systemctl --user restart failed — falling back to nohup"
-                    nohup zeus gateway > "$ZEUS_HOME/logs/gateway.out.log" 2> "$ZEUS_HOME/logs/gateway.err.log" &
+                    nohup zeus gateway >> "$ZEUS_HOME/logs/gateway.log" 2>> "$ZEUS_HOME/logs/error.log" &
                     ok "Gateway started via nohup (run 'zeus daemon install' to register systemd unit)"
                 fi
             else
-                nohup zeus gateway > "$ZEUS_HOME/logs/gateway.out.log" 2> "$ZEUS_HOME/logs/gateway.err.log" &
+                nohup zeus gateway >> "$ZEUS_HOME/logs/gateway.log" 2>> "$ZEUS_HOME/logs/error.log" &
                 ok "Gateway started via nohup"
             fi ;;
         *)
-            nohup zeus gateway > "$ZEUS_HOME/logs/gateway.out.log" 2> "$ZEUS_HOME/logs/gateway.err.log" &
+            nohup zeus gateway >> "$ZEUS_HOME/logs/gateway.log" 2>> "$ZEUS_HOME/logs/error.log" &
             ok "Gateway started via nohup" ;;
     esac
 
@@ -1022,11 +1022,11 @@ if $UPDATE_ONLY; then
     if $GW_UP; then
         ok "Health check: gateway is up (http://127.0.0.1:8080/health)"
     elif pgrep -f 'zeus gateway' >/dev/null 2>&1; then
-        warn "Gateway process is running but /health did not return ok within 30s — check $ZEUS_HOME/logs/gateway.err.log"
+        warn "Gateway process is running but /health did not return ok within 30s — check $ZEUS_HOME/logs/error.log"
     else
         warn "Gateway did NOT come back after --update (no process, /health unreachable)."
         warn "The update copied the new binary but the service failed to start."
-        warn "Inspect: $ZEUS_HOME/logs/gateway.err.log"
+        warn "Inspect: $ZEUS_HOME/logs/error.log"
         case "$OS" in
             Darwin)  warn "Retry: sudo launchctl bootstrap system /Library/LaunchDaemons/com.zeus.gateway.plist" ;;
             FreeBSD) warn "Retry: sudo service zeus_gateway restart" ;;
@@ -1829,12 +1829,12 @@ if $DO_LAUNCH; then
             # Fallback: nohup if launchd didn't work
             if ! $GATEWAY_STARTED; then
                 mkdir -p "$ZEUS_HOME/logs"
-                nohup zeus gateway > "$ZEUS_HOME/logs/gateway.out.log" 2> "$ZEUS_HOME/logs/gateway.err.log" &
+                nohup zeus gateway >> "$ZEUS_HOME/logs/gateway.log" 2>> "$ZEUS_HOME/logs/error.log" &
                 sleep 1
                 if pgrep -f 'zeus gateway' > /dev/null 2>&1; then
                     ok "Gateway started via nohup"
                 else
-                    warn "Gateway failed to start — check $ZEUS_HOME/logs/gateway.err.log"
+                    warn "Gateway failed to start — check $ZEUS_HOME/logs/error.log"
                 fi
             fi ;;
         FreeBSD)
@@ -1861,23 +1861,23 @@ if $DO_LAUNCH; then
                     }
                     info "Falling back to nohup (login-shell env)"
                     mkdir -p "$ZEUS_HOME/logs"
-                    nohup zeus gateway > "$ZEUS_HOME/logs/gateway.out.log" 2> "$ZEUS_HOME/logs/gateway.err.log" &
+                    nohup zeus gateway >> "$ZEUS_HOME/logs/gateway.log" 2>> "$ZEUS_HOME/logs/error.log" &
                     ok "Gateway via nohup"
                 fi
             else
                 mkdir -p "$ZEUS_HOME/logs"
-                nohup zeus gateway > "$ZEUS_HOME/logs/gateway.out.log" 2> "$ZEUS_HOME/logs/gateway.err.log" &
+                nohup zeus gateway >> "$ZEUS_HOME/logs/gateway.log" 2>> "$ZEUS_HOME/logs/error.log" &
                 ok "Gateway via nohup"
             fi ;;
         Linux)
             if command -v systemctl >/dev/null 2>&1 && [ -f "$HOME/.config/systemd/user/zeus-gateway.service" ]; then
                 systemctl --user daemon-reload 2>/dev/null; systemctl --user enable zeus-gateway 2>/dev/null
                 systemctl --user restart zeus-gateway 2>/dev/null && ok "Gateway via systemd" || {
-                    nohup zeus gateway > "$ZEUS_HOME/logs/gateway.out.log" 2> "$ZEUS_HOME/logs/gateway.err.log" &
+                    nohup zeus gateway >> "$ZEUS_HOME/logs/gateway.log" 2>> "$ZEUS_HOME/logs/error.log" &
                     ok "Gateway via nohup"
                 }
             else
-                nohup zeus gateway > "$ZEUS_HOME/logs/gateway.out.log" 2> "$ZEUS_HOME/logs/gateway.err.log" &
+                nohup zeus gateway >> "$ZEUS_HOME/logs/gateway.log" 2>> "$ZEUS_HOME/logs/error.log" &
                 ok "Gateway via nohup"
             fi ;;
     esac
@@ -1910,7 +1910,7 @@ if $DO_LAUNCH; then
         # #311 launch UX: never end URL-less and silent — say WHY (surface
         # the freshest error lines) and print the manual fallback + URLs.
         warn "Gateway failed to start"
-        for lf in "$ZEUS_HOME/logs/gateway.err.log" "$ZEUS_HOME/logs/gateway.out.log" /var/log/zeus_gateway.log; do
+        for lf in "$ZEUS_HOME/logs/error.log" "$ZEUS_HOME/logs/gateway.log" /var/log/zeus_gateway.log; do
             [ -s "$lf" ] || continue
             info "Last lines of $lf:"
             tail -5 "$lf" 2>/dev/null | sed 's/^/      /' || true
@@ -1918,10 +1918,10 @@ if $DO_LAUNCH; then
         done
         printf "\n"
         info "Manual fallback (login-shell env sidesteps most service issues):"
-        printf "      ${CS}mkdir -p %s/logs && nohup zeus gateway > %s/logs/gateway.out.log 2>&1 &${N}\n" "$ZEUS_HOME" "$ZEUS_HOME"
+        printf "      ${CS}mkdir -p %s/logs && nohup zeus gateway >> %s/logs/gateway.log 2>> %s/logs/error.log &${N}\n" "$ZEUS_HOME" "$ZEUS_HOME" "$ZEUS_HOME"
         info "Then browse:  http://$(webui_display_host):8080/  (gateway)"
         $WITH_WEBUI && info "WebUI onboarding: http://$(webui_display_host):8081/"
-        info "Diagnose:     zeus doctor   ·   Logs: tail -f $ZEUS_HOME/logs/gateway.err.log"
+        info "Diagnose:     zeus doctor   ·   Logs: tail -f $ZEUS_HOME/logs/error.log"
     fi
 else
     phase "SKIP LAUNCH"

@@ -596,6 +596,11 @@ write_identity() {
         soul_is_placeholder=true
     elif grep -q "Run 'zeus onboard'" "$soul_file" 2>/dev/null; then
         soul_is_placeholder=true
+    elif grep -q "an autonomous Zeus agent" "$soul_file" 2>/dev/null; then
+        # The script's OWN 3-line fallback boilerplate (line ~503) is also a
+        # placeholder — without this it gets preserved as a "real" persona and
+        # locked in forever (the fleet-wide sludge-soul incident, 2026-07-09).
+        soul_is_placeholder=true
     fi
     # #202: for unrecognized agents a *real* existing SOUL.md IS the configured
     # persona (written by onboarding) — preserve it even under --force. But a

@@ -1,7 +1,7 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Block, Borders, Widget};
+use ratatui::widgets::{Block, Borders, Clear, Widget};
 
 use crate::theme;
 
@@ -75,7 +75,11 @@ pub struct AuthScreen {
 }
 
 impl AuthScreen {
-    pub fn new(provider_name: &'static str, provider_color: ratatui::style::Color, key_fmt: &'static str) -> Self {
+    pub fn new(
+        provider_name: &'static str,
+        provider_color: ratatui::style::Color,
+        key_fmt: &'static str,
+    ) -> Self {
         Self {
             provider_name,
             // Default to the lowercased display name as the id; real
@@ -109,58 +113,110 @@ impl AuthScreen {
 
         // ── Header: "Authenticate with {provider}" ──
         let header = Line::from(vec![
-            Span::styled("Authenticate with ", Style::default().fg(theme::TEXT).add_modifier(Modifier::BOLD)),
-            Span::styled(self.provider_name, Style::default().fg(self.provider_color).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Authenticate with ",
+                Style::default()
+                    .fg(theme::TEXT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                self.provider_name,
+                Style::default()
+                    .fg(self.provider_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]);
         buf.set_line(x, cy, &header, w);
         cy += 1;
 
+        let is_ollama = self.provider_id == "ollama";
+
         // Subtitle
-        let subtitle = Line::from(vec![
-            Span::styled("Credentials persist to ", Style::default().fg(theme::DIM)),
-            Span::styled("~/.zeus/config.toml [credentials]", Style::default().fg(theme::ACCENT_BRIGHT)),
-            Span::styled(" with 0600 permissions.", Style::default().fg(theme::DIM)),
-        ]);
+        let subtitle = if is_ollama {
+            Line::from(vec![
+                Span::styled(
+                    "Ollama runs locally; Zeus stores ",
+                    Style::default().fg(theme::DIM),
+                ),
+                Span::styled("OLLAMA_HOST", Style::default().fg(theme::ACCENT_BRIGHT)),
+                Span::styled(
+                    " and polls /api/tags for models.",
+                    Style::default().fg(theme::DIM),
+                ),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled("Credentials persist to ", Style::default().fg(theme::DIM)),
+                Span::styled(
+                    "~/.zeus/config.toml [credentials]",
+                    Style::default().fg(theme::ACCENT_BRIGHT),
+                ),
+                Span::styled(" with 0600 permissions.", Style::default().fg(theme::DIM)),
+            ])
+        };
         buf.set_line(x, cy, &subtitle, w);
         cy += 2;
 
         // ── Mode tabs ──
         let tab_y = cy;
-        let tab_w = w / 3;
-        for (i, mode) in AUTH_MODES.iter().enumerate() {
-            let tx = x + (i as u16) * tab_w;
-            let selected = i == self.selected_mode;
-
-            // JSX: tabs carry NO background fill — selection is conveyed by the
-            // bottom border accent + bold fg only (line 671-677). Paint the panel
-            // bg uniformly so no highlight box leaks behind the selected tab.
-            for dy in 0..3 {
-                for dx in 0..tab_w {
-                    buf[(tx + dx, tab_y + dy)].set_bg(theme::BG);
-                }
-            }
-
-            // Tab label
-            let label_style = if selected {
-                Style::default().fg(theme::TEXT).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::DIM)
-            };
-            buf.set_string(tx + 1, tab_y, mode.label, label_style);
-
-            // Tab description
-            buf.set_string(tx + 1, tab_y + 1, mode.desc, Style::default().fg(theme::MUTED));
-
-            // JSX: the tab row has a 1px muted baseline under ALL tabs
-            // (borderBottom: 1px solid C.muted, line 669); the selected tab
-            // overlays a 2px accent rule (borderBottom: 2px solid C.accent).
+        if is_ollama {
+            let tab_w = w;
+            buf.set_string(
+                x,
+                tab_y,
+                "Ollama URL",
+                Style::default()
+                    .fg(theme::TEXT)
+                    .add_modifier(Modifier::BOLD),
+            );
+            buf.set_string(
+                x,
+                tab_y + 1,
+                "Enter the URL + port of the running Ollama server",
+                Style::default().fg(theme::MUTED),
+            );
             for dx in 0..tab_w {
-                let cell = &mut buf[(tx + dx, tab_y + 2)];
-                if selected {
-                    cell.set_fg(theme::ACCENT).set_symbol("─");
+                buf[(x + dx, tab_y + 2)]
+                    .set_fg(theme::ACCENT)
+                    .set_symbol("─");
+            }
+        } else {
+            let tab_w = w / 3;
+            for (i, mode) in AUTH_MODES.iter().enumerate() {
+                let tx = x + (i as u16) * tab_w;
+                let selected = i == self.selected_mode;
+
+                // JSX: tabs carry NO background fill — selection is conveyed by the
+                // bottom border accent + bold fg only (line 671-677). Paint the panel
+                // bg uniformly so no highlight box leaks behind the selected tab.
+                for dy in 0..3 {
+                    for dx in 0..tab_w {
+                        buf[(tx + dx, tab_y + dy)].set_bg(theme::BG);
+                    }
+                }
+
+                // Tab label
+                let label_style = if selected {
+                    Style::default()
+                        .fg(theme::TEXT)
+                        .add_modifier(Modifier::BOLD)
                 } else {
-                    // Muted baseline carries under the unselected tabs.
-                    cell.set_fg(theme::MUTED).set_symbol("─");
+                    Style::default().fg(theme::DIM)
+                };
+                buf.set_string(tx, tab_y, mode.label, label_style);
+                buf.set_string(tx, tab_y + 1, mode.desc, Style::default().fg(theme::MUTED));
+
+                // JSX: the tab row has a 1px muted baseline under ALL tabs
+                // (borderBottom: 1px solid C.muted, line 669); the selected tab
+                // overlays a 2px accent rule (borderBottom: 2px solid C.accent).
+                for dx in 0..tab_w {
+                    let cell = &mut buf[(tx + dx, tab_y + 2)];
+                    if selected {
+                        cell.set_fg(theme::ACCENT).set_symbol("─");
+                    } else {
+                        // Muted baseline carries under the unselected tabs.
+                        cell.set_fg(theme::MUTED).set_symbol("─");
+                    }
                 }
             }
         }
@@ -168,17 +224,37 @@ impl AuthScreen {
 
         // ── Key/Token input field ──
         if self.selected_mode <= 1 {
-            let field_label = if self.selected_mode == 0 { "API Key" } else { "Setup Token" };
-            let field_hint = if self.selected_mode == 0 { self.key_fmt } else { "paste token here" };
+            let field_label = if is_ollama {
+                "Ollama URL/Port"
+            } else if self.selected_mode == 0 {
+                "API Key"
+            } else {
+                "Setup Token"
+            };
+            let field_hint = if is_ollama {
+                "http://localhost:11434"
+            } else if self.selected_mode == 0 {
+                self.key_fmt
+            } else {
+                "paste token here"
+            };
 
             // ── Section label (JSX 685/726: accentDim, letterSpacing 3, uppercase) ──
             // JSX renders `API KEY` / `SETUP TOKEN` letter-spaced above the field.
-            let section = if self.selected_mode == 0 { "A P I   K E Y" } else { "S E T U P   T O K E N" };
+            let section = if is_ollama {
+                "O L L A M A   H O S T"
+            } else if self.selected_mode == 0 {
+                "A P I   K E Y"
+            } else {
+                "S E T U P   T O K E N"
+            };
             buf.set_string(
                 x,
                 cy,
                 section,
-                Style::default().fg(theme::ACCENT_DIM).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme::ACCENT_DIM)
+                    .add_modifier(Modifier::BOLD),
             );
             cy += 1;
 
@@ -186,9 +262,17 @@ impl AuthScreen {
             if self.selected_mode == 1 {
                 // bg2 box, amber left rail, detected-token message.
                 let banner = Line::from(vec![
-                    Span::styled("↻ Detected", Style::default().fg(theme::AMBER).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "↻ Detected",
+                        Style::default()
+                            .fg(theme::AMBER)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(" setup token at ", Style::default().fg(theme::DIM)),
-                    Span::styled("~/.zeus/setup-token", Style::default().fg(theme::ACCENT_BRIGHT)),
+                    Span::styled(
+                        "~/.zeus/setup-token",
+                        Style::default().fg(theme::ACCENT_BRIGHT),
+                    ),
                     Span::styled(" · pre-populating", Style::default().fg(theme::DIM)),
                 ]);
                 // Amber left rail.
@@ -214,7 +298,9 @@ impl AuthScreen {
                 .border_style(Style::default().fg(theme::ACCENT))
                 .title(Span::styled(
                     format!(" {} ", field_label),
-                    Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme::ACCENT)
+                        .add_modifier(Modifier::BOLD),
                 ));
             let field_area = Rect::new(x, cy, field_w, 3);
             field_block.render(field_area, buf);
@@ -225,8 +311,7 @@ impl AuthScreen {
             } else {
                 // Mask the key as `***{last4}` (JSX 784). Char-based via
                 // rev().take(4) so a non-ASCII paste can't panic on a byte split.
-                let mut last4: Vec<char> =
-                    self.api_key.chars().rev().take(4).collect();
+                let mut last4: Vec<char> = self.api_key.chars().rev().take(4).collect();
                 last4.reverse();
                 let last4: String = last4.into_iter().collect();
                 format!("***{}", last4)
@@ -263,23 +348,30 @@ impl AuthScreen {
                 };
                 // Clamp inside the field box (border at x + field_w - 1).
                 if cursor_col < x + field_w - 1 {
-                    buf.set_string(
-                        cursor_col,
-                        cy + 1,
-                        "▏",
-                        Style::default().fg(theme::RED),
-                    );
+                    buf.set_string(cursor_col, cy + 1, "▏", Style::default().fg(theme::RED));
                 }
             }
             cy += 4;
 
             // Validation hint
             if !self.api_key.is_empty() {
-                let valid = self.api_key.starts_with(self.key_fmt.replace("...", "").as_str());
+                let valid = self
+                    .api_key
+                    .starts_with(self.key_fmt.replace("...", "").as_str());
                 if valid {
-                    buf.set_string(x, cy, "✓ Key format matches expected prefix", Style::default().fg(theme::GREEN));
+                    buf.set_string(
+                        x,
+                        cy,
+                        "✓ Key format matches expected prefix",
+                        Style::default().fg(theme::GREEN),
+                    );
                 } else {
-                    buf.set_string(x, cy, "✕ Key format doesn't match expected prefix", Style::default().fg(theme::RED));
+                    buf.set_string(
+                        x,
+                        cy,
+                        "✕ Key format doesn't match expected prefix",
+                        Style::default().fg(theme::RED),
+                    );
                 }
                 cy += 1;
             }
@@ -324,7 +416,12 @@ impl AuthScreen {
                     }
                     "error" => {
                         // Button already shows `✕ AUTH FAILED`; detail line carries the cause.
-                        buf.set_string(x, cy, "✕ 401 Unauthorized — check the API key", Style::default().fg(theme::RED));
+                        buf.set_string(
+                            x,
+                            cy,
+                            "✕ 401 Unauthorized — check the API key",
+                            Style::default().fg(theme::RED),
+                        );
                         cy += 1;
                     }
                     _ => {}
@@ -335,7 +432,14 @@ impl AuthScreen {
 
         // ── OAuth flow (browser mode) ──
         if self.selected_mode == 2 {
-            buf.set_string(x, cy, "OAUTH FLOW", Style::default().fg(theme::ACCENT_DIM).add_modifier(Modifier::BOLD));
+            buf.set_string(
+                x,
+                cy,
+                "OAUTH FLOW",
+                Style::default()
+                    .fg(theme::ACCENT_DIM)
+                    .add_modifier(Modifier::BOLD),
+            );
             cy += 1;
 
             for step in OAUTH_STEPS {
@@ -388,7 +492,14 @@ impl AuthScreen {
             Style::default().fg(theme::DIM),
         );
 
-        let key_display = if self.api_key.is_empty() {
+        let key_display = if is_ollama {
+            let host = if self.api_key.trim().is_empty() {
+                "http://localhost:11434"
+            } else {
+                self.api_key.trim()
+            };
+            format!("\"{}\"", host.trim_end_matches('/'))
+        } else if self.api_key.is_empty() {
             "\"\"".to_string()
         } else {
             // Same `***{last4}` masking as the input field — char-safe.
@@ -406,21 +517,24 @@ impl AuthScreen {
         let env_key = zeus_core::Provider::from_prefix(self.provider_id).env_key();
         // gemini-cli has an empty env_key (OAuth-only) — fall back to a
         // stable placeholder so the preview line is never blank.
-        let env_key = if env_key.is_empty() { "API_KEY" } else { env_key };
+        let env_key = if env_key.is_empty() {
+            "API_KEY"
+        } else {
+            env_key
+        };
         let preview_line = Line::from(vec![
             Span::styled(env_key, Style::default().fg(theme::TEXT)),
             Span::styled(" = ", Style::default().fg(theme::MUTED)),
             Span::styled(key_display, Style::default().fg(theme::ACCENT_BRIGHT)),
         ]);
         buf.set_line(preview_x, preview_y + 2, &preview_line, preview_inner_w);
-
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::AuthScreen;
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
 
     fn render_key(key: &str) {
         let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
@@ -552,7 +666,12 @@ mod tests {
         assert_eq!(cell.fg, crate::theme::RED, "insertion caret must be RED");
     }
 
-    fn render_auth_to_string(width: u16, key: &str, provider_id: &'static str, key_fmt: &'static str) -> String {
+    fn render_auth_to_string(
+        width: u16,
+        key: &str,
+        provider_id: &'static str,
+        key_fmt: &'static str,
+    ) -> String {
         let mut term = Terminal::new(TestBackend::new(width, 40)).unwrap();
         term.draw(|f| {
             let mut s = AuthScreen::new("Anthropic", crate::theme::ACCENT, key_fmt);
@@ -641,9 +760,9 @@ mod tests {
             for x in 0..buf.area.width {
                 let c = &buf[(x, y)];
                 let sym = c.symbol();
-                let is_border = sym.chars().any(|ch| {
-                    matches!(ch, '─' | '│' | '┌' | '┐' | '└' | '┘')
-                });
+                let is_border = sym
+                    .chars()
+                    .any(|ch| matches!(ch, '─' | '│' | '┌' | '┐' | '└' | '┘'));
                 if is_border && c.fg == crate::theme::ACCENT {
                     found = true;
                 }

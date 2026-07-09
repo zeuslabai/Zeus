@@ -10,8 +10,10 @@
 //!    per workspace crate.
 //! 2. **No durable log sink.** Foreground runs logged to stderr only and died
 //!    with the terminal; launchd redirection never rotated. [`init_logging`]
-//!    adds a `tracing-appender` daily-rotating file layer under
-//!    `{zeus_home}/logs/` with retention, active in *all* modes.
+//!    adds two stable-name file sinks under `{zeus_home}/logs/` —
+//!    `gateway.log` (info+) and `error.log` (warn+) — active in *all* modes.
+//!    Rotation renames the OLD file (`gateway.YYYY-MM-DD.log`) so the active
+//!    filename never changes and `tail -f` survives rotation (#321).
 //!
 //! Policy: an explicit non-empty `RUST_LOG` always wins (we use it verbatim
 //! and add no directives). Otherwise levels come from `--verbose` and the
@@ -173,71 +175,304 @@ pub fn peek_logging_config(cli_config: Option<&str>) -> LoggingConfig {
 
 /// Initialize the global tracing subscriber.
 ///
-/// Layers:
-/// - **Rotating file sink** (all modes, unless `[logging].file_enabled=false`):
-///   daily rotation to `{zeus_home}/logs/gateway.{YYYY-MM-DD}.log`, non-ANSI,
-///   `retention_days` files kept (older ones pruned by `tracing-appender`).
-/// - **Console/legacy layer**: stderr in normal modes; in TUI / MCP-stdio
-///   modes, an *append-mode* file at `{zeus_home}/zeus.log` /
-///   `{zeus_home}/mcp-stdio.log` (previously `File::create` — truncated on
-///   every boot, losing prior-run evidence).
+/// Layers (#321 — exactly two files):
+/// - **`logs/gateway.log`** (all modes, unless `[logging].file_enabled=false`):
+///   everything at `file_level` (info+ by default), non-ANSI, stable filename.
+///   Rotation renames the old day's file to `gateway.YYYY-MM-DD.log` and keeps
+///   `retention_days` archives — `tail -f gateway.log` survives rotation.
+/// - **`logs/error.log`**: warn+error only, same stable-name rotation.
+/// - **Console layer**: stderr in normal interactive modes only. Skipped when
+///   stderr is not a TTY (daemon/launchd redirects stderr into `error.log`,
+///   and echoing info+ there would pollute it — raw panics still reach
+///   `error.log` via the OS-level redirect). In TUI / MCP-stdio modes there is
+///   no console layer at all — the two file sinks capture everything (the
+///   tracing `target` field distinguishes sources); the legacy `zeus.log` /
+///   `mcp-stdio.log` files are retired.
 pub fn init_logging(verbose: bool, is_tui: bool, is_stdio_mcp: bool, cfg: &LoggingConfig) -> Result<()> {
     let resolved = resolve(verbose, cfg);
     let console_filter = workspace_filter(&resolved.console_level);
 
-    // Durable rotating file sink under {zeus_home}/logs/.
-    let file_layer = if resolved.file_enabled {
+    // Durable stable-name file sinks under {zeus_home}/logs/ (#321):
+    //   gateway.log — everything at file_level (info+ by default)
+    //   error.log   — warn+error only
+    // The active filenames never change; rotation renames the OLD day's file
+    // to `{prefix}.YYYY-MM-DD.log`, so `tail -f` just works forever.
+    let (file_layer, error_layer) = if resolved.file_enabled {
         let log_dir = zeus_paths::zeus_home().join("logs");
         std::fs::create_dir_all(&log_dir).ok();
-        match tracing_appender::rolling::Builder::new()
-            .rotation(tracing_appender::rolling::Rotation::DAILY)
-            .filename_prefix("gateway")
-            .filename_suffix("log")
-            .max_log_files(resolved.retention_days as usize)
-            .build(&log_dir)
-        {
-            Ok(appender) => Some(
-                fmt::layer()
-                    .with_writer(appender)
-                    .with_ansi(false)
-                    .with_filter(workspace_filter(&resolved.file_level)),
-            ),
-            Err(e) => {
-                eprintln!("warning: failed to initialize rotating log sink: {e}");
-                None
-            }
-        }
+        let retention = resolved.retention_days as usize;
+        let gateway = StableFileWriter::new(&log_dir, "gateway", retention).map(|w| {
+            fmt::layer()
+                .with_writer(w)
+                .with_ansi(false)
+                .with_filter(workspace_filter(&resolved.file_level))
+        });
+        let error = StableFileWriter::new(&log_dir, "error", retention).map(|w| {
+            fmt::layer()
+                .with_writer(w)
+                .with_ansi(false)
+                .with_filter(tracing_subscriber::filter::LevelFilter::WARN)
+        });
+        (gateway, error)
     } else {
-        None
+        (None, None)
     };
 
     if is_tui || is_stdio_mcp {
         // TUI: stderr logs corrupt the ratatui display. MCP stdio: logs
-        // corrupt the JSON-RPC stream. Route the console layer to a legacy
-        // file instead — append mode, so restarts no longer erase evidence.
-        let log_dir = zeus_paths::zeus_home();
-        std::fs::create_dir_all(&log_dir).ok();
-        let log_name = if is_stdio_mcp { "mcp-stdio.log" } else { "zeus.log" };
-        let log_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_dir.join(log_name))?;
-        tracing_subscriber::registry()
-            .with(file_layer)
-            .with(
-                fmt::layer()
-                    .with_writer(std::sync::Mutex::new(log_file))
-                    .with_ansi(false)
-                    .with_filter(console_filter),
-            )
-            .init();
+        // corrupt the JSON-RPC stream. The stable-name sinks above already
+        // capture everything (the tracing `target` field distinguishes
+        // tui/mcp sources from gateway internals), so the legacy per-mode
+        // files (`zeus.log`, `mcp-stdio.log`) are retired — end state is
+        // exactly two files (#321). If the file sink is disabled, fall back
+        // to an append-mode `logs/gateway.log` so these modes are never
+        // left sinkless.
+        if file_layer.is_some() || error_layer.is_some() {
+            tracing_subscriber::registry()
+                .with(file_layer)
+                .with(error_layer)
+                .init();
+        } else {
+            let log_dir = zeus_paths::zeus_home().join("logs");
+            std::fs::create_dir_all(&log_dir).ok();
+            let log_file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(log_dir.join("gateway.log"))?;
+            tracing_subscriber::registry()
+                .with(
+                    fmt::layer()
+                        .with_writer(std::sync::Mutex::new(log_file))
+                        .with_ansi(false)
+                        .with_filter(console_filter),
+                )
+                .init();
+        }
     } else {
+        // Console layer only when stderr is a real TTY. Under launchd/daemon
+        // supervision stderr is redirected into error.log — echoing the info+
+        // console stream there would pollute the warn+ sink. Raw panics and
+        // pre-init prints still reach error.log through the OS-level
+        // redirect, which is exactly why StandardErrorPath points there.
+        use std::io::IsTerminal as _;
+        let console_on = std::io::stderr().is_terminal() || file_layer.is_none();
+        let console = console_on.then(|| fmt::layer().with_filter(console_filter));
         tracing_subscriber::registry()
             .with(file_layer)
-            .with(fmt::layer().with_filter(console_filter))
+            .with(error_layer)
+            .with(console)
             .init();
     }
     Ok(())
+}
+
+/// A stable-name file sink with restart- and day-boundary rotation (#321).
+///
+/// The active file is always `{dir}/{prefix}.log` — no date stamp — so
+/// `tail -f` keeps working forever. When the calendar day changes (checked on
+/// every write, and once at open for files left over from a previous run),
+/// the OLD file is renamed to `{prefix}.{YYYY-MM-DD}.log` (stamped with the
+/// day it belongs to) and a fresh active file is opened under the same
+/// stable name. Date-stamped archives beyond `retention` are pruned.
+#[derive(Clone)]
+pub struct StableFileWriter {
+    inner: std::sync::Arc<std::sync::Mutex<StableFileInner>>,
+}
+
+struct StableFileInner {
+    dir: std::path::PathBuf,
+    prefix: String,
+    retention: usize,
+    /// Day (YYYY-MM-DD) the currently-open file belongs to.
+    day: String,
+    file: std::fs::File,
+}
+
+fn today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+impl StableFileWriter {
+    pub fn new(dir: &std::path::Path, prefix: &str, retention: usize) -> Option<Self> {
+        let active = dir.join(format!("{prefix}.log"));
+        // Restart-boundary rotation: if the existing active file was last
+        // written on an earlier day, archive it under that day before opening.
+        if let Ok((len, mtime)) =
+            std::fs::metadata(&active).and_then(|m| m.modified().map(|t| (m.len(), t)))
+        {
+            let day = chrono::DateTime::<chrono::Local>::from(mtime)
+                .format("%Y-%m-%d")
+                .to_string();
+            if day != today() && len > 0 {
+                let _ = std::fs::rename(&active, dir.join(format!("{prefix}.{day}.log")));
+            }
+        }
+        prune_archives(dir, prefix, retention);
+        match std::fs::OpenOptions::new().create(true).append(true).open(&active) {
+            Ok(file) => Some(Self {
+                inner: std::sync::Arc::new(std::sync::Mutex::new(StableFileInner {
+                    dir: dir.to_path_buf(),
+                    prefix: prefix.to_string(),
+                    retention,
+                    day: today(),
+                    file,
+                })),
+            }),
+            Err(e) => {
+                eprintln!("warning: failed to open log sink {}: {e}", active.display());
+                None
+            }
+        }
+    }
+}
+
+impl StableFileInner {
+    fn rotate_if_needed(&mut self) {
+        let now = today();
+        if now == self.day {
+            return;
+        }
+        let active = self.dir.join(format!("{}.log", self.prefix));
+        // Rename the OLD day's file out of the way, then reopen the stable
+        // name. The rename is what keeps `tail -f {prefix}.log` alive.
+        let _ = std::fs::rename(
+            &active,
+            self.dir.join(format!("{}.{}.log", self.prefix, self.day)),
+        );
+        prune_archives(&self.dir, &self.prefix, self.retention);
+        if let Ok(file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&active)
+        {
+            self.file = file;
+            self.day = now;
+        }
+    }
+}
+
+/// Remove date-stamped archives (`{prefix}.YYYY-MM-DD.log`) beyond `retention`.
+/// The active `{prefix}.log` never matches the archive shape and is never pruned.
+fn prune_archives(dir: &std::path::Path, prefix: &str, retention: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut archives: Vec<std::path::PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                n.starts_with(&format!("{prefix}."))
+                    && n.ends_with(".log")
+                    // "{prefix}." + "YYYY-MM-DD" + ".log"
+                    && n.len() == prefix.len() + 15
+            })
+        })
+        .collect();
+    if archives.len() <= retention {
+        return;
+    }
+    archives.sort(); // date-stamped names sort chronologically
+    let excess = archives.len() - retention;
+    for p in archives.into_iter().take(excess) {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// Per-write handle: locks the shared state, rotates on day change, writes.
+pub struct StableFileGuard(std::sync::Arc<std::sync::Mutex<StableFileInner>>);
+
+impl std::io::Write for StableFileGuard {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        inner.rotate_if_needed();
+        std::io::Write::write(&mut inner.file, buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        let mut inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        std::io::Write::flush(&mut inner.file)
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for StableFileWriter {
+    type Writer = StableFileGuard;
+    fn make_writer(&'a self) -> Self::Writer {
+        StableFileGuard(self.inner.clone())
+    }
+}
+
+#[cfg(test)]
+mod stable_writer_tests {
+    use super::*;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("zeus-logtest-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn active_name_is_stable_no_date_stamp() {
+        let d = scratch("stable");
+        let w = StableFileWriter::new(&d, "gateway", 3).unwrap();
+        {
+            use std::io::Write as _;
+            let mut g = tracing_subscriber::fmt::MakeWriter::make_writer(&w);
+            g.write_all(b"hello\n").unwrap();
+            g.flush().unwrap();
+        }
+        let names: Vec<String> = std::fs::read_dir(&d)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["gateway.log".to_string()]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn day_change_renames_old_file_and_reopens_stable_name() {
+        let d = scratch("rotate");
+        let w = StableFileWriter::new(&d, "gateway", 30).unwrap();
+        {
+            use std::io::Write as _;
+            let mut g = tracing_subscriber::fmt::MakeWriter::make_writer(&w);
+            g.write_all(b"old-day line\n").unwrap();
+        }
+        // Simulate a day boundary: backdate the open file's day marker.
+        w.inner.lock().unwrap().day = "2000-01-01".into();
+        {
+            use std::io::Write as _;
+            let mut g = tracing_subscriber::fmt::MakeWriter::make_writer(&w);
+            g.write_all(b"new-day line\n").unwrap();
+        }
+        let archived = std::fs::read_to_string(d.join("gateway.2000-01-01.log")).unwrap();
+        assert!(archived.contains("old-day line"));
+        let active = std::fs::read_to_string(d.join("gateway.log")).unwrap();
+        assert!(active.contains("new-day line"));
+        assert!(!active.contains("old-day line"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn prune_keeps_newest_archives_and_never_touches_active() {
+        let d = scratch("prune");
+        for day in ["2000-01-01", "2000-01-02", "2000-01-03", "2000-01-04"] {
+            std::fs::write(d.join(format!("error.{day}.log")), "x").unwrap();
+        }
+        std::fs::write(d.join("error.log"), "active").unwrap();
+        prune_archives(&d, "error", 2);
+        assert!(!d.join("error.2000-01-01.log").exists());
+        assert!(!d.join("error.2000-01-02.log").exists());
+        assert!(d.join("error.2000-01-03.log").exists());
+        assert!(d.join("error.2000-01-04.log").exists());
+        assert!(
+            d.join("error.log").exists(),
+            "active file must never be pruned"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }
 
 #[cfg(test)]

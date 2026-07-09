@@ -1,6 +1,6 @@
 [package]
 name = "zeus-tui"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Zeus TUI — terminal interface with onboarding, chat, and multi-screen navigation"
 

@@ -50,7 +50,7 @@ impl LspSession {
     async fn initialize(&mut self) -> Result<()> {
         let init_params = json!({
             "processId": std::process::id(),
-            "clientInfo": { "name": "zeus-lsp", "version": "0.1.0" },
+            "clientInfo": { "name": "zeus-lsp", "version": env!("CARGO_PKG_VERSION") },
             "rootUri": null,
             "capabilities": {
                 "textDocument": {

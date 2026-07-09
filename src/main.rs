@@ -512,7 +512,7 @@ async fn main() -> Result<()> {
 
     // Ensure ~/.zeus/logs/ exists before any code path that might write to it.
     // launchd plists (see src/daemon.rs + crates/zeus-setup/src/ops/service.rs) redirect
-    // StandardOutPath/StandardErrorPath to ~/.zeus/logs/gateway.{out,err}.log; if the
+    // StandardOutPath/StandardErrorPath to ~/.zeus/logs/{gateway,error}.log (#321); if the
     // directory is missing, launchd silently drops to /dev/null and we lose runtime logs.
     // Idempotent, .ok() to never fail boot on this.
     std::fs::create_dir_all(zeus_paths::zeus_home().join("logs")).ok();
@@ -956,14 +956,17 @@ async fn run_tui(
     force_onboard: bool,
     gateway_override: Option<zeus_tui::GatewayTargetOverride>,
 ) -> Result<()> {
-    // Redirect stderr to log file — prevents stray output from corrupting TUI display.
-    // Tracing is already redirected, but eprintln!, dependency output, and subprocess
-    // stderr can still leak through and corrupt the ratatui terminal.
-    let log_dir = zeus_paths::zeus_home();
+    // Redirect stderr to error.log — prevents stray output from corrupting TUI
+    // display. Tracing already goes to the stable file sinks (#321), but
+    // eprintln!, dependency output, and subprocess stderr can still leak
+    // through and corrupt the ratatui terminal. error.log is the consolidated
+    // stderr destination (same file launchd points StandardErrorPath at).
+    let log_dir = zeus_paths::zeus_home().join("logs");
+    std::fs::create_dir_all(&log_dir).ok();
     if let Ok(log_file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(log_dir.join("zeus.log"))
+        .open(log_dir.join("error.log"))
     {
         use std::os::unix::io::IntoRawFd;
         let fd = log_file.into_raw_fd();
@@ -1098,14 +1101,16 @@ fn spawn_gateway_detached() {
 
     let log_dir = dirs::home_dir().unwrap_or_default().join(".zeus").join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
+    // #321: raw stdout/stderr land in the same two stable files the tracing
+    // sinks use — gateway.log for stdout, error.log for panics/stderr.
     let out = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(log_dir.join("gateway.out.log"));
+        .open(log_dir.join("gateway.log"));
     let err = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(log_dir.join("gateway.err.log"));
+        .open(log_dir.join("error.log"));
 
     let mut cmd = std::process::Command::new(&exe);
     cmd.arg("gateway");

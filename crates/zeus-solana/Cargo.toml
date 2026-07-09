@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# vendored: solana-secp256r1-program links OpenSSL; vendoring builds it from
+# source per-target so release cross-compiles (zigbuild linux, x86_64 mac) work.
+openssl = { version = "0.10", features = ["vendored"] }
 zeus-core.workspace = true
 zeus-wallet.workspace = true
 zeus-agora.workspace = true

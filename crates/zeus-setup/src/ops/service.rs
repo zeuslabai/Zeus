@@ -97,9 +97,9 @@ async fn install_service(platform: &Platform, tx: &mpsc::Sender<ProgressEvent>) 
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>{}/.zeus/logs/gateway.out.log</string>
+    <string>{}/.zeus/logs/gateway.log</string>
     <key>StandardErrorPath</key>
-    <string>{}/.zeus/logs/gateway.err.log</string>
+    <string>{}/.zeus/logs/error.log</string>
 </dict>
 </plist>"#,
                 zeus_bin.display(),

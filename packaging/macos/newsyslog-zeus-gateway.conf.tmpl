@@ -8,10 +8,10 @@
 #   Z      = gzip (newsyslog default, widely supported)
 #
 # Thresholds tuned for gateway I/O patterns:
-#   - stdout is chatty (API requests, SSE streams) → 50 MB
-#   - stderr is rare (panics, errors) → 10 MB
+#   - gateway.log (stdout + info+ tracing; daily rotation is owned in-process, #321 — this is a size backstop) → 50 MB
+#   - error.log (stderr + warn+ tracing) → 10 MB
 #
 # Regression fence: if you change log paths in the plist template,
 # update this file AND the install.sh cleanup stanza.
-__LOG_DIR__/zeus-gateway.out.log  __USER__:admin  644  5  51200  *  Z
-__LOG_DIR__/zeus-gateway.err.log  __USER__:admin  644  5  10240  *  Z
+__LOG_DIR__/gateway.log  __USER__:admin  644  5  51200  *  Z
+__LOG_DIR__/error.log  __USER__:admin  644  5  10240  *  Z

@@ -36,13 +36,31 @@ impl Default for ModelFetchState {
     }
 }
 
+/// Normalize a user-entered Ollama service location into a URL root.
+///
+/// Accepts blanks (default/env), bare `host:port`, and full URLs. The returned
+/// value is slash-trimmed so callers can append `/api/tags` safely.
+pub fn normalize_ollama_host(input: &str) -> String {
+    let raw = if input.trim().is_empty() {
+        std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string())
+    } else {
+        input.trim().to_string()
+    };
+    let with_scheme = if raw.starts_with("http://") || raw.starts_with("https://") {
+        raw
+    } else {
+        format!("http://{raw}")
+    };
+    with_scheme.trim_end_matches('/').to_string()
+}
+
 /// Fetch models from a provider's API. Returns model IDs on success, or an
 /// error string (surfaced on the Auth screen) on failure.
 ///
 /// Per-provider endpoints, ported verbatim from the pre-rebuild onboarding:
 /// - `anthropic` — `GET /v1/models`, `x-api-key`/OAuth headers; filter claude.
 /// - `openai` — `GET /v1/models`, bearer; filter gpt-/o1/o3/o4.
-/// - `ollama` — `GET {OLLAMA_HOST|localhost:11434}/api/tags`; `name` field.
+/// - `ollama` — `GET {auth input|OLLAMA_HOST|localhost:11434}/api/tags`; `name` field.
 /// - `groq` — `GET /openai/v1/models`, bearer.
 /// - `google` — `GET /v1beta/models?key=`; strip `models/` prefix, filter gemini.
 /// - `openrouter` — `GET /api/v1/models`, bearer; take top 20.
@@ -130,8 +148,7 @@ pub async fn fetch_models(provider_id: &str, api_key: &str) -> Result<Vec<String
             }
         }
         "ollama" => {
-            let base =
-                std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".into());
+            let base = normalize_ollama_host(api_key);
             let resp = client
                 .get(format!("{base}/api/tags"))
                 .send()

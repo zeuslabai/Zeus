@@ -308,9 +308,9 @@ fn generate_plist(zeus_path: &str) -> String {
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>{}/zeus-gateway.out.log</string>
+    <string>{}/gateway.log</string>
     <key>StandardErrorPath</key>
-    <string>{}/zeus-gateway.err.log</string>
+    <string>{}/error.log</string>
     <key>WorkingDirectory</key>
     <string>{}</string>
     <key>EnvironmentVariables</key>

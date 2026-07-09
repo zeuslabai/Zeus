@@ -42,14 +42,16 @@ pub fn spawn_gateway_detached() {
 
     let log_dir = dirs::home_dir().unwrap_or_default().join(".zeus").join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
+    // #321: raw stdout/stderr go to the same two stable files the gateway's
+    // tracing sinks use — gateway.log for stdout, error.log for panics/stderr.
     let out = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(log_dir.join("gateway.out.log"));
+        .open(log_dir.join("gateway.log"));
     let err = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(log_dir.join("gateway.err.log"));
+        .open(log_dir.join("error.log"));
 
     let mut cmd = std::process::Command::new(&exe);
     cmd.arg("gateway");
