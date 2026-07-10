@@ -194,6 +194,7 @@ pub struct App {
     pub chanconfig_screen: ChanConfigScreen,
     pub gateway_screen: GatewayScreen,
     pub agent_screen: AgentScreen,
+    agent_name_edited: bool,
     pub security_screen: SecurityScreen,
     pub features_screen: FeaturesScreen,
     voice_screen: VoiceScreen,
@@ -380,6 +381,7 @@ impl App {
             chanconfig_screen: ChanConfigScreen::new(),
             gateway_screen: GatewayScreen::new(),
             agent_screen: AgentScreen::new(),
+            agent_name_edited: false,
             security_screen: SecurityScreen::new(),
             features_screen: FeaturesScreen::default(),
             voice_screen: VoiceScreen::new(),
@@ -1081,15 +1083,22 @@ impl App {
         let persona = self.agent_screen.persona_name().to_string();
         cfg.persona = Some(persona.clone());
         let agent = cfg.agent.get_or_insert_with(Default::default);
+        let typed_name = self.agent_screen.name.trim();
         let wizard_name = self.agent_screen.summary_name();
-        let wizard_name_was_explicit = !self.agent_screen.name.trim().is_empty();
+        let wizard_name_was_explicit = !typed_name.is_empty();
         let existing_name_empty = agent
             .name
             .as_deref()
             .map(|name| name.trim().is_empty())
             .unwrap_or(true);
-        if wizard_name_was_explicit || existing_name_empty {
-            agent.name = Some(wizard_name);
+        if self.agent_name_edited || existing_name_empty {
+            let name = if self.agent_name_edited && wizard_name_was_explicit {
+                typed_name.to_string()
+            } else {
+                wizard_name
+            };
+            cfg.name = Some(name.clone());
+            agent.name = Some(name);
         }
         agent.persona = Some(persona);
 
@@ -1282,6 +1291,40 @@ impl App {
                 });
             }
 
+            if toggled.iter().any(|c| c == "mattermost") {
+                // Onboarding collects mattermost.{server_url,token,team_id} —
+                // maps 1:1 onto MattermostChannelConfig. team_id optional.
+                let team = val("mattermost.team_id");
+                let ch = cfg.channels.get_or_insert_with(Default::default);
+                ch.mattermost = Some(zeus_core::MattermostChannelConfig {
+                    server_url: val("mattermost.server_url"),
+                    token: val("mattermost.token"),
+                    team_id: if team.is_empty() { None } else { Some(team) },
+                    policy: None,
+                });
+            }
+
+            if toggled.iter().any(|c| c == "mqtt") {
+                // Onboarding collects mqtt.{broker_url,port,topic_prefix,
+                // username,password}. Port parses with the struct's 1883
+                // default; client_id/subscribe_topics/qos take defaults.
+                let port = val("mqtt.port").trim().parse::<u16>().unwrap_or(1883);
+                let user = val("mqtt.username");
+                let pass = val("mqtt.password");
+                let ch = cfg.channels.get_or_insert_with(Default::default);
+                ch.mqtt = Some(zeus_core::MqttChannelConfig {
+                    broker_url: val("mqtt.broker_url"),
+                    port,
+                    client_id: None,
+                    topic_prefix: val("mqtt.topic_prefix"),
+                    qos: 1,
+                    subscribe_topics: Vec::new(),
+                    username: if user.is_empty() { None } else { Some(user) },
+                    password: if pass.is_empty() { None } else { Some(pass) },
+                    policy: None,
+                });
+            }
+
             if toggled.iter().any(|c| c == "x_twitter") {
                 // Onboarding now uses X's official credential names:
                 // bearer_token, consumer_key, consumer_key_secret,
@@ -1301,6 +1344,172 @@ impl App {
                     auto_reply: false,
                     policy: None,
                     fanout: Vec::new(),
+                });
+            }
+
+            if toggled.iter().any(|c| c == "teams") {
+                // Onboarding collects teams.{tenant_id,client_id,client_secret,
+                // team_id,channel_id} — maps 1:1 onto TeamsChannelConfig.
+                // team_id/channel_id optional (empty string = unset downstream).
+                let ch = cfg.channels.get_or_insert_with(Default::default);
+                ch.teams = Some(zeus_core::TeamsChannelConfig {
+                    tenant_id: val("teams.tenant_id"),
+                    client_id: val("teams.client_id"),
+                    client_secret: val("teams.client_secret"),
+                    team_id: val("teams.team_id"),
+                    channel_id: val("teams.channel_id"),
+                    policy: None,
+                });
+            }
+
+            if toggled.iter().any(|c| c == "webchat") {
+                // Onboarding collects webchat.{websocket_path,auth_token} —
+                // both optional (WebChat needs no creds; the gateway serves it).
+                let ws_path = val("webchat.websocket_path");
+                let token = val("webchat.auth_token");
+                let ch = cfg.channels.get_or_insert_with(Default::default);
+                ch.webchat = Some(zeus_core::WebChatChannelConfig {
+                    websocket_path: if ws_path.is_empty() { None } else { Some(ws_path) },
+                    auth_token: if token.is_empty() { None } else { Some(token) },
+                    allowed_origins: Vec::new(),
+                    max_message_size: None,
+                    connection_timeout_secs: None,
+                    policy: None,
+                });
+            }
+
+            if toggled.iter().any(|c| c == "googlechat") {
+                // Onboarding collects googlechat.{credentials_path,project_id}.
+                // service_account_key/access_token are file/dev paths — not
+                // collected by the wizard.
+                let project = val("googlechat.project_id");
+                let ch = cfg.channels.get_or_insert_with(Default::default);
+                ch.googlechat = Some(zeus_core::GoogleChatChannelConfig {
+                    service_account_key: String::new(),
+                    credentials_path: Some(val("googlechat.credentials_path")),
+                    access_token: None,
+                    webhook_path: None,
+                    project_id: if project.is_empty() { None } else { Some(project) },
+                    policy: None,
+                });
+            }
+
+            if toggled.iter().any(|c| c == "nextcloud") {
+                // Onboarding collects nextcloud.{server_url,username,password}
+                // — maps 1:1 onto NextcloudChannelConfig.
+                let ch = cfg.channels.get_or_insert_with(Default::default);
+                ch.nextcloud = Some(zeus_core::NextcloudChannelConfig {
+                    server_url: val("nextcloud.server_url"),
+                    username: val("nextcloud.username"),
+                    password: val("nextcloud.password"),
+                    poll_interval_secs: None,
+                    policy: None,
+                });
+            }
+
+            if toggled.iter().any(|c| c == "nostr") {
+                // Onboarding collects nostr.{private_key,relay_urls} — the key
+                // field accepts hex or nsec; route to the matching struct field.
+                let key = val("nostr.private_key");
+                let relays: Vec<String> = val("nostr.relay_urls")
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                let is_nsec = key.starts_with("nsec1");
+                let ch = cfg.channels.get_or_insert_with(Default::default);
+                ch.nostr = Some(zeus_core::NostrChannelConfig {
+                    private_key: if is_nsec { String::new() } else { key.clone() },
+                    nsec: if is_nsec { Some(key) } else { None },
+                    public_key: None,
+                    relay_urls: relays,
+                    policy: None,
+                });
+            }
+
+            if toggled.iter().any(|c| c == "line") {
+                let secret = val("line.channel_secret");
+                let ch = cfg.channels.get_or_insert_with(Default::default);
+                ch.line = Some(zeus_core::LineChannelConfig {
+                    channel_access_token: val("line.channel_access_token"),
+                    channel_secret: if secret.is_empty() { None } else { Some(secret) },
+                    webhook_path: None,
+                    policy: None,
+                });
+            }
+
+            if toggled.iter().any(|c| c == "feishu") {
+                let vtoken = val("feishu.verification_token");
+                let ch = cfg.channels.get_or_insert_with(Default::default);
+                ch.feishu = Some(zeus_core::FeishuChannelConfig {
+                    app_id: val("feishu.app_id"),
+                    app_secret: val("feishu.app_secret"),
+                    encrypt_key: None,
+                    verification_token: if vtoken.is_empty() { None } else { Some(vtoken) },
+                    webhook_path: None,
+                    use_lark: false,
+                    policy: None,
+                });
+            }
+
+            if toggled.iter().any(|c| c == "zalo") {
+                let atoken = val("zalo.access_token");
+                let ch = cfg.channels.get_or_insert_with(Default::default);
+                ch.zalo = Some(zeus_core::ZaloChannelConfig {
+                    app_id: val("zalo.app_id"),
+                    secret_key: val("zalo.secret_key"),
+                    access_token: if atoken.is_empty() { None } else { Some(atoken) },
+                    refresh_token: None,
+                    webhook_path: None,
+                    policy: None,
+                });
+            }
+
+            if toggled.iter().any(|c| c == "sms") {
+                let ch = cfg.channels.get_or_insert_with(Default::default);
+                ch.sms = Some(zeus_core::SmsChannelConfig {
+                    account_sid: val("sms.account_sid"),
+                    auth_token: val("sms.auth_token"),
+                    from_number: val("sms.from_number"),
+                    webhook_path: None,
+                    policy: None,
+                });
+            }
+
+            if toggled.iter().any(|c| c == "twilio_whatsapp") {
+                let ch = cfg.channels.get_or_insert_with(Default::default);
+                ch.twilio_whatsapp = Some(zeus_core::TwilioWhatsAppChannelConfig {
+                    account_sid: val("twilio_whatsapp.account_sid"),
+                    auth_token: val("twilio_whatsapp.auth_token"),
+                    whatsapp_number: val("twilio_whatsapp.whatsapp_number"),
+                    sandbox: true,
+                    webhook_path: None,
+                    status_callback_url: None,
+                    policy: None,
+                });
+            }
+
+            if toggled.iter().any(|c| c == "voice") {
+                let base_url = val("voice.webhook_base_url");
+                let ch = cfg.channels.get_or_insert_with(Default::default);
+                ch.voice = Some(zeus_core::VoiceChannelConfigCore {
+                    account_sid: val("voice.account_sid"),
+                    auth_token: val("voice.auth_token"),
+                    from_number: val("voice.from_number"),
+                    webhook_base_url: if base_url.is_empty() { None } else { Some(base_url) },
+                    webhook_port: None,
+                    tts_voice: None,
+                    incoming_greeting: None,
+                    policy: None,
+                });
+            }
+
+            if toggled.iter().any(|c| c == "bluebubbles") {
+                let ch = cfg.channels.get_or_insert_with(Default::default);
+                ch.bluebubbles = Some(zeus_core::BlueBubblesChannelConfig {
+                    server_url: val("bluebubbles.server_url"),
+                    password: val("bluebubbles.password"),
+                    policy: None,
                 });
             }
 
@@ -2152,7 +2361,9 @@ impl App {
                 } else if self.current_step == Step::Orchestration as usize {
                     self.orchestration_screen.input_char(c);
                 } else if self.current_step == Step::Agent as usize {
+                    let editing_name = self.agent_screen.focused_field == 0;
                     self.agent_screen.input_char(c);
+                    self.agent_name_edited |= editing_name;
                 } else if self.current_step == Step::Gateway as usize {
                     // Gateway: 1/2/3 toggle the three FEATURES pills; other
                     // chars type into the focused BIND field (0=host, 1=port).
@@ -2235,7 +2446,9 @@ impl App {
                 } else if self.current_step == Step::Orchestration as usize {
                     self.orchestration_screen.input_backspace();
                 } else if self.current_step == Step::Agent as usize {
+                    let editing_name = self.agent_screen.focused_field == 0;
                     self.agent_screen.input_backspace();
+                    self.agent_name_edited |= editing_name;
                 } else if self.current_step == Step::Gateway as usize {
                     if self.gateway_screen.focused_field == 0 {
                         self.gateway_screen.host.pop();
@@ -2928,20 +3141,51 @@ mod persist_tests {
     //! would let one test's tempdir leak into another's persist.
 
     use super::*;
-    use std::sync::Mutex;
 
-    // Serializes every test that sets ZEUS_HOME (process-global).
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // Serializes every test that sets ZEUS_HOME (process-global) — shared
+    // crate-wide (#334): model_fetch tests mutate environ in the same binary.
+    use crate::test_env::ENV_LOCK;
+
+    /// RAII: lock + set `ZEUS_HOME` + restore previous value on drop (#334).
+    /// Poison-tolerant (`into_inner`) so one real failure can't cascade into
+    /// spurious `PoisonError`s, and drop-based restore is panic-safe so a
+    /// failing test can't leak its tempdir ZEUS_HOME into later tests.
+    struct ZeusHomeGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for ZeusHomeGuard {
+        fn drop(&mut self) {
+            // SAFETY: still serialized — the lock is released after this runs.
+            unsafe {
+                match self.previous.take() {
+                    Some(prev) => std::env::set_var("ZEUS_HOME", prev),
+                    None => std::env::remove_var("ZEUS_HOME"),
+                }
+            }
+        }
+    }
+
+    fn zeus_home_guard(dir: &std::path::Path) -> ZeusHomeGuard {
+        let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var_os("ZEUS_HOME");
+        // SAFETY: serialized by ENV_LOCK for the guard's whole lifetime.
+        unsafe {
+            std::env::set_var("ZEUS_HOME", dir);
+        }
+        ZeusHomeGuard {
+            _lock: lock,
+            previous,
+        }
+    }
 
     /// #309: Re-running onboarding on an existing config must be a no-op for
     /// wizard-owned top-level fields when the user just presses through it.
     #[test]
     fn new_from_disk_hydrates_existing_config_before_persist() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("ZEUS_HOME", tmp.path());
-        }
+        let _env = zeus_home_guard(tmp.path());
 
         let home = dirs::home_dir().expect("home dir");
         let workspace = home.join(".zeus/workspace-real");
@@ -2993,10 +3237,6 @@ port = 9099
             saved.agent.and_then(|a| a.name).as_deref(),
             Some("zeus-titan")
         );
-
-        unsafe {
-            std::env::remove_var("ZEUS_HOME");
-        }
     }
 
     /// #309 defense-in-depth: if persist is invoked with a fresh/default wizard
@@ -3004,11 +3244,8 @@ port = 9099
     /// the host-derived suggestion.
     #[test]
     fn persist_preserves_existing_agent_name_when_wizard_name_is_empty() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("ZEUS_HOME", tmp.path());
-        }
+        let _env = zeus_home_guard(tmp.path());
 
         std::fs::write(
             tmp.path().join("config.toml"),
@@ -3029,10 +3266,6 @@ persona = "Innovator"
         );
         let cfg = app.collect_and_persist().expect("persist should succeed");
         assert_eq!(cfg.agent.and_then(|a| a.name).as_deref(), Some("zeus-real"));
-
-        unsafe {
-            std::env::remove_var("ZEUS_HOME");
-        }
     }
 
     /// 🔴 SACRED no-clobber guard at the config.toml layer: a pre-existing
@@ -3043,11 +3276,8 @@ persona = "Innovator"
     /// `Config::load()`, this section would vanish and this test would fail.
     #[test]
     fn council_section_survives_persist_round_trip() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("ZEUS_HOME", tmp.path());
-        }
+        let _env = zeus_home_guard(tmp.path());
 
         // Seed a config.toml with a hand-set [council] section + a valid model
         // so Config::load() returns a real (non-default) config. The [council]
@@ -3090,10 +3320,6 @@ persona = "Innovator"
             written.contains("onboarding_complete = true"),
             "persisted config must mark onboarding complete; got:\n{written}"
         );
-
-        unsafe {
-            std::env::remove_var("ZEUS_HOME");
-        }
     }
 
     /// #290: a fresh onboarding config has no `[gateway]` section yet, so
@@ -3101,11 +3327,8 @@ persona = "Innovator"
     /// the user's custom endpoint.
     #[test]
     fn gateway_host_port_persist_when_section_absent() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("ZEUS_HOME", tmp.path());
-        }
+        let _env = zeus_home_guard(tmp.path());
 
         std::fs::write(
             tmp.path().join("config.toml"),
@@ -3135,10 +3358,6 @@ persona = "Innovator"
             written.contains("port = 9099"),
             "persisted config must include custom gateway port; got:\n{written}"
         );
-
-        unsafe {
-            std::env::remove_var("ZEUS_HOME");
-        }
     }
 
     /// P0 #185: a plain provider API key lands in config.toml `[credentials]`
@@ -3147,11 +3366,8 @@ persona = "Innovator"
     /// only source, no mirror.
     #[test]
     fn plain_api_key_persists_to_config_credentials_not_env() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("ZEUS_HOME", tmp.path());
-        }
+        let _env = zeus_home_guard(tmp.path());
 
         // Pre-existing .env with a Discord token that must NOT be touched.
         std::fs::write(
@@ -3187,10 +3403,6 @@ persona = "Innovator"
             !env.contains("ANTHROPIC_API_KEY"),
             "no .env mirror — config.toml is the single source; got:\n{env}"
         );
-
-        unsafe {
-            std::env::remove_var("ZEUS_HOME");
-        }
     }
 
     /// P0 #185: an OAuth setup-token (`sk-ant-oat…`) routes to
@@ -3199,11 +3411,8 @@ persona = "Innovator"
     /// It must NOT land in `[credentials]` (that path sends x-api-key → 401).
     #[test]
     fn oauth_token_routes_to_provider_credentials_not_credentials() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("ZEUS_HOME", tmp.path());
-        }
+        let _env = zeus_home_guard(tmp.path());
 
         std::fs::write(
             tmp.path().join("config.toml"),
@@ -3233,10 +3442,6 @@ persona = "Innovator"
             !toml.contains("ANTHROPIC_API_KEY"),
             "OAuth token must NOT go into [credentials] (→ x-api-key 401); got:\n{toml}"
         );
-
-        unsafe {
-            std::env::remove_var("ZEUS_HOME");
-        }
     }
 
     /// MiniMax appears in the Auth screen as a normal API-key provider
@@ -3245,11 +3450,8 @@ persona = "Innovator"
     /// this value in TUI onboarding.
     #[test]
     fn minimax_plain_api_key_persists_to_config_credentials() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("ZEUS_HOME", tmp.path());
-        }
+        let _env = zeus_home_guard(tmp.path());
 
         std::fs::write(
             tmp.path().join("config.toml"),
@@ -3276,10 +3478,6 @@ persona = "Innovator"
             !toml.contains("[provider_credentials.minimax]"),
             "plain MiniMax API keys must not be stored as OAuth/provider credentials; got:\n{toml}"
         );
-
-        unsafe {
-            std::env::remove_var("ZEUS_HOME");
-        }
     }
 
     /// #257 OAuth-edge: a NON-Anthropic OAuth token (selected via auth_mode =
@@ -3296,7 +3494,6 @@ persona = "Innovator"
     /// auth path.
     #[test]
     fn non_anthropic_oauth_routes_to_provider_credentials_not_dropped() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         // (provider-screen index, canonical section id, the provider's env_key.
         //  Indices match screens/providers.rs PROVIDERS order: gemini-cli=4,
@@ -3315,9 +3512,7 @@ persona = "Innovator"
 
         for (provider_idx, section, env_key) in cases {
             let tmp = tempfile::tempdir().unwrap();
-            unsafe {
-                std::env::set_var("ZEUS_HOME", tmp.path());
-            }
+            let _env = zeus_home_guard(tmp.path());
             std::fs::write(
                 tmp.path().join("config.toml"),
                 "model = \"anthropic/claude-opus-4-8\"\n",
@@ -3371,10 +3566,6 @@ persona = "Innovator"
                  cred_type=oauth → AuthMethod::OAuth (Bearer), got {:?}",
                 client.auth_method()
             );
-
-            unsafe {
-                std::env::remove_var("ZEUS_HOME");
-            }
         }
     }
 
@@ -3382,11 +3573,8 @@ persona = "Innovator"
     /// `ANTHROPIC_API_KEY=` clobber when the user skipped auth entry).
     #[test]
     fn empty_api_key_does_not_touch_env() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("ZEUS_HOME", tmp.path());
-        }
+        let _env = zeus_home_guard(tmp.path());
 
         std::fs::write(
             tmp.path().join("config.toml"),
@@ -3405,10 +3593,6 @@ persona = "Innovator"
                 !env.contains("ANTHROPIC_API_KEY="),
                 "empty key must not write a key line; got:\n{env}"
             );
-        }
-
-        unsafe {
-            std::env::remove_var("ZEUS_HOME");
         }
     }
 
@@ -4121,6 +4305,51 @@ persona = "Innovator"
         );
     }
 
+    #[test]
+    fn typed_agent_name_persists_to_top_level_and_agent_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _env = zeus_home_guard(tmp.path());
+
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            r#"model = "anthropic/claude-opus-4-8"
+name = "zeus-titan"
+
+[agent]
+name = "zeus-titan"
+persona = "The Strategist"
+"#,
+        )
+        .unwrap();
+
+        let mut app = App::new();
+        app.current_step = Step::Agent as usize;
+        for ch in "operator-seat".chars() {
+            app.handle_key(KeyCode::Char(ch));
+        }
+        assert!(
+            app.agent_name_edited,
+            "typing into the Agent name field must mark the name as operator-edited"
+        );
+
+        let cfg = app.collect_and_persist().expect("persist should succeed");
+        assert_eq!(cfg.name.as_deref(), Some("operator-seat"));
+        assert_eq!(
+            cfg.agent.as_ref().and_then(|agent| agent.name.as_deref()),
+            Some("operator-seat")
+        );
+
+        let toml = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(
+            toml.contains("name = \"operator-seat\""),
+            "typed operator name must persist as config.toml name=; got:\n{toml}"
+        );
+        assert!(
+            !toml.contains("zeus-titan"),
+            "hostname/default name must not win over typed operator name; got:\n{toml}"
+        );
+    }
+
     /// #270 — dispatcher-level bleed-through guard. Banked gotcha:
     /// `Terminal::draw()` resets its back-buffer every frame, so driving
     /// `frame()` twice through a `TestBackend` CANNOT catch bleed (each draw
@@ -4195,11 +4424,8 @@ persona = "Innovator"
     /// Proves field→struct flow end-to-end through the persist round-trip.
     #[test]
     fn irc_and_matrix_channels_persist_round_trip() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("ZEUS_HOME", tmp.path());
-        }
+        let _env = zeus_home_guard(tmp.path());
         std::fs::write(
             tmp.path().join("config.toml"),
             "model = \"anthropic/claude-opus-4-8\"\nonboarding_complete = false\n",
@@ -4244,10 +4470,6 @@ persona = "Innovator"
         assert_eq!(matrix.homeserver, "https://matrix.org");
         assert_eq!(matrix.username.as_deref(), Some("@zeus:matrix.org"));
         assert_eq!(matrix.password.as_deref(), Some("matrix-secret"));
-
-        unsafe {
-            std::env::remove_var("ZEUS_HOME");
-        }
     }
 
     /// Bot-message policy (`allow_bots`) selected in the chanconfig step must be
@@ -4256,11 +4478,8 @@ persona = "Innovator"
     /// serialized `config.toml` text for a bot-capable channel (discord).
     #[test]
     fn allow_bots_policy_persists_verbatim() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("ZEUS_HOME", tmp.path());
-        }
+        let _env = zeus_home_guard(tmp.path());
         std::fs::write(
             tmp.path().join("config.toml"),
             "model = \"anthropic/claude-opus-4-8\"\nonboarding_complete = false\n",
@@ -4297,21 +4516,14 @@ persona = "Innovator"
             written.contains("allow_bots = \"on\""),
             "config-gen must write `allow_bots = \"on\"` for a bot channel; got:\n{written}"
         );
-
-        unsafe {
-            std::env::remove_var("ZEUS_HOME");
-        }
     }
 
     /// The default bot-message policy (when the user never touches the selector)
     /// must be `mentions` — matching the old TUI behavior the rebuild dropped.
     #[test]
     fn allow_bots_policy_defaults_to_mentions() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("ZEUS_HOME", tmp.path());
-        }
+        let _env = zeus_home_guard(tmp.path());
         std::fs::write(
             tmp.path().join("config.toml"),
             "model = \"anthropic/claude-opus-4-8\"\nonboarding_complete = false\n",
@@ -4336,21 +4548,14 @@ persona = "Innovator"
             Some("mentions"),
             "default allow_bots policy must be `mentions`"
         );
-
-        unsafe {
-            std::env::remove_var("ZEUS_HOME");
-        }
     }
 
     /// X/Twitter onboarding must persist the official X credential names instead
     /// of silently dropping the channel due to the old api_key/api_secret naming.
     #[test]
     fn x_twitter_official_credentials_persist() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var("ZEUS_HOME", tmp.path());
-        }
+        let _env = zeus_home_guard(tmp.path());
         std::fs::write(
             tmp.path().join("config.toml"),
             r#"model = "anthropic/claude-sonnet-4"
@@ -4413,10 +4618,6 @@ onboarding_complete = false
         assert_eq!(saved_x.access_token_secret, "access-secret");
         assert_eq!(saved_x.client_id, "client-id");
         assert_eq!(saved_x.client_secret, "client-secret");
-
-        unsafe {
-            std::env::remove_var("ZEUS_HOME");
-        }
     }
 
     /// #273 registry-completeness guard: EVERY channel id in the onboarding
@@ -4431,10 +4632,30 @@ onboarding_complete = false
         use std::collections::HashSet;
 
         // Channels with a live persist arm in `collect_and_persist`.
-        let persisted: HashSet<&str> =
-            ["telegram", "discord", "slack", "irc", "matrix", "x_twitter"]
-                .into_iter()
-                .collect();
+        let persisted: HashSet<&str> = [
+            "telegram",
+            "discord",
+            "slack",
+            "irc",
+            "matrix",
+            "x_twitter",
+            "mattermost",
+            "mqtt",
+            "teams",
+            "webchat",
+            "googlechat",
+            "nextcloud",
+            "nostr",
+            "line",
+            "feishu",
+            "zalo",
+            "sms",
+            "twilio_whatsapp",
+            "voice",
+            "bluebubbles",
+        ]
+        .into_iter()
+        .collect();
         // Channels intentionally NOT persisted (see the DEFERRED comment block):
         //   email     — partial creds (no imap_*); whatsapp — field↔struct mismatch;
         //   signal/imessage — no struct-matching creds.

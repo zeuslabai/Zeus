@@ -308,6 +308,8 @@ impl AuthScreen {
             // Input content
             let display_val = if self.api_key.is_empty() {
                 field_hint.to_string()
+            } else if is_ollama {
+                self.api_key.trim_end_matches('/').to_string()
             } else {
                 // Mask the key as `***{last4}` (JSX 784). Char-based via
                 // rev().take(4) so a non-ASCII paste can't panic on a byte split.
@@ -355,23 +357,32 @@ impl AuthScreen {
 
             // Validation hint
             if !self.api_key.is_empty() {
-                let valid = self
-                    .api_key
-                    .starts_with(self.key_fmt.replace("...", "").as_str());
-                if valid {
+                if is_ollama {
                     buf.set_string(
                         x,
                         cy,
-                        "✓ Key format matches expected prefix",
+                        "✓ URL will be polled at /api/tags",
                         Style::default().fg(theme::GREEN),
                     );
                 } else {
-                    buf.set_string(
-                        x,
-                        cy,
-                        "✕ Key format doesn't match expected prefix",
-                        Style::default().fg(theme::RED),
-                    );
+                    let valid = self
+                        .api_key
+                        .starts_with(self.key_fmt.replace("...", "").as_str());
+                    if valid {
+                        buf.set_string(
+                            x,
+                            cy,
+                            "✓ Key format matches expected prefix",
+                            Style::default().fg(theme::GREEN),
+                        );
+                    } else {
+                        buf.set_string(
+                            x,
+                            cy,
+                            "✕ Key format doesn't match expected prefix",
+                            Style::default().fg(theme::RED),
+                        );
+                    }
                 }
                 cy += 1;
             }
@@ -726,6 +737,32 @@ mod tests {
         assert!(
             preview_row.ends_with('│'),
             "write-preview card must span the normal-width auth pane; got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn ollama_url_renders_plaintext_and_skips_key_prefix_warning() {
+        let rendered =
+            render_auth_to_string(100, "http://localhost:11434", "ollama", "sk-ollama-...");
+        assert!(
+            rendered.contains("http://localhost:11434"),
+            "Ollama host is a URL, not a secret; got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("OLLAMA_HOST = \"http://localhost:11434\""),
+            "Ollama preview must write the plaintext host; got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("URL will be polled at /api/tags"),
+            "Ollama validation should describe URL polling; got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("Key format"),
+            "Ollama URL mode must not use API-key prefix validation; got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("***1434"),
+            "Ollama URL must not be masked like a secret; got:\n{rendered}"
         );
     }
 

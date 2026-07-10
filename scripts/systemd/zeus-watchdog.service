@@ -1,0 +1,13 @@
+[Unit]
+Description=Zeus Gateway Health-Poll Watchdog
+After=zeus-gateway.service
+Requires=zeus-gateway.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/zeus-watchdog.sh
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

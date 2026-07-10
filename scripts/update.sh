@@ -81,7 +81,7 @@ while [ $# -gt 0 ]; do
             printf "  --clean           cargo clean before building\n"
             printf "  --no-restart      Install the new binary but leave the gateway stopped\n"
             printf "  --fresh           Clear sessions after the update\n"
-            printf "  --with-identity   Re-stamp workspace identity (AGENTS.md/SOUL.md) via deploy-identity.sh --force\n"
+            printf "  --with-identity   Re-stamp workspace identity docs via deploy-identity.sh --force (SOUL.md stays onboarding-owned)\n"
             printf "  --zeus-home DIR   Zeus home directory (default: ~/.zeus)\n"
             printf "  -h, --help        Show this help\n"
             exit 0
@@ -93,7 +93,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# --with-identity adds one extra step (workspace identity refresh).
+# --with-identity adds one extra step (workspace identity refresh; SOUL.md stays onboarding-owned).
 $WITH_IDENTITY && total_steps=9
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -281,14 +281,14 @@ NEW_VER="$("$INSTALLED_BINARY" --version 2>/dev/null || echo 'unknown')"
 ok "Installed: $INSTALLED_BINARY ($NEW_VER)"
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Phase 6b: Refresh workspace identity (optional, --with-identity)
+# Phase 6b: Refresh workspace identity docs (optional, --with-identity)
 # ═════════════════════════════════════════════════════════════════════════════
-# Re-stamp AGENTS.md / SOUL.md / HEARTBEAT.md / etc. from the (now-updated) repo's
+# Re-stamp AGENTS.md / IDENTITY.md / HEARTBEAT.md / etc. from the (now-updated) repo's
 # deploy-identity.sh. Runs BEFORE the restart so the gateway comes up with fresh
 # identity. The binary swap alone does NOT refresh workspace templates — mirrors
 # install.sh's --with-identity behaviour.
 if $WITH_IDENTITY; then
-    step "Refresh workspace identity"
+    step "Refresh workspace identity docs"
     DEPLOY_IDENTITY="$REPO_ROOT/scripts/deploy-identity.sh"
     if [ -f "$DEPLOY_IDENTITY" ]; then
         info "Running deploy-identity.sh --force"
@@ -316,34 +316,98 @@ else
         Darwin)
             # Symmetric with Phase 4 bootout: reload the SYSTEM daemon
             # (com.zeus.gateway) so launchd manages + KeepAlive-respawns the NEW
-            # binary and it survives reboot. Fall back to the binary's own daemon
-            # manager, then a bare nohup, for non-standard installs.
-            if [ -f /Library/LaunchDaemons/com.zeus.gateway.plist ] && \
-               $SUDO launchctl bootstrap system /Library/LaunchDaemons/com.zeus.gateway.plist 2>/dev/null; then
+            # binary and it survives reboot.
+            #
+            # #333 invariants: supervised restart or LOUD failure — every
+            # fallback names which check failed, and we never nohup while
+            # launchd still owns a copy (bootout first, kickstart -k if a
+            # loaded service is the reason bootstrap failed).
+            DARWIN_PLIST=/Library/LaunchDaemons/com.zeus.gateway.plist
+            if [ -f "$DARWIN_PLIST" ] && \
+               $SUDO launchctl bootstrap system "$DARWIN_PLIST" 2>/dev/null; then
                 $SUDO launchctl enable system/com.zeus.gateway 2>/dev/null || true
                 ok "Gateway reloaded via launchd (com.zeus.gateway)"
-            elif zeus daemon start 2>/dev/null; then
-                ok "Gateway started via launchd (zeus daemon)"
+            elif [ -f "$DARWIN_PLIST" ] && \
+                 $SUDO launchctl print system/com.zeus.gateway >/dev/null 2>&1; then
+                # bootstrap failed BECAUSE the service is already loaded
+                # (Phase 4 bootout didn't take, or a concurrent load). launchd
+                # owns a copy — restart it in place rather than spawning a
+                # second writer.
+                warn "launchctl bootstrap failed: service already loaded — restarting in place"
+                if $SUDO launchctl kickstart -k system/com.zeus.gateway 2>/dev/null; then
+                    ok "Gateway restarted via launchd kickstart (com.zeus.gateway)"
+                else
+                    fail "launchctl kickstart -k failed for loaded service com.zeus.gateway — refusing to nohup a duplicate; inspect with: sudo launchctl print system/com.zeus.gateway"
+                fi
             else
-                nohup zeus gateway >"$ZEUS_HOME/logs/gateway.out.log" 2>"$ZEUS_HOME/logs/gateway.err.log" &
-                ok "Gateway started via nohup (launchd unavailable)"
+                # Name WHICH check failed before falling back.
+                if [ ! -f "$DARWIN_PLIST" ]; then
+                    warn "launchd path unavailable: plist missing ($DARWIN_PLIST)"
+                else
+                    warn "launchd path unavailable: bootstrap failed and service not loaded (sudo denied or plist rejected — check: sudo launchctl bootstrap system $DARWIN_PLIST)"
+                fi
+                if zeus daemon start 2>/dev/null; then
+                    ok "Gateway started via launchd (zeus daemon)"
+                else
+                    warn "zeus daemon start failed — falling back to unsupervised nohup"
+                    # Ensure launchd does not still own a copy before spawning
+                    # an unmanaged one (KeepAlive respawn = duplicate writer).
+                    $SUDO launchctl bootout system "$DARWIN_PLIST" 2>/dev/null || true
+                    nohup zeus gateway >"$ZEUS_HOME/logs/gateway.out.log" 2>"$ZEUS_HOME/logs/gateway.err.log" &
+                    warn "Gateway started via nohup — UNSUPERVISED: no KeepAlive, will not survive reboot"
+                fi
             fi
             ;;
         FreeBSD)
-            $SUDO sysrc zeus_gateway_enable=YES >/dev/null 2>&1 || true
-            if [ -f /usr/local/etc/rc.d/zeus_gateway ] && $SUDO service zeus_gateway restart >/dev/null 2>&1; then
-                ok "Gateway restarted via rc.d (zeus_gateway)"
+            # #333 invariants: name which check failed; never leave rc.d
+            # enabled around a nohup gateway (reboot would start a SECOND
+            # writer via rc.d while the nohup one still runs).
+            FBSD_RCD=/usr/local/etc/rc.d/zeus_gateway
+            if [ -f "$FBSD_RCD" ]; then
+                $SUDO sysrc zeus_gateway_enable=YES >/dev/null 2>&1 || \
+                    warn "sysrc zeus_gateway_enable=YES failed (sudo denied?)"
+                if $SUDO service zeus_gateway restart >/dev/null 2>&1; then
+                    ok "Gateway restarted via rc.d (zeus_gateway)"
+                else
+                    warn "rc.d path unavailable: 'service zeus_gateway restart' failed (sudo denied or rc script error — check: sudo service zeus_gateway restart)"
+                    # Stop any half-started service copy and DISABLE rc.d so a
+                    # reboot doesn't spawn a duplicate alongside the nohup one.
+                    $SUDO service zeus_gateway stop >/dev/null 2>&1 || true
+                    $SUDO sysrc zeus_gateway_enable=NO >/dev/null 2>&1 || \
+                        warn "could not disable rc.d (zeus_gateway_enable stays YES) — a reboot may start a DUPLICATE gateway"
+                    nohup zeus gateway >"$ZEUS_HOME/logs/gateway.out.log" 2>"$ZEUS_HOME/logs/gateway.err.log" &
+                    warn "Gateway started via nohup — UNSUPERVISED: rc.d disabled to prevent reboot duplicates; re-enable with: sudo sysrc zeus_gateway_enable=YES && sudo service zeus_gateway start"
+                fi
             else
+                warn "rc.d path unavailable: rc script missing ($FBSD_RCD)"
                 nohup zeus gateway >"$ZEUS_HOME/logs/gateway.out.log" 2>"$ZEUS_HOME/logs/gateway.err.log" &
-                ok "Gateway started via nohup (no rc.d service)"
+                warn "Gateway started via nohup — UNSUPERVISED: no rc.d service, will not survive reboot"
             fi
             ;;
         Linux)
-            if command -v systemctl >/dev/null 2>&1 && systemctl --user restart zeus-gateway 2>/dev/null; then
+            # #333 invariants: stop the user unit before any nohup (a running
+            # unit + nohup = two writers), and name which check failed —
+            # including the headless/no-logind case where systemctl --user
+            # has no bus.
+            if ! command -v systemctl >/dev/null 2>&1; then
+                warn "systemd path unavailable: systemctl not found"
+                nohup zeus gateway >"$ZEUS_HOME/logs/gateway.out.log" 2>"$ZEUS_HOME/logs/gateway.err.log" &
+                warn "Gateway started via nohup — UNSUPERVISED: no systemd, will not survive reboot"
+            elif ! systemctl --user show-environment >/dev/null 2>&1; then
+                # No user manager bus: headless/SSH session without lingering.
+                warn "systemd path unavailable: no user manager session (headless/no-logind?)"
+                info "Enable lingering so the user unit survives logout/reboot: loginctl enable-linger $(id -un)"
+                nohup zeus gateway >"$ZEUS_HOME/logs/gateway.out.log" 2>"$ZEUS_HOME/logs/gateway.err.log" &
+                warn "Gateway started via nohup — UNSUPERVISED: user unit unreachable this session"
+            elif systemctl --user restart zeus-gateway 2>/dev/null; then
                 ok "Gateway restarted via systemd (zeus-gateway)"
             else
+                warn "systemd path unavailable: 'systemctl --user restart zeus-gateway' failed (unit missing? check: systemctl --user status zeus-gateway)"
+                # Make sure the unit isn't left running/half-started before
+                # spawning an unmanaged copy.
+                systemctl --user stop zeus-gateway 2>/dev/null || true
                 nohup zeus gateway >"$ZEUS_HOME/logs/gateway.out.log" 2>"$ZEUS_HOME/logs/gateway.err.log" &
-                ok "Gateway started via nohup (no systemd unit)"
+                warn "Gateway started via nohup — UNSUPERVISED: no working systemd unit, will not survive reboot"
             fi
             ;;
     esac
@@ -359,8 +423,22 @@ else
         i=$((i + 1))
     done
     if echo "$HEALTH" | grep -q '"ok"'; then
-        GWPID=$(pgrep -x zeus 2>/dev/null | head -1 || echo "?")
-        ok "Health check OK (gateway PID $GWPID)"
+        # #333: count gateway processes — head -1 on the PID list masked
+        # duplicate writers. >1 gateway = two processes sharing state dirs.
+        # NOTE: ps-based matching, not pgrep -f — verified on macOS that
+        # pgrep -f "zeus gateway" can return nothing while the gateway is
+        # demonstrably running (ps sees it). ps -o pid=,args= is portable
+        # across macOS/FreeBSD/Linux.
+        GWPIDS=$(ps ax -o pid=,args= 2>/dev/null | awk '/[z]eus gateway/ {print $1}')
+        GWCOUNT=$(printf '%s\n' "$GWPIDS" | grep -c . || true)
+        if [ "$GWCOUNT" -gt 1 ]; then
+            warn "DUPLICATE GATEWAYS: $GWCOUNT 'zeus gateway' processes running (PIDs: $(printf '%s' "$GWPIDS" | tr '\n' ' '))"
+            warn "Two gateways sharing ~/.zeus state — kill the unmanaged one: pkill -f 'zeus gateway' then restart via the service manager"
+        else
+            GWPID=$(printf '%s' "$GWPIDS" | head -1)
+            [ -n "$GWPID" ] || GWPID="?"
+            ok "Health check OK (gateway PID $GWPID)"
+        fi
     else
         warn "Health check failed — gateway may still be starting"
         info "Logs: tail -f $ZEUS_HOME/logs/gateway.err.log"

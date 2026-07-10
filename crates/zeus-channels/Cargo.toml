@@ -7,14 +7,15 @@ authors.workspace = true
 license.workspace = true
 
 [features]
-default = []
+default = ["audio"]
+audio = ["zeus-voice/audio"]
 matrix = ["dep:matrix-sdk"]
 
 [dependencies]
 hostname = "0.4"
 thiserror = "1"
 zeus-core = { workspace = true }
-zeus-voice = { workspace = true }
+zeus-voice = { workspace = true, default-features = false }
 
 # Async
 tokio = { workspace = true }

@@ -118,19 +118,8 @@ fn security_level_to_sandbox(level: &str) -> &'static str {
 /// #220: Generate starter workspace files (SOUL.md, AGENTS.md, MEMORY.md,
 /// HEARTBEAT.md) — shared by `onboarding_setup` (complete=true) and the
 /// legacy `POST /v1/onboarding/complete` handler so both paths stay identical.
-/// True when a `SOUL.md` is absent or still the install-time stub (#296), so it
-/// is safe to overwrite with the onboarding-generated soul. A customized soul
-/// (anything else) is preserved.
-fn soul_is_stub_or_missing(path: &std::path::Path) -> bool {
-    match std::fs::read_to_string(path) {
-        Err(_) => true,
-        Ok(s) => {
-            let t = s.trim();
-            t.is_empty() || (t.starts_with("# SOUL.md") && t.contains("Run 'zeus onboard'"))
-        }
-    }
-}
-
+/// SOUL.md writes delegate to zeus_core::write_onboarding_soul so CLI and WebUI
+/// share the same missing/stub/sludge-healing and custom-preserve policy (#326).
 pub fn generate_workspace_files(config: &zeus_core::Config) {
     let workspace = &config.workspace;
     if workspace.as_os_str().is_empty() {
@@ -145,39 +134,26 @@ pub fn generate_workspace_files(config: &zeus_core::Config) {
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| config.model.split('/').next().unwrap_or("zeus-agent"));
 
-    // #296/P1: write the SELECTED persona's soul, not generic boilerplate. If a
-    // persona is configured, resolve its on-disk archetype and render its prose;
-    // SOUL.md is force-written so it overwrites the install-time stub
-    // ("# SOUL.md — Run 'zeus onboard'"). Falls back to the generic soul only
-    // when no persona is configured or it can't be resolved.
-    let generic_soul = format!("# SOUL.md — {}\n\n_A focused, technically sharp Zeus AI agent. Direct, resourceful, gets things done._\n\n## Core Truths\n\n**Be genuinely helpful, not performatively helpful.** Skip filler — just help.\n\n**Have opinions.** You're allowed to disagree, prefer things, find stuff interesting.\n\n**Be resourceful before asking.** Try to figure it out. Read the file. Check the context.\n", agent_name);
+    // #296/#326: write the SELECTED persona's soul, not generic boilerplate.
+    // Onboarding is the only persona authority; it heals missing/stub/stock
+    // souls but preserves custom operator-authored souls.
+    let generic_soul = "A focused, technically sharp Zeus AI agent. Direct, resourceful, gets things done.".to_string();
     let persona_soul: Option<String> = config.persona.as_deref().filter(|p| !p.is_empty()).and_then(|sel| {
         let dir = zeus_core::default_config_dir().join("personalities");
         let reg = zeus_core::PersonaRegistry::load_from_dir(&dir).ok()?;
         reg.find(sel).map(|p| p.render_soul())
     });
-    if let Some(soul) = &persona_soul {
-        // Force-overwrite the stub with the picked persona's actual soul.
-        let _ = std::fs::write(workspace.join("SOUL.md"), soul);
-    }
+    let soul_body = persona_soul.as_deref().unwrap_or(&generic_soul);
+    let _ = zeus_core::write_onboarding_soul(&workspace.join("SOUL.md"), agent_name, soul_body, false);
 
     let files: &[(&str, String)] = &[
-        ("SOUL.md", generic_soul),
         ("AGENTS.md", format!("# AGENTS.md — {}\n\n## Every Session\n\nBefore doing anything else:\n1. Read `SOUL.md` — this is who you are\n2. Read `IDENTITY.md` — your fleet role\n3. Read `memory/` files for recent context\n\n## Quality First\n\n- **Review specs carefully** before writing code.\n- **Push code as you finish sections.**\n- **Careful work saves tons of time.**\n", agent_name)),
         ("MEMORY.md", format!("# MEMORY.md — {}\n\n_No memories stored yet. The agent will populate this over time._\n", agent_name)),
         ("HEARTBEAT.md", format!("# HEARTBEAT.md — {}\n\n_No proactive tasks configured. Add tasks here for the agent to execute periodically._\n", agent_name)),
     ];
     for (name, content) in files {
         let path = workspace.join(name);
-        if *name == "SOUL.md" {
-            // SOUL.md must overwrite the install-time stub. If a persona soul was
-            // already written above, skip. Otherwise write the generic soul when
-            // the file is missing or still the stub — never clobber a customized
-            // soul a user has written.
-            if persona_soul.is_none() && soul_is_stub_or_missing(&path) {
-                let _ = std::fs::write(&path, content);
-            }
-        } else if !path.exists() {
+        if !path.exists() {
             let _ = std::fs::write(&path, content);
         }
     }
@@ -648,21 +624,21 @@ mod tests {
 
         // Missing → overwritable.
         let _ = std::fs::remove_file(&p);
-        assert!(soul_is_stub_or_missing(&p));
+        assert!(zeus_core::soul_is_stub_or_missing(&p));
 
         // Install stub → overwritable.
         let mut f = std::fs::File::create(&p).unwrap();
         writeln!(f, "# SOUL.md — Run 'zeus onboard' to configure").unwrap();
         drop(f);
-        assert!(soul_is_stub_or_missing(&p));
+        assert!(zeus_core::soul_is_stub_or_missing(&p));
 
         // Blank → overwritable.
         std::fs::write(&p, "   \n").unwrap();
-        assert!(soul_is_stub_or_missing(&p));
+        assert!(zeus_core::soul_is_stub_or_missing(&p));
 
         // Real persona soul → preserved.
         std::fs::write(&p, "# SOUL.md — The Coordinator\n\nYou are the coordinator...\n").unwrap();
-        assert!(!soul_is_stub_or_missing(&p));
+        assert!(!zeus_core::soul_is_stub_or_missing(&p));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

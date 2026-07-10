@@ -243,6 +243,13 @@ impl WalletKeypair {
         bs58::encode(self.public_key_bytes()).into_string()
     }
 
+    /// Get the wallet address as a base58-encoded Solana address.
+    /// Alias for `public_key_base58()` — use this when the context is
+    /// specifically Solana address display, airdrop requests, or x402 headers.
+    pub fn address_base58(&self) -> String {
+        self.public_key_base58()
+    }
+
     /// SHA-256 hash of a message (utility for signing structured data)
     pub fn hash_message(message: &[u8]) -> Vec<u8> {
         let mut hasher = Sha256::new();

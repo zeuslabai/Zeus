@@ -679,3 +679,13 @@ pub async fn run_with_force_and_gateway(
     };
     Ok(just_onboarded)
 }
+
+/// #334: single process-wide lock for tests that mutate the process-global
+/// environment (`std::env::set_var`/`remove_var`). Two modules in the same
+/// test binary each holding their OWN env lock still race each other on
+/// `environ` — every env-mutating test in this crate must serialize here.
+#[cfg(test)]
+pub(crate) mod test_env {
+    use std::sync::Mutex;
+    pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
+}

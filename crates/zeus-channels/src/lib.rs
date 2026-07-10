@@ -812,12 +812,43 @@ impl ChannelManager {
         Ok(())
     }
 
-    /// Stop all channels
+    /// Stop all channels.
+    ///
+    /// #332 ②: every adapter logs a uniform `target=adapter` disconnect line
+    /// (mirroring the `connected` line in [`Self::start_all`]), with the
+    /// error reason when stop fails. One failing adapter no longer aborts the
+    /// sweep — the remaining adapters still stop and still log.
     pub async fn stop_all(&self) -> Result<()> {
+        let mut first_err: Option<zeus_core::Error> = None;
         for adapter in &self.adapters {
-            adapter.stop().await?;
+            match adapter.stop().await {
+                Ok(()) => {
+                    tracing::info!(
+                        target: "adapter",
+                        channel = adapter.channel_type(),
+                        event = "disconnected",
+                        reason = "shutdown",
+                        "adapter disconnected"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "adapter",
+                        channel = adapter.channel_type(),
+                        event = "disconnected",
+                        reason = %e,
+                        "adapter stop failed"
+                    );
+                    if first_err.is_none() {
+                        first_err = Some(e);
+                    }
+                }
+            }
         }
-        Ok(())
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     /// Take the message receiver

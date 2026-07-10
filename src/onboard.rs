@@ -228,7 +228,7 @@ pub fn run_onboard() -> Result<()> {
         }
     }
 
-    std::fs::write(&config_path, &config)?;
+    Config::write_config_toml_verified(&config_path, &config)?;
     println!("\nConfig written to {}", config_path.display());
 
     // 9. Create workspace structure
@@ -1238,18 +1238,11 @@ Investigate first, hypothesize, verify, then fix. Never patch symptoms.\n",
     };
 
     if overwrite {
-        // SOUL.md — personality (#296). When the picker already produced a full
-        // persona document (the selected archetype's prose), write it verbatim so
-        // the picked persona's soul lands in SOUL.md. Otherwise wrap the one-line
-        // tagline in the generic boilerplate.
-        let soul_content = if agent_soul.trim_start().starts_with("# SOUL.md") {
-            agent_soul.to_string()
-        } else {
-            format!(
-                "# SOUL.md — {agent_name}\n\n_{agent_soul}_\n\n## Core Truths\n\n**Be genuinely helpful, not performatively helpful.** Skip filler — just help.\n\n**Have opinions.** You're allowed to disagree, prefer things, find stuff interesting.\n\n**Be resourceful before asking.** Try to figure it out. Read the file. Check the context.\n\n**Earn trust through competence.** Be careful with external actions. Be bold with internal ones.\n\n## Vibe\n\nConcise when needed, thorough when it matters. Not a drone. Not a sycophant. Just good.\n\n## Continuity\n\nEach session, you wake up fresh. The files in your workspace _are_ your memory.\nRead them. Update them. They're how you persist.\n"
-            )
-        };
-        std::fs::write(&soul_path, soul_content)?;
+        // SOUL.md — personality (#296/#326). Onboarding is the only persona
+        // authority. It heals missing/stub/stock souls (including the old
+        // "an autonomous Zeus agent" sludge stamp) but preserves custom souls
+        // unless the operator explicitly chose overwrite above.
+        let _ = zeus_core::write_onboarding_soul(&soul_path, agent_name, agent_soul, true)?;
 
         // IDENTITY.md — role, coordinator, machine
         let hostname = std::process::Command::new("hostname")
@@ -1288,6 +1281,9 @@ Investigate first, hypothesize, verify, then fix. Never patch symptoms.\n",
 
         println!("Workspace identity files written for agent: {agent_name}");
     } else {
+        // Keep identity/directive files, but still let onboarding heal an absent,
+        // stub, or stock/sludge SOUL.md. Custom SOUL.md is preserved.
+        let _ = zeus_core::write_onboarding_soul(&soul_path, agent_name, agent_soul, false)?;
         println!("Keeping existing workspace files.");
     }
 
@@ -1523,7 +1519,7 @@ fn run_quick_setup(model: &str) -> Result<()> {
         }
     }
 
-    std::fs::write(&config_path, &config)?;
+    Config::write_config_toml_verified(&config_path, &config)?;
     println!("Config written to {}", config_path.display());
 
     create_workspace_structure(workspace, "zeus", "Zeus fleet agent", "", "", None)?;

@@ -14,15 +14,19 @@ path = "src/bin/server.rs"
 name = "zeus_mcp"
 path = "src/lib.rs"
 
+[features]
+default = ["audio"]
+audio = ["zeus-agent/audio", "zeus-channels/audio", "zeus-talos/audio"]
+
 [dependencies]
 zeus-core.workspace = true
-zeus-agent.workspace = true
+zeus-agent = { workspace = true, default-features = false }
 zeus-memory.workspace = true
 zeus-mnemosyne.workspace = true
 zeus-session.workspace = true
-zeus-talos.workspace = true
+zeus-talos = { workspace = true, default-features = false }
 zeus-llm.workspace = true
-zeus-channels.workspace = true
+zeus-channels = { workspace = true, default-features = false }
 chrono.workspace = true
 uuid.workspace = true
 tokio.workspace = true

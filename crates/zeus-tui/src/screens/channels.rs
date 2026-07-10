@@ -92,6 +92,123 @@ const CHANNELS: &[Channel] = &[
         sdk: "v2 API + OAuth 1.0a",
     },
     Channel {
+        id: "mattermost",
+        name: "Mattermost",
+        glyph: "MM",
+        color: theme::BLUE,
+        group: "Cloud APIs",
+        desc: "Channels, teams, self-hosted",
+        sdk: "REST + WebSocket API",
+    },
+    Channel {
+        id: "mqtt",
+        name: "MQTT",
+        glyph: "MQ",
+        color: theme::AMBER,
+        group: "Cloud APIs",
+        desc: "Pub/sub topics, IoT brokers",
+        sdk: "rumqttc client",
+    },
+    Channel {
+        id: "teams",
+        name: "MS Teams",
+        glyph: "TM",
+        color: theme::BLUE,
+        group: "Cloud APIs",
+        desc: "Teams channels via Graph API",
+        sdk: "Microsoft Graph API",
+    },
+    Channel {
+        id: "webchat",
+        name: "WebChat",
+        glyph: "WC",
+        color: theme::CYAN,
+        group: "Cloud APIs",
+        desc: "Embedded WebSocket chat",
+        sdk: "Axum WebSocket",
+    },
+    Channel {
+        id: "googlechat",
+        name: "Google Chat",
+        glyph: "GC",
+        color: theme::GREEN,
+        group: "Cloud APIs",
+        desc: "Spaces, DMs, service account",
+        sdk: "Google Chat REST API",
+    },
+    Channel {
+        id: "nextcloud",
+        name: "Nextcloud",
+        glyph: "NC",
+        color: theme::AMBER,
+        group: "Cloud APIs",
+        desc: "Talk rooms, self-hosted",
+        sdk: "Talk OCS API",
+    },
+    Channel {
+        id: "nostr",
+        name: "Nostr",
+        glyph: "NS",
+        color: theme::PURPLE,
+        group: "Cloud APIs",
+        desc: "Decentralized relays, DMs",
+        sdk: "NIP-01/NIP-04 WS",
+    },
+    Channel {
+        id: "line",
+        name: "LINE",
+        glyph: "LN",
+        color: theme::GREEN,
+        group: "Cloud APIs",
+        desc: "Messaging API, webhooks",
+        sdk: "LINE Messaging API",
+    },
+    Channel {
+        id: "feishu",
+        name: "Feishu",
+        glyph: "FS",
+        color: theme::CYAN,
+        group: "Cloud APIs",
+        desc: "Feishu/Lark bot events",
+        sdk: "Open Platform API",
+    },
+    Channel {
+        id: "zalo",
+        name: "Zalo",
+        glyph: "ZL",
+        color: theme::BLUE,
+        group: "Cloud APIs",
+        desc: "Official Account bots",
+        sdk: "Zalo OA API",
+    },
+    Channel {
+        id: "sms",
+        name: "SMS",
+        glyph: "SM",
+        color: theme::GREEN,
+        group: "Cloud APIs",
+        desc: "Text messages via Twilio",
+        sdk: "Twilio REST API",
+    },
+    Channel {
+        id: "twilio_whatsapp",
+        name: "WhatsApp (Twilio)",
+        glyph: "TW",
+        color: theme::GREEN,
+        group: "Cloud APIs",
+        desc: "WhatsApp via Twilio, no QR",
+        sdk: "Twilio WhatsApp API",
+    },
+    Channel {
+        id: "voice",
+        name: "Voice Calls",
+        glyph: "VC",
+        color: theme::AMBER,
+        group: "Cloud APIs",
+        desc: "Phone calls, TTS + transcripts",
+        sdk: "Twilio Voice API",
+    },
+    Channel {
         id: "imessage",
         name: "iMessage",
         glyph: "iM",
@@ -126,6 +243,15 @@ const CHANNELS: &[Channel] = &[
         group: "Phone-paired",
         desc: "Decentralized, end-to-end encrypted",
         sdk: "matrix-rust-sdk",
+    },
+    Channel {
+        id: "bluebubbles",
+        name: "BlueBubbles",
+        glyph: "BB",
+        color: theme::BLUE,
+        group: "Phone-paired",
+        desc: "iMessage via BlueBubbles server",
+        sdk: "BlueBubbles REST",
     },
 ];
 
@@ -230,26 +356,42 @@ impl Widget for &ChannelsScreen {
                 "QR pairing required"
             };
 
-            buf.set_string(
-                left.x,
-                cy,
-                &group_label,
-                Style::default()
-                    .fg(theme::ACCENT_DIM)
-                    .add_modifier(Modifier::BOLD),
-            );
-            // Divider line
-            let divider_x = left.x + group_label.len() as u16 + 1;
-            let divider_end = left.x + left.width - hint.len() as u16 - 1;
-            for x in divider_x..divider_end {
-                buf.set_string(x, cy, "─", Style::default().fg(theme::MUTED));
+            // Vertical-fit guard (#316 P3): with 16 channels the grid can
+            // outgrow a 30-row buffer; ratatui panics (index outside of
+            // buffer) rather than clipping on out-of-bounds writes. A header
+            // whose natural row falls past the bottom PINS just above the
+            // footer hint instead of vanishing — the rows there are free
+            // (overflowing cards are skipped by their own fit guard), and the
+            // group stays discoverable even when its cards don't fit.
+            let header_y = if cy < area.bottom() {
+                Some(cy)
+            } else if area.height > 2 {
+                Some(area.bottom() - 2)
+            } else {
+                None
+            };
+            if let Some(hy) = header_y {
+                buf.set_string(
+                    left.x,
+                    hy,
+                    &group_label,
+                    Style::default()
+                        .fg(theme::ACCENT_DIM)
+                        .add_modifier(Modifier::BOLD),
+                );
+                // Divider line
+                let divider_x = left.x + group_label.len() as u16 + 1;
+                let divider_end = left.x + left.width - hint.len() as u16 - 1;
+                for x in divider_x..divider_end {
+                    buf.set_string(x, hy, "─", Style::default().fg(theme::MUTED));
+                }
+                buf.set_string(
+                    divider_end,
+                    hy,
+                    hint,
+                    Style::default().fg(theme::MUTED),
+                );
             }
-            buf.set_string(
-                divider_end,
-                cy,
-                hint,
-                Style::default().fg(theme::MUTED),
-            );
             cy += 1;
 
             // Grid: 2 columns per group
@@ -283,7 +425,7 @@ impl Widget for &ChannelsScreen {
                     // than clipping on an out-of-bounds y, so skip any card whose
                     // bottom border would fall on/past area.bottom() when the body
                     // region is short a row.
-                    let card_fits = row_y + 5 < area.bottom();
+                    let card_fits = row_y + 4 < area.bottom();
                     if card_w > 4 && card_fits {
                         // Top border
                         buf.set_string(card_x, row_y, "┌", Style::default().fg(theme::MUTED));
@@ -338,27 +480,23 @@ impl Widget for &ChannelsScreen {
                             Style::default().fg(theme::DIM),
                         );
 
-                        // SDK
-                        let sdk_y = desc_y + 1;
-                        buf.set_string(
-                            content_x,
-                            sdk_y,
-                            clamp_ellipsis(ch.sdk, text_w),
-                            Style::default().fg(theme::MUTED),
-                        );
+                        // SDK line intentionally omitted from the grid card
+                        // (#316: 12 channels × 6-row cards overflowed the
+                        // 100×30 onboarding buffer — the PHONE-PAIRED header
+                        // landed past area.bottom() and ratatui panics rather
+                        // than clips. 5-row cards fit 4 Cloud-API rows. The
+                        // SDK string still renders in the ChannelConfig step.)
 
                         // Right border
-                        let bot_y = sdk_y + 1;
+                        let bot_y = desc_y + 1;
                         if is_focused && card_w > 2 {
                             buf.set_string(card_x + card_w - 1, content_y, "│", Style::default().fg(theme::FIRE_ORANGE));
                             buf.set_string(card_x + card_w - 1, name_y, "│", Style::default().fg(theme::FIRE_ORANGE));
                             buf.set_string(card_x + card_w - 1, desc_y, "│", Style::default().fg(theme::FIRE_ORANGE));
-                            buf.set_string(card_x + card_w - 1, sdk_y, "│", Style::default().fg(theme::FIRE_ORANGE));
                         } else if card_w > 2 {
                             buf.set_string(card_x + card_w - 1, content_y, "│", Style::default().fg(theme::MUTED));
                             buf.set_string(card_x + card_w - 1, name_y, "│", Style::default().fg(theme::MUTED));
                             buf.set_string(card_x + card_w - 1, desc_y, "│", Style::default().fg(theme::MUTED));
-                            buf.set_string(card_x + card_w - 1, sdk_y, "│", Style::default().fg(theme::MUTED));
                         }
 
                         // Bottom border
@@ -371,7 +509,7 @@ impl Widget for &ChannelsScreen {
 
                     cx += col_width + 1;
                 }
-                row_y += 6; // card height + gap
+                row_y += 5; // card height + gap (5-row card, #316)
             }
             cy = row_y + 1;
         }

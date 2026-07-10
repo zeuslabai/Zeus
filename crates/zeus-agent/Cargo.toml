@@ -7,7 +7,8 @@ license.workspace = true
 description = "Agent loop and tools for Zeus"
 
 [features]
-default = []
+default = ["audio"]
+audio = ["zeus-channels/audio", "zeus-talos/audio"]
 matrix = ["zeus-channels/matrix"]
 
 [dependencies]
@@ -20,9 +21,9 @@ zeus-athena.workspace = true
 zeus-aegis.workspace = true
 zeus-hermes.workspace = true
 zeus-nous.workspace = true
-zeus-talos.workspace = true
+zeus-talos = { workspace = true, default-features = false }
 zeus-browser.workspace = true
-zeus-channels.workspace = true
+zeus-channels = { workspace = true, default-features = false }
 zeus-skills.workspace = true
 zeus-extensions.workspace = true
 zeus-council = { path = "../zeus-council" }

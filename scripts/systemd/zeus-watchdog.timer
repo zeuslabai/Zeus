@@ -1,0 +1,11 @@
+[Unit]
+Description=Zeus Gateway Health-Poll Watchdog Timer
+Requires=zeus-watchdog.service
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

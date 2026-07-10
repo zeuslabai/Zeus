@@ -657,6 +657,80 @@ impl EventHandler for Handler {
         }
     }
 
+    // ── Shard-disconnect forensics ──────────────────────────────────────
+    //
+    // Discord sessions can drop every few minutes with zero logged reason:
+    // serenity's shard runner reconnects/resumes *internally*, so unless we
+    // instrument these events the failure is invisible (zeus112 case study).
+    // Same philosophy as the #328 si_pid instrument: make the failure
+    // self-documenting.
+    //
+    // Note on close codes: serenity 0.12 does not surface the raw gateway
+    // close frame (code + reason) to `EventHandler` — it logs it internally
+    // at warn/error (e.g. 4004 "Sent invalid authentication"). Those lines
+    // reach gateway.log via the `serenity=warn` filter directive in the bin's
+    // logging setup. What the handler CAN see is the stage machine, logged
+    // here: Disconnected = session dropped (watch the adjacent serenity warn
+    // for the close code), Resuming→Connected = session resumed (no event
+    // replay lost), Identifying after Disconnected = full re-identify (new
+    // session — gap possible).
+
+    async fn shard_stage_update(
+        &self,
+        _ctx: Context,
+        event: serenity::gateway::ShardStageUpdateEvent,
+    ) {
+        use serenity::gateway::ConnectionStage;
+        let transition = format!("{:?} -> {:?}", event.old, event.new);
+        match event.new {
+            ConnectionStage::Disconnected => {
+                tracing::warn!(
+                    target: "adapter",
+                    channel = "discord",
+                    event = "shard_disconnected",
+                    shard = %event.shard_id,
+                    stage = %transition,
+                    "Discord shard disconnected (close code/reason, if any, is in the adjacent serenity=warn line)"
+                );
+            }
+            ConnectionStage::Connected => {
+                tracing::info!(
+                    target: "adapter",
+                    channel = "discord",
+                    event = "shard_connected",
+                    shard = %event.shard_id,
+                    stage = %transition,
+                    "Discord shard connected"
+                );
+            }
+            _ => {
+                // Connecting / Handshake / Identifying / Resuming — the
+                // recovery path. Identifying (vs Resuming) after a drop means
+                // the session was invalidated and a message gap is possible.
+                tracing::info!(
+                    target: "adapter",
+                    channel = "discord",
+                    event = "shard_stage",
+                    shard = %event.shard_id,
+                    stage = %transition,
+                    "Discord shard stage transition"
+                );
+            }
+        }
+    }
+
+    async fn resume(&self, _ctx: Context, _event: serenity::all::ResumedEvent) {
+        // A successful RESUME: the prior session was recovered without
+        // re-identifying, so no gateway events were lost. Logged at WARN
+        // because it only fires after a disconnect worth investigating.
+        tracing::warn!(
+            target: "adapter",
+            channel = "discord",
+            event = "shard_resumed",
+            "Discord session resumed after disconnect (no event loss)"
+        );
+    }
+
     async fn reaction_add(&self, _ctx: Context, reaction: serenity::all::Reaction) {
         if let Some(ref reaction_tx) = self.reaction_tx {
             let event = ReactionEvent {

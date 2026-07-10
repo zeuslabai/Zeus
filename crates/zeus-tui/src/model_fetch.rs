@@ -494,14 +494,52 @@ pub async fn fetch_models(provider_id: &str, api_key: &str) -> Result<Vec<String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::Mutex;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::oneshot;
 
     fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+        // #334: crate-wide lock — app.rs persist_tests mutate environ in the
+        // same test binary; separate locks still race each other.
+        &crate::test_env::ENV_LOCK
+    }
+
+    /// RAII: lock + set a base-URL env var + restore previous value on drop
+    /// (#334). Poison-tolerant so one real failure can't cascade into
+    /// spurious `PoisonError`s; drop-based restore is panic-safe.
+    struct EnvVarGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let lock = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+            let previous = std::env::var_os(key);
+            // SAFETY: serialized by env_lock for the guard's whole lifetime.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self {
+                _lock: lock,
+                key,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: still serialized — the lock is released after this runs.
+            unsafe {
+                match self.previous.take() {
+                    Some(prev) => std::env::set_var(self.key, prev),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
     }
 
     async fn spawn_models_server(body: &'static str) -> (String, oneshot::Receiver<String>) {
@@ -532,20 +570,14 @@ mod tests {
 
     #[tokio::test]
     async fn anthropic_polls_live_models_endpoint() {
-        let _env_guard = env_lock().lock().expect("env lock poisoned");
         let (base, request) = spawn_models_server(
             r#"{"data":[{"id":"claude-sonnet-5-20260615"},{"id":"not-claude"},{"id":"claude-opus-4-8"}]}"#,
         )
         .await;
-        unsafe {
-            std::env::set_var("ANTHROPIC_BASE_URL", &base);
-        }
+        let _env_guard = EnvVarGuard::set("ANTHROPIC_BASE_URL", &base);
         let models = fetch_models("anthropic", "sk-ant-test")
             .await
             .expect("anthropic models fetch succeeds");
-        unsafe {
-            std::env::remove_var("ANTHROPIC_BASE_URL");
-        }
 
         let request = request.await.expect("server captures request");
         assert!(
@@ -575,17 +607,11 @@ mod tests {
 
     #[tokio::test]
     async fn anthropic_oauth_uses_bearer_and_beta_header() {
-        let _env_guard = env_lock().lock().expect("env lock poisoned");
         let (base, request) = spawn_models_server(r#"{"data":[{"id":"claude-haiku-4-5"}]}"#).await;
-        unsafe {
-            std::env::set_var("ANTHROPIC_BASE_URL", &base);
-        }
+        let _env_guard = EnvVarGuard::set("ANTHROPIC_BASE_URL", &base);
         let models = fetch_models("anthropic", "sk-ant-oat01-test")
             .await
             .expect("anthropic oauth models fetch succeeds");
-        unsafe {
-            std::env::remove_var("ANTHROPIC_BASE_URL");
-        }
 
         let request = request.await.expect("server captures request");
         let request_lower = request.to_ascii_lowercase();
@@ -652,13 +678,9 @@ mod tests {
         // Point SAKANA_BASE_URL at an unroutable host → the live GET fails fast,
         // proving the arm builds `{base}/v1/models` from the override (not the
         // default host) and surfaces an honest Err rather than fabricating a list.
-        unsafe {
-            std::env::set_var("SAKANA_BASE_URL", "http://127.0.0.1:1");
-        }
+        let _env_guard = EnvVarGuard::set("SAKANA_BASE_URL", "http://127.0.0.1:1");
         let res = fetch_models("sakana", "fish_test").await;
-        unsafe {
-            std::env::remove_var("SAKANA_BASE_URL");
-        }
+        drop(_env_guard);
         assert!(
             res.is_err(),
             "unreachable base must surface an honest error"

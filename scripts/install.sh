@@ -300,7 +300,7 @@ while [ $# -gt 0 ]; do
             printf "  ${CS}--no-build${N}          Skip cargo build (use existing binary)\n"
             printf "  ${CS}--clean${N}             Clean build (cargo clean before build)\n"
             printf "  ${CS}--update${N}            Rebuild + install binary + restart (no config changes)\n"
-            printf "  ${CS}--with-identity${N}     With --update: also refresh workspace identity templates\n"
+            printf "  ${CS}--with-identity${N}     With --update: also refresh workspace identity docs (SOUL.md stays onboarding-owned)\n"
             printf "  ${CS}--no-launch${N}         Don't start gateway after install\n"
             printf "  ${CS}--classic${N}           Use classic CLI onboarding (no TUI)\n"
             printf "  ${CS}--with-webui${N}        Build and install WebUI (trunk + WASM)\n"

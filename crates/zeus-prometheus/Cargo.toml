@@ -6,18 +6,22 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+default = ["audio"]
+audio = ["zeus-agent/audio", "zeus-talos/audio"]
+
 [dependencies]
 sha2 = "0.10"
 anyhow = { workspace = true }
 zeus-core = { workspace = true }
-zeus-agent = { workspace = true }
+zeus-agent = { workspace = true, default-features = false }
 zeus-session = { workspace = true }
 zeus-llm = { workspace = true }
 zeus-memory = { workspace = true }
 zeus-mnemosyne = { workspace = true }
 zeus-nous = { workspace = true }
 zeus-orchestra = { workspace = true }
-zeus-talos = { workspace = true }
+zeus-talos = { workspace = true, default-features = false }
 zeus-templates = { workspace = true }
 
 # Async

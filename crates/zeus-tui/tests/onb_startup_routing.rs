@@ -15,6 +15,50 @@ use zeus_tui::app::App;
 // Serialize ZEUS_HOME mutation across the tests in THIS binary.
 static ENV_GUARD: Mutex<()> = Mutex::new(());
 
+/// RAII: holds the serialization lock, sets `ZEUS_HOME`, and restores the
+/// previous value on drop — INCLUDING on panic (#334).
+///
+/// Two failure classes this kills:
+/// - **Poison cascade**: `ENV_GUARD.lock().unwrap()` turns ONE real test
+///   failure into N spurious `PoisonError` failures in every later test in
+///   this binary. Poison-tolerant locking (`into_inner`) matches the pattern
+///   already used by onb_walkthrough_106 / onb_universal_advance /
+///   onb_complete_1to1 and src/app.rs persist_tests.
+/// - **Env leak on panic**: the manual `set_var .. remove_var` pairs skipped
+///   the restore when an assert fired mid-test. Drop-based restore is
+///   unconditional.
+struct ZeusHomeGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl ZeusHomeGuard {
+    fn set(dir: &std::path::Path) -> Self {
+        let lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var_os("ZEUS_HOME");
+        // SAFETY: serialized by ENV_GUARD for the guard's whole lifetime.
+        unsafe {
+            std::env::set_var("ZEUS_HOME", dir);
+        }
+        Self {
+            _lock: lock,
+            previous,
+        }
+    }
+}
+
+impl Drop for ZeusHomeGuard {
+    fn drop(&mut self) {
+        // SAFETY: still serialized — the lock is released after this runs.
+        unsafe {
+            match self.previous.take() {
+                Some(prev) => std::env::set_var("ZEUS_HOME", prev),
+                None => std::env::remove_var("ZEUS_HOME"),
+            }
+        }
+    }
+}
+
 const COMPLETE_STEP: usize = 19;
 
 fn step_forward_existing_config(app: &mut App) {
@@ -50,14 +94,10 @@ fn press_through_to_complete(app: &mut App) {
 /// A fresh install (no config.toml on disk) must START IN ONBOARDING.
 #[test]
 fn fresh_install_starts_in_onboarding() {
-    let _g = ENV_GUARD.lock().unwrap();
     let dir = std::env::temp_dir().join(format!("zeus_onb_fresh_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    // SAFETY: serialized by ENV_GUARD; single-threaded within this test binary.
-    unsafe {
-        std::env::set_var("ZEUS_HOME", &dir);
-    }
+    let _env = ZeusHomeGuard::set(&dir);
 
     let app = App::new_from_disk();
     assert!(
@@ -69,9 +109,7 @@ fn fresh_install_starts_in_onboarding() {
         "fresh install must not report an existing config"
     );
 
-    unsafe {
-        std::env::remove_var("ZEUS_HOME");
-    }
+    drop(_env);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -79,7 +117,6 @@ fn fresh_install_starts_in_onboarding() {
 /// the wizard and start in the production UI.
 #[test]
 fn completed_install_skips_onboarding() {
-    let _g = ENV_GUARD.lock().unwrap();
     let dir = std::env::temp_dir().join(format!("zeus_onb_done_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -89,10 +126,7 @@ fn completed_install_skips_onboarding() {
         "model = \"anthropic/claude-opus-4-8\"\nonboarding_complete = true\n",
     )
     .unwrap();
-    // SAFETY: serialized by ENV_GUARD; single-threaded within this test binary.
-    unsafe {
-        std::env::set_var("ZEUS_HOME", &dir);
-    }
+    let _env = ZeusHomeGuard::set(&dir);
 
     let app = App::new_from_disk();
     assert!(
@@ -104,9 +138,7 @@ fn completed_install_skips_onboarding() {
         "a real config.toml on disk must report existing_config"
     );
 
-    unsafe {
-        std::env::remove_var("ZEUS_HOME");
-    }
+    drop(_env);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -114,7 +146,6 @@ fn completed_install_skips_onboarding() {
 /// (predates the marker field) must be treated as done → skip the wizard.
 #[test]
 fn legacy_model_set_no_marker_skips_onboarding() {
-    let _g = ENV_GUARD.lock().unwrap();
     let dir = std::env::temp_dir().join(format!("zeus_onb_legacy_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -124,10 +155,7 @@ fn legacy_model_set_no_marker_skips_onboarding() {
         "model = \"anthropic/claude-opus-4-8\"\n",
     )
     .unwrap();
-    // SAFETY: serialized by ENV_GUARD; single-threaded within this test binary.
-    unsafe {
-        std::env::set_var("ZEUS_HOME", &dir);
-    }
+    let _env = ZeusHomeGuard::set(&dir);
 
     let app = App::new_from_disk();
     assert!(
@@ -135,22 +163,16 @@ fn legacy_model_set_no_marker_skips_onboarding() {
         "legacy config (model set, no marker) must be treated as done"
     );
 
-    unsafe {
-        std::env::remove_var("ZEUS_HOME");
-    }
+    drop(_env);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn forced_onboarding_press_through_preserves_existing_config_bytes() {
-    let _g = ENV_GUARD.lock().unwrap();
     let dir = tempfile::tempdir().expect("temp ZEUS_HOME");
-    let previous = std::env::var_os("ZEUS_HOME");
-    unsafe {
-        std::env::set_var("ZEUS_HOME", dir.path());
-    }
+    let _env = ZeusHomeGuard::set(dir.path());
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    {
         let image_store = dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("~"))
             .join(".zeus/images")
@@ -252,6 +274,8 @@ mcp_port = 3002
 web_port = 8081
 timeout_secs = 3600
 reconnect_delay_secs = 5
+shutdown_hard_deadline_secs = 60
+prevent_sleep = true
 max_ws_message_bytes = 1048576
 max_webhook_payload_bytes = 262144
 max_webhook_message_bytes = 51200
@@ -299,6 +323,21 @@ enabled = true
         );
         let config_path = dir.path().join("config.toml");
         std::fs::write(&config_path, existing.as_bytes()).expect("seed existing config");
+
+        // Canonicalize the seed with one load → save round-trip BEFORE taking
+        // the `before` snapshot (#334). The byte-identical assert must test the
+        // WIZARD's effect, not serde field drift: every new defaulted field on
+        // Config (e.g. `[gateway] shutdown_hard_deadline_secs` / `prevent_sleep`
+        // from #329/#331) is serialized by save_unchecked, so a hardcoded seed
+        // goes stale on the next field add and this test fails deterministically
+        // — and its panic then poisoned ENV_GUARD, cascading PoisonError into
+        // every later test in this binary and masquerading as a flaky env race.
+        {
+            let seeded = zeus_core::Config::load().expect("seeded config must load");
+            seeded
+                .save_unchecked()
+                .expect("canonicalizing round-trip must save");
+        }
         let before = std::fs::read(&config_path).expect("seeded config bytes");
 
         let mut app = App::new_from_disk();
@@ -318,17 +357,5 @@ enabled = true
             after, before,
             "forced onboarding press-through must leave existing config.toml byte-identical"
         );
-    }));
-
-    unsafe {
-        if let Some(previous) = previous {
-            std::env::set_var("ZEUS_HOME", previous);
-        } else {
-            std::env::remove_var("ZEUS_HOME");
-        }
-    }
-
-    if let Err(payload) = result {
-        std::panic::resume_unwind(payload);
     }
 }

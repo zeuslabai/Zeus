@@ -22,4 +22,15 @@ fn main() {
     }
 
     println!("cargo:rustc-env=GIT_SHA={}", git_sha);
+
+    // #332 ③ boot fingerprint: embed the build timestamp (unix epoch secs)
+    // so boot can sanity-check the system clock against it. A system clock
+    // EARLIER than the build date is physically impossible and means the
+    // clock is wrong (dead CMOS battery, unsynced VM, minibsd's 8-day skew
+    // class) — timestamps in every log line downstream would be lies.
+    let build_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    println!("cargo:rustc-env=ZEUS_BUILD_EPOCH={}", build_epoch);
 }

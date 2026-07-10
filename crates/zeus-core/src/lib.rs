@@ -9,10 +9,12 @@ pub mod migration;
 pub mod persona;
 pub mod sanitize;
 pub mod session_lane;
+pub mod soul;
 pub mod turn_boundary;
 pub mod validator;
 pub use cook_state::{ActiveCookType, CookFlight, CookGuard, CookState};
 pub use session_lane::SessionLaneManager;
+pub use soul::{render_soul_md, soul_content_is_stub, soul_is_stub_or_missing, write_onboarding_soul};
 pub use persona::{Persona, PersonaRegistry, RouteMatch, RunProfile};
 pub use turn_boundary::{
     segment_pending_call_ids, segment_satisfied_call_ids, turn_segment_for_index,
@@ -21,7 +23,7 @@ pub use validator::{ConfigValidator, Severity, ValidationFinding, ValidationRepo
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -2506,6 +2508,20 @@ pub struct LoggingConfig {
     /// How many days of rotated daily log files to keep (default: 7).
     #[serde(default = "default_log_retention_days")]
     pub retention_days: u32,
+
+    /// #332 ⑤ — per-subsystem level overrides, applied on top of the base
+    /// level. Keys are tracing targets: workspace crates (`zeus_channels`,
+    /// `zeus_prometheus`, …), bare event targets (`boot`, `adapter`, `cook`,
+    /// `msg`), or external SDK crates (`serenity`, `matrix_sdk`, …).
+    ///
+    /// ```toml
+    /// [logging.targets]
+    /// zeus_channels = "debug"   # one chatty subsystem up
+    /// serenity = "info"         # one SDK deeper than the warn default
+    /// zeus_api = "warn"         # one noisy subsystem down
+    /// ```
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub targets: std::collections::HashMap<String, String>,
 }
 
 impl Default for LoggingConfig {
@@ -2515,6 +2531,7 @@ impl Default for LoggingConfig {
             file_level: None,
             file_enabled: true,
             retention_days: default_log_retention_days(),
+            targets: std::collections::HashMap::new(),
         }
     }
 }
@@ -2569,6 +2586,21 @@ pub struct GatewayConfig {
     /// Reconnect delay for WebSocket/node clients in seconds (default: 5)
     #[serde(default = "default_reconnect_delay_secs")]
     pub reconnect_delay_secs: u64,
+    /// #329: hard shutdown deadline in seconds (default: 60). After SIGTERM/
+    /// Ctrl+C, a runtime-INDEPENDENT OS thread force-exits the process if
+    /// graceful teardown hasn't completed within this window. Exists because
+    /// a wedged tokio time driver can starve async timeouts (minibsd hung
+    /// 8 days in the drain despite an existing 5s tokio timeout).
+    #[serde(default = "default_shutdown_hard_deadline_secs")]
+    pub shutdown_hard_deadline_secs: u64,
+    /// #331: hold a macOS IOPM `PreventSystemSleep` assertion for the
+    /// gateway's lifetime so Maintenance-Sleep/DarkWake cycles can't freeze
+    /// it (default: true). macOS-only effect; no-op on other platforms.
+    /// Boundary: does not survive lid-close on laptops and may be ignored
+    /// on battery — desktop seats get full coverage. Set false if the
+    /// operator wants the machine to sleep normally.
+    #[serde(default = "default_prevent_sleep")]
+    pub prevent_sleep: bool,
     /// Maximum WebSocket message size in bytes (default: 1MB)
     #[serde(default = "default_max_ws_message_bytes")]
     pub max_ws_message_bytes: usize,
@@ -2668,6 +2700,13 @@ fn default_gateway_timeout_secs() -> u64 {
 fn default_reconnect_delay_secs() -> u64 {
     5
 }
+fn default_prevent_sleep() -> bool {
+    true
+}
+
+fn default_shutdown_hard_deadline_secs() -> u64 {
+    60
+}
 fn default_max_ws_message_bytes() -> usize {
     1_048_576 // 1 MB
 }
@@ -2710,6 +2749,8 @@ impl Default for GatewayConfig {
             web_port: default_web_port(),
             timeout_secs: default_gateway_timeout_secs(),
             reconnect_delay_secs: default_reconnect_delay_secs(),
+            shutdown_hard_deadline_secs: default_shutdown_hard_deadline_secs(),
+            prevent_sleep: default_prevent_sleep(),
             max_ws_message_bytes: default_max_ws_message_bytes(),
             max_webhook_payload_bytes: default_max_webhook_payload_bytes(),
             max_webhook_message_bytes: default_max_webhook_message_bytes(),
@@ -4104,6 +4145,368 @@ fn default_twitch_username() -> String {
     std::env::var("TWITCH_USERNAME").unwrap_or_default()
 }
 
+/// Microsoft Teams channel configuration
+///
+/// Used for Teams integration via Microsoft Graph API under `[channels.teams]`.
+/// Env var fallback: `TEAMS_CLIENT_SECRET`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamsChannelConfig {
+    /// Azure AD tenant ID
+    #[serde(default)]
+    pub tenant_id: String,
+    /// Azure AD application (client) ID
+    #[serde(default)]
+    pub client_id: String,
+    /// Azure AD client secret
+    #[serde(default = "default_teams_client_secret", skip_serializing)]
+    pub client_secret: String,
+    /// Microsoft Teams team ID
+    #[serde(default)]
+    pub team_id: String,
+    /// Teams channel ID within the team
+    #[serde(default)]
+    pub channel_id: String,
+    /// Access policy (DM/channel filtering)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ChannelPolicyConfig>,
+}
+
+fn default_teams_client_secret() -> String {
+    std::env::var("TEAMS_CLIENT_SECRET").unwrap_or_default()
+}
+
+/// WebChat channel configuration
+///
+/// Embedded WebSocket chat served by the gateway under `[channels.webchat]`.
+/// Env var fallback: `WEBCHAT_AUTH_TOKEN`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WebChatChannelConfig {
+    /// WebSocket path (default: /ws/chat)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub websocket_path: Option<String>,
+    /// Optional authentication token
+    #[serde(default = "default_webchat_auth_token", skip_serializing)]
+    pub auth_token: Option<String>,
+    /// CORS allowed origins
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
+    /// Maximum message size in bytes (0 = adapter default)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_message_size: Option<usize>,
+    /// Connection timeout in seconds (0 = adapter default)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_timeout_secs: Option<u64>,
+    /// Access policy (DM/channel filtering)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ChannelPolicyConfig>,
+}
+
+fn default_webchat_auth_token() -> Option<String> {
+    std::env::var("WEBCHAT_AUTH_TOKEN").ok().filter(|s| !s.is_empty())
+}
+
+/// Google Chat channel configuration
+///
+/// Used for Google Chat via service-account auth under `[channels.googlechat]`.
+/// Env var fallback: `GOOGLE_CHAT_CREDENTIALS_PATH`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GoogleChatChannelConfig {
+    /// Service account key JSON (inline)
+    #[serde(default, skip_serializing)]
+    pub service_account_key: String,
+    /// Path to service-account credentials file
+    #[serde(default = "default_googlechat_credentials_path")]
+    pub credentials_path: Option<String>,
+    /// Pre-configured access token (development only)
+    #[serde(default, skip_serializing)]
+    pub access_token: Option<String>,
+    /// Webhook path for receiving messages
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_path: Option<String>,
+    /// Google Cloud project ID
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// Access policy (DM/channel filtering)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ChannelPolicyConfig>,
+}
+
+fn default_googlechat_credentials_path() -> Option<String> {
+    std::env::var("GOOGLE_CHAT_CREDENTIALS_PATH").ok().filter(|s| !s.is_empty())
+}
+
+/// Nextcloud Talk channel configuration
+///
+/// Used for Nextcloud Talk under `[channels.nextcloud]`.
+/// Env var fallbacks: `NEXTCLOUD_PASSWORD`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NextcloudChannelConfig {
+    /// Server URL (e.g., https://cloud.example.com)
+    #[serde(default)]
+    pub server_url: String,
+    /// Username
+    #[serde(default)]
+    pub username: String,
+    /// Password or app password
+    #[serde(default = "default_nextcloud_password", skip_serializing)]
+    pub password: String,
+    /// Poll interval in seconds
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll_interval_secs: Option<u64>,
+    /// Access policy (DM/channel filtering)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ChannelPolicyConfig>,
+}
+
+fn default_nextcloud_password() -> String {
+    std::env::var("NEXTCLOUD_PASSWORD").unwrap_or_default()
+}
+
+/// Nostr channel configuration
+///
+/// Used for the decentralized Nostr protocol under `[channels.nostr]`.
+/// Env var fallbacks: `NOSTR_PRIVATE_KEY`, `NOSTR_NSEC`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NostrChannelConfig {
+    /// Private key (hex)
+    #[serde(default = "default_nostr_private_key", skip_serializing)]
+    pub private_key: String,
+    /// Private key (nsec bech32 format) — alternative to `private_key`
+    #[serde(default = "default_nostr_nsec", skip_serializing)]
+    pub nsec: Option<String>,
+    /// Public key (hex, derived from private key if omitted)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_key: Option<String>,
+    /// Relay URLs (wss:// or ws://)
+    #[serde(default, alias = "relays")]
+    pub relay_urls: Vec<String>,
+    /// Access policy (DM/channel filtering)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ChannelPolicyConfig>,
+}
+
+fn default_nostr_private_key() -> String {
+    std::env::var("NOSTR_PRIVATE_KEY").unwrap_or_default()
+}
+
+fn default_nostr_nsec() -> Option<String> {
+    std::env::var("NOSTR_NSEC").ok().filter(|s| !s.is_empty())
+}
+
+/// LINE channel configuration
+///
+/// Used for the LINE Messaging API under `[channels.line]`.
+/// Env var fallbacks: `LINE_CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LineChannelConfig {
+    /// Channel access token (from LINE Developers console)
+    #[serde(default = "default_line_channel_access_token", skip_serializing)]
+    pub channel_access_token: String,
+    /// Channel secret (for webhook signature validation)
+    #[serde(default = "default_line_channel_secret", skip_serializing)]
+    pub channel_secret: Option<String>,
+    /// Webhook path (default: adapter default)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_path: Option<String>,
+    /// Access policy (DM/channel filtering)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ChannelPolicyConfig>,
+}
+
+fn default_line_channel_access_token() -> String {
+    std::env::var("LINE_CHANNEL_ACCESS_TOKEN").unwrap_or_default()
+}
+
+fn default_line_channel_secret() -> Option<String> {
+    std::env::var("LINE_CHANNEL_SECRET").ok().filter(|s| !s.is_empty())
+}
+
+/// Feishu (Lark) channel configuration
+///
+/// Used for Feishu/Lark bots under `[channels.feishu]`.
+/// Env var fallback: `FEISHU_APP_SECRET`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeishuChannelConfig {
+    /// App ID (from Feishu open platform)
+    #[serde(default)]
+    pub app_id: String,
+    /// App secret
+    #[serde(default = "default_feishu_app_secret", skip_serializing)]
+    pub app_secret: String,
+    /// Encrypt key (for event payload decryption)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encrypt_key: Option<String>,
+    /// Verification token (for event verification)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_token: Option<String>,
+    /// Webhook path (default: adapter default)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_path: Option<String>,
+    /// Use Lark (international) API endpoints instead of Feishu (China)
+    #[serde(default)]
+    pub use_lark: bool,
+    /// Access policy (DM/channel filtering)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ChannelPolicyConfig>,
+}
+
+fn default_feishu_app_secret() -> String {
+    std::env::var("FEISHU_APP_SECRET").unwrap_or_default()
+}
+
+/// Zalo channel configuration
+///
+/// Used for Zalo Official Account bots under `[channels.zalo]`.
+/// Env var fallbacks: `ZALO_SECRET_KEY`, `ZALO_ACCESS_TOKEN`, `ZALO_REFRESH_TOKEN`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZaloChannelConfig {
+    /// App ID (from Zalo developer console)
+    #[serde(default)]
+    pub app_id: String,
+    /// App secret key
+    #[serde(default = "default_zalo_secret_key", skip_serializing)]
+    pub secret_key: String,
+    /// OA access token
+    #[serde(default = "default_zalo_access_token", skip_serializing)]
+    pub access_token: Option<String>,
+    /// OA refresh token
+    #[serde(default = "default_zalo_refresh_token", skip_serializing)]
+    pub refresh_token: Option<String>,
+    /// Webhook path (default: adapter default)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_path: Option<String>,
+    /// Access policy (DM/channel filtering)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ChannelPolicyConfig>,
+}
+
+fn default_zalo_secret_key() -> String {
+    std::env::var("ZALO_SECRET_KEY").unwrap_or_default()
+}
+
+fn default_zalo_access_token() -> Option<String> {
+    std::env::var("ZALO_ACCESS_TOKEN").ok().filter(|s| !s.is_empty())
+}
+
+fn default_zalo_refresh_token() -> Option<String> {
+    std::env::var("ZALO_REFRESH_TOKEN").ok().filter(|s| !s.is_empty())
+}
+
+/// BlueBubbles channel configuration (#316 P3 batch-2b)
+///
+/// iMessage via a BlueBubbles server (cross-platform alternative to the
+/// macOS-only AppleScript bridge). Used under `[channels.bluebubbles]`.
+/// Env var fallback: `BLUEBUBBLES_PASSWORD`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlueBubblesChannelConfig {
+    /// BlueBubbles server URL (e.g. http://localhost:1234)
+    #[serde(default)]
+    pub server_url: String,
+    /// Server password
+    #[serde(default = "default_bluebubbles_password", skip_serializing)]
+    pub password: String,
+    /// Access policy (DM/channel filtering)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ChannelPolicyConfig>,
+}
+
+fn default_bluebubbles_password() -> String {
+    std::env::var("BLUEBUBBLES_PASSWORD").unwrap_or_default()
+}
+
+/// SMS channel configuration (Twilio) (#316 P3 batch-2b)
+///
+/// Used under `[channels.sms]`.
+/// Env var fallback: `TWILIO_AUTH_TOKEN`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SmsChannelConfig {
+    /// Twilio Account SID
+    #[serde(default)]
+    pub account_sid: String,
+    /// Twilio Auth Token
+    #[serde(default = "default_twilio_auth_token", skip_serializing)]
+    pub auth_token: String,
+    /// Phone number to send from (E.164 format, e.g. "+14155551234")
+    #[serde(default)]
+    pub from_number: String,
+    /// Webhook path for inbound SMS (default: adapter default)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_path: Option<String>,
+    /// Access policy (DM/channel filtering)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ChannelPolicyConfig>,
+}
+
+fn default_twilio_auth_token() -> String {
+    std::env::var("TWILIO_AUTH_TOKEN").unwrap_or_default()
+}
+
+/// Twilio WhatsApp channel configuration (#316 P3 batch-2b)
+///
+/// WhatsApp via Twilio's API (alternative to the Meta Cloud API `whatsapp`
+/// channel). Used under `[channels.twilio_whatsapp]`.
+/// Env var fallback: `TWILIO_AUTH_TOKEN`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TwilioWhatsAppChannelConfig {
+    /// Twilio Account SID
+    #[serde(default)]
+    pub account_sid: String,
+    /// Twilio Auth Token
+    #[serde(default = "default_twilio_auth_token", skip_serializing)]
+    pub auth_token: String,
+    /// WhatsApp-enabled Twilio number (E.164; sandbox number if sandbox)
+    #[serde(default)]
+    pub whatsapp_number: String,
+    /// Whether using the Twilio WhatsApp sandbox (default: true)
+    #[serde(default = "default_twilio_sandbox")]
+    pub sandbox: bool,
+    /// Webhook path for inbound messages (default: adapter default)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_path: Option<String>,
+    /// Status callback URL for delivery reports (optional)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_callback_url: Option<String>,
+    /// Access policy (DM/channel filtering)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ChannelPolicyConfig>,
+}
+
+fn default_twilio_sandbox() -> bool {
+    true
+}
+
+/// Voice (phone calls via Twilio) channel configuration (#316 P3 batch-2b)
+///
+/// Used under `[channels.voice]`.
+/// Env var fallback: `TWILIO_AUTH_TOKEN`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoiceChannelConfigCore {
+    /// Twilio Account SID
+    #[serde(default)]
+    pub account_sid: String,
+    /// Twilio Auth Token
+    #[serde(default = "default_twilio_auth_token", skip_serializing)]
+    pub auth_token: String,
+    /// Phone number to call from (E.164 format)
+    #[serde(default)]
+    pub from_number: String,
+    /// Base URL for webhooks (must be publicly accessible, e.g. ngrok URL)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_base_url: Option<String>,
+    /// Port for the webhook server (default: adapter default, 8090)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_port: Option<u16>,
+    /// TTS voice for calls (Twilio voice name, default: adapter default)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tts_voice: Option<String>,
+    /// Greeting message for incoming calls (default: adapter default)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incoming_greeting: Option<String>,
+    /// Access policy (DM/channel filtering)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ChannelPolicyConfig>,
+}
+
 /// Hooks configuration
 /// LLM Council configuration — multi-model deliberation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4217,6 +4620,42 @@ pub struct ChannelsConfig {
     /// X (Twitter) configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x_twitter: Option<XTwitterChannelConfig>,
+    /// Microsoft Teams configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teams: Option<TeamsChannelConfig>,
+    /// WebChat (embedded WebSocket chat) configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webchat: Option<WebChatChannelConfig>,
+    /// Google Chat configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub googlechat: Option<GoogleChatChannelConfig>,
+    /// Nextcloud Talk configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nextcloud: Option<NextcloudChannelConfig>,
+    /// Nostr configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nostr: Option<NostrChannelConfig>,
+    /// LINE configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<LineChannelConfig>,
+    /// Feishu (Lark) configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feishu: Option<FeishuChannelConfig>,
+    /// Zalo configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zalo: Option<ZaloChannelConfig>,
+    /// BlueBubbles (iMessage server) configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bluebubbles: Option<BlueBubblesChannelConfig>,
+    /// SMS (Twilio) configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sms: Option<SmsChannelConfig>,
+    /// WhatsApp via Twilio configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub twilio_whatsapp: Option<TwilioWhatsAppChannelConfig>,
+    /// Voice (phone calls via Twilio) configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<VoiceChannelConfigCore>,
 }
 
 impl ChannelsConfig {
@@ -4305,6 +4744,192 @@ impl ChannelsConfig {
                 allow_bots: default_allow_bots_policy(),
             });
             any = true;
+        }
+
+        // Teams: TEAMS_TENANT_ID + TEAMS_CLIENT_ID + TEAMS_CLIENT_SECRET
+        let teams_tenant = std::env::var("TEAMS_TENANT_ID").unwrap_or_default();
+        let teams_client = std::env::var("TEAMS_CLIENT_ID").unwrap_or_default();
+        let teams_secret = std::env::var("TEAMS_CLIENT_SECRET").unwrap_or_default();
+        if !teams_tenant.is_empty() && !teams_client.is_empty() && !teams_secret.is_empty() {
+            cfg.teams = Some(TeamsChannelConfig {
+                tenant_id: teams_tenant,
+                client_id: teams_client,
+                client_secret: teams_secret,
+                team_id: std::env::var("TEAMS_TEAM_ID").unwrap_or_default(),
+                channel_id: std::env::var("TEAMS_CHANNEL_ID").unwrap_or_default(),
+                policy: None,
+            });
+            any = true;
+        }
+
+        // WebChat: WEBCHAT_ENABLED=1 (serves an embedded WS endpoint; no creds required)
+        if std::env::var("WEBCHAT_ENABLED")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+        {
+            cfg.webchat = Some(WebChatChannelConfig {
+                auth_token: std::env::var("WEBCHAT_AUTH_TOKEN").ok().filter(|s| !s.is_empty()),
+                ..Default::default()
+            });
+            any = true;
+        }
+
+        // Google Chat: GOOGLE_CHAT_CREDENTIALS_PATH (service-account file)
+        let gchat_creds = std::env::var("GOOGLE_CHAT_CREDENTIALS_PATH").unwrap_or_default();
+        if !gchat_creds.is_empty() {
+            cfg.googlechat = Some(GoogleChatChannelConfig {
+                credentials_path: Some(gchat_creds),
+                ..Default::default()
+            });
+            any = true;
+        }
+
+        // Nextcloud Talk: NEXTCLOUD_SERVER_URL + NEXTCLOUD_USERNAME + NEXTCLOUD_PASSWORD
+        let nc_url = std::env::var("NEXTCLOUD_SERVER_URL").unwrap_or_default();
+        let nc_user = std::env::var("NEXTCLOUD_USERNAME").unwrap_or_default();
+        let nc_pass = std::env::var("NEXTCLOUD_PASSWORD").unwrap_or_default();
+        if !nc_url.is_empty() && !nc_user.is_empty() && !nc_pass.is_empty() {
+            cfg.nextcloud = Some(NextcloudChannelConfig {
+                server_url: nc_url,
+                username: nc_user,
+                password: nc_pass,
+                poll_interval_secs: None,
+                policy: None,
+            });
+            any = true;
+        }
+
+        // Nostr: NOSTR_PRIVATE_KEY or NOSTR_NSEC (+ optional NOSTR_RELAYS, comma-separated)
+        let nostr_key = std::env::var("NOSTR_PRIVATE_KEY").unwrap_or_default();
+        let nostr_nsec = std::env::var("NOSTR_NSEC").unwrap_or_default();
+        if !nostr_key.is_empty() || !nostr_nsec.is_empty() {
+            let relays: Vec<String> = std::env::var("NOSTR_RELAYS")
+                .unwrap_or_default()
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            cfg.nostr = Some(NostrChannelConfig {
+                private_key: nostr_key,
+                nsec: if nostr_nsec.is_empty() { None } else { Some(nostr_nsec) },
+                public_key: None,
+                relay_urls: relays,
+                policy: None,
+            });
+            any = true;
+        }
+
+        // LINE: LINE_CHANNEL_ACCESS_TOKEN (+ optional LINE_CHANNEL_SECRET)
+        let line_token = std::env::var("LINE_CHANNEL_ACCESS_TOKEN").unwrap_or_default();
+        if !line_token.is_empty() {
+            cfg.line = Some(LineChannelConfig {
+                channel_access_token: line_token,
+                channel_secret: std::env::var("LINE_CHANNEL_SECRET").ok().filter(|s| !s.is_empty()),
+                webhook_path: None,
+                policy: None,
+            });
+            any = true;
+        }
+
+        // Feishu: FEISHU_APP_ID + FEISHU_APP_SECRET
+        let feishu_id = std::env::var("FEISHU_APP_ID").unwrap_or_default();
+        let feishu_secret = std::env::var("FEISHU_APP_SECRET").unwrap_or_default();
+        if !feishu_id.is_empty() && !feishu_secret.is_empty() {
+            cfg.feishu = Some(FeishuChannelConfig {
+                app_id: feishu_id,
+                app_secret: feishu_secret,
+                encrypt_key: std::env::var("FEISHU_ENCRYPT_KEY").ok().filter(|s| !s.is_empty()),
+                verification_token: std::env::var("FEISHU_VERIFICATION_TOKEN")
+                    .ok()
+                    .filter(|s| !s.is_empty()),
+                webhook_path: None,
+                use_lark: std::env::var("FEISHU_USE_LARK")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false),
+                policy: None,
+            });
+            any = true;
+        }
+
+        // Zalo: ZALO_APP_ID + ZALO_SECRET_KEY
+        let zalo_id = std::env::var("ZALO_APP_ID").unwrap_or_default();
+        let zalo_secret = std::env::var("ZALO_SECRET_KEY").unwrap_or_default();
+        if !zalo_id.is_empty() && !zalo_secret.is_empty() {
+            cfg.zalo = Some(ZaloChannelConfig {
+                app_id: zalo_id,
+                secret_key: zalo_secret,
+                access_token: std::env::var("ZALO_ACCESS_TOKEN").ok().filter(|s| !s.is_empty()),
+                refresh_token: std::env::var("ZALO_REFRESH_TOKEN").ok().filter(|s| !s.is_empty()),
+                webhook_path: None,
+                policy: None,
+            });
+            any = true;
+        }
+
+        // BlueBubbles: BLUEBUBBLES_SERVER_URL + BLUEBUBBLES_PASSWORD
+        let bb_url = std::env::var("BLUEBUBBLES_SERVER_URL").unwrap_or_default();
+        let bb_pass = std::env::var("BLUEBUBBLES_PASSWORD").unwrap_or_default();
+        if !bb_url.is_empty() && !bb_pass.is_empty() {
+            cfg.bluebubbles = Some(BlueBubblesChannelConfig {
+                server_url: bb_url,
+                password: bb_pass,
+                policy: None,
+            });
+            any = true;
+        }
+
+        // Twilio-family channels share TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN;
+        // the per-channel number env var decides which channel(s) enable.
+        let twilio_sid = std::env::var("TWILIO_ACCOUNT_SID").unwrap_or_default();
+        let twilio_token = std::env::var("TWILIO_AUTH_TOKEN").unwrap_or_default();
+        if !twilio_sid.is_empty() && !twilio_token.is_empty() {
+            // SMS: TWILIO_SMS_FROM_NUMBER
+            let sms_from = std::env::var("TWILIO_SMS_FROM_NUMBER").unwrap_or_default();
+            if !sms_from.is_empty() {
+                cfg.sms = Some(SmsChannelConfig {
+                    account_sid: twilio_sid.clone(),
+                    auth_token: twilio_token.clone(),
+                    from_number: sms_from,
+                    webhook_path: None,
+                    policy: None,
+                });
+                any = true;
+            }
+
+            // Twilio WhatsApp: TWILIO_WHATSAPP_NUMBER
+            let wa_number = std::env::var("TWILIO_WHATSAPP_NUMBER").unwrap_or_default();
+            if !wa_number.is_empty() {
+                cfg.twilio_whatsapp = Some(TwilioWhatsAppChannelConfig {
+                    account_sid: twilio_sid.clone(),
+                    auth_token: twilio_token.clone(),
+                    whatsapp_number: wa_number,
+                    sandbox: std::env::var("TWILIO_WHATSAPP_SANDBOX")
+                        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                        .unwrap_or(true),
+                    webhook_path: None,
+                    status_callback_url: None,
+                    policy: None,
+                });
+                any = true;
+            }
+
+            // Voice: TWILIO_VOICE_FROM_NUMBER
+            let voice_from = std::env::var("TWILIO_VOICE_FROM_NUMBER").unwrap_or_default();
+            if !voice_from.is_empty() {
+                cfg.voice = Some(VoiceChannelConfigCore {
+                    account_sid: twilio_sid,
+                    auth_token: twilio_token,
+                    from_number: voice_from,
+                    webhook_base_url: std::env::var("ZEUS_WEBHOOK_URL")
+                        .ok()
+                        .filter(|s| !s.is_empty()),
+                    webhook_port: None,
+                    tts_voice: None,
+                    incoming_greeting: None,
+                    policy: None,
+                });
+                any = true;
+            }
         }
 
         if any { Some(cfg) } else { None }
@@ -5604,8 +6229,22 @@ impl Config {
         // (which loaded a real config, so the loaded_from_default/temp-path/onboarding
         // guards all pass) overwriting a live config.toml with test state.
         Self::reject_sentinel_credentials(&new_content)?;
+        let mut config_debris_errors = Vec::new();
+        let new_content_has_identity = Self::config_content_has_real_identity(&new_content);
         let content = if config_path.exists() {
             if let Ok(existing_str) = std::fs::read_to_string(&config_path) {
+                config_debris_errors.extend(Self::config_debris_errors_for_path(
+                    &existing_str,
+                    &config_path,
+                ));
+                if new_content_has_identity
+                    && Self::has_identityless_template_debris_at(&existing_str, &config_path)
+                {
+                    config_debris_errors.push(
+                        "identity-less template markers coexisting with real agent identity"
+                            .to_string(),
+                    );
+                }
                 if let (Ok(mut existing_table), Ok(new_table)) = (
                     existing_str.parse::<toml::Table>(),
                     new_content.parse::<toml::Table>(),
@@ -5626,7 +6265,42 @@ impl Config {
         };
 
         let content = Self::post_process_config_toml(&content);
+        config_debris_errors.extend(Self::config_debris_errors_for_path(
+            &content,
+            &config_path,
+        ));
+        if !config_debris_errors.is_empty() {
+            config_debris_errors.sort();
+            config_debris_errors.dedup();
+            return Err(Error::Config(format!(
+                "Refusing to write config.toml with debris shape (#309): {}",
+                config_debris_errors.join("; ")
+            )));
+        }
         Self::atomic_write(&config_path, &content)?;
+        Self::verify_config_write(&config_path, &content)?;
+        Ok(())
+    }
+
+    /// Write a complete config.toml body with the same low-level guarantees as
+    /// [`Config::save`]: debris-shape rejection, atomic temp+rename, and
+    /// verify-after-write. Use this for explicit full-file config writers such
+    /// as first-run setup and classic onboarding. Merge-preserving updates
+    /// should still use [`Config::save`].
+    pub fn write_config_toml_verified(path: &std::path::Path, content: &str) -> Result<()> {
+        let content = Self::post_process_config_toml(content);
+        Self::reject_sentinel_credentials(&content)?;
+        let mut errors = Self::config_debris_errors_for_path(&content, path);
+        if !errors.is_empty() {
+            errors.sort();
+            errors.dedup();
+            return Err(Error::Config(format!(
+                "Refusing to write config.toml with debris shape (#309): {}",
+                errors.join("; ")
+            )));
+        }
+        Self::atomic_write(path, &content)?;
+        Self::verify_config_write(path, &content)?;
         Ok(())
     }
 
@@ -5670,7 +6344,17 @@ impl Config {
             toml::to_string_pretty(&to_persist).map_err(|e| Error::Config(e.to_string()))?;
         Self::reject_sentinel_credentials(&content)?;
         let content = Self::post_process_config_toml(&content);
+        let mut errors = Self::config_debris_errors_for_path(&content, &config_path);
+        if !errors.is_empty() {
+            errors.sort();
+            errors.dedup();
+            return Err(Error::Config(format!(
+                "Refusing to write config.toml with debris shape (#309): {}",
+                errors.join("; ")
+            )));
+        }
         Self::atomic_write(&config_path, &content)?;
+        Self::verify_config_write(&config_path, &content)?;
         Ok(())
     }
 
@@ -5763,6 +6447,169 @@ impl Config {
                     sentinel
                 )));
             }
+        }
+        Ok(())
+    }
+
+    fn config_debris_errors_for_path(content: &str, path: &std::path::Path) -> Vec<String> {
+        let (mut errors, _has_real_identity, has_any_identity, _identityless_template_marker) =
+            Self::scan_config_shape(content);
+        if !has_any_identity
+            && path
+                .parent()
+                .map(Self::config_home_has_veteran_state)
+                .unwrap_or(false)
+        {
+            errors.push("identity-less template config marker with veteran state".to_string());
+        }
+        errors
+    }
+
+    fn has_identityless_template_debris_at(content: &str, path: &std::path::Path) -> bool {
+        let (_errors, _has_real_identity, has_any_identity, _identityless_template_marker) =
+            Self::scan_config_shape(content);
+        !has_any_identity
+            && path
+                .parent()
+                .map(Self::config_home_has_veteran_state)
+                .unwrap_or(false)
+    }
+
+    fn config_content_has_real_identity(content: &str) -> bool {
+        let (_errors, has_real_identity, _has_any_identity, _identityless_template_marker) =
+            Self::scan_config_shape(content);
+        has_real_identity
+    }
+
+    fn config_home_has_veteran_state(zeus_home: &std::path::Path) -> bool {
+        const MARKERS: &[&str] = &[
+            "memory.db",
+            "sessions",
+            "goals.db",
+            "scheduler.db",
+            "learning.db",
+            "cooking_checkpoints.db",
+        ];
+        MARKERS.iter().any(|marker| zeus_home.join(marker).exists())
+    }
+
+    fn scan_config_shape(content: &str) -> (Vec<String>, bool, bool, bool) {
+        let mut errors = Vec::new();
+        let mut seen_top_level_keys = HashSet::new();
+        let mut seen_top_level_tables = HashSet::new();
+        let mut current_table: Option<String> = None;
+        let mut agent_name: Option<String> = None;
+        let mut agent_persona: Option<String> = None;
+        let mut top_level_name: Option<String> = None;
+        let mut top_level_persona: Option<String> = None;
+        let mut model_is_template_default = false;
+
+        for raw_line in content.lines() {
+            let line = raw_line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            if line.starts_with('[') {
+                if let Some(end) = line.find(']') {
+                    let header = &line[..=end];
+                    let table = header.trim_matches(&['[', ']'][..]).to_string();
+                    let is_array_table = line.starts_with("[[");
+                    current_table = Some(table.clone());
+                    if !is_array_table
+                        && !table.contains('.')
+                        && !seen_top_level_tables.insert(table.clone())
+                    {
+                        errors.push(format!("duplicate top-level table [{}]", table));
+                    }
+                }
+                continue;
+            }
+
+            let Some((raw_key, raw_value)) = line.split_once('=') else {
+                continue;
+            };
+            let key = raw_key.trim();
+            let value = Self::toml_line_value(raw_value);
+
+            match current_table.as_deref() {
+                None => {
+                    if !key.contains('.') && !seen_top_level_keys.insert(key.to_string()) {
+                        errors.push(format!("duplicate top-level key {}", key));
+                    }
+                    match key {
+                        "model" if value == "ollama/llama3.2" => {
+                            model_is_template_default = true;
+                        }
+                        "name" if !value.is_empty() => top_level_name = Some(value),
+                        "persona" if !value.is_empty() => top_level_persona = Some(value),
+                        _ => {}
+                    }
+                }
+                Some("agent") => match key {
+                    "name" if !value.is_empty() => agent_name = Some(value),
+                    "persona" if !value.is_empty() => agent_persona = Some(value),
+                    _ => {}
+                },
+                Some("network") => match key {
+                    "agent_name" if !value.is_empty() => top_level_name = Some(value),
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+
+        let identity = agent_name.as_deref().or(top_level_name.as_deref());
+        let has_any_identity = identity.map(|name| !name.is_empty()).unwrap_or(false);
+        let has_real_identity = identity
+            .map(|name| !name.starts_with('$') && name != "zeus")
+            .unwrap_or(false);
+        let template_persona = agent_persona
+            .as_deref()
+            .or(top_level_persona.as_deref())
+            .map(Self::is_template_persona_marker)
+            .unwrap_or(false);
+        let identityless_template_marker =
+            model_is_template_default && template_persona && !has_any_identity;
+
+        (errors, has_real_identity, has_any_identity, identityless_template_marker)
+    }
+
+    fn toml_line_value(raw_value: &str) -> String {
+        raw_value
+            .split('#')
+            .next()
+            .unwrap_or(raw_value)
+            .trim()
+            .trim_matches('"')
+            .to_string()
+    }
+
+    fn is_template_persona_marker(value: &str) -> bool {
+        matches!(value, "The Herald" | "helpful, precise, and proactive")
+    }
+
+    /// Verify the final bytes and debris shape after atomic rename. This closes
+    /// the save-path gap where a temp write could succeed but the durable file was
+    /// not the clean config shape the writer intended.
+    fn verify_config_write(path: &std::path::Path, expected: &str) -> Result<()> {
+        let written = std::fs::read_to_string(path).map_err(|e| {
+            Error::Config(format!("Config verify-after-write read failed: {}", e))
+        })?;
+        if written != expected {
+            return Err(Error::Config(
+                "Config verify-after-write mismatch after atomic rename".to_string(),
+            ));
+        }
+
+        let mut errors = Self::config_debris_errors_for_path(&written, path);
+        if !errors.is_empty() {
+            errors.sort();
+            errors.dedup();
+            return Err(Error::Config(format!(
+                "Config verify-after-write found debris shape (#309): {}",
+                errors.join("; ")
+            )));
         }
         Ok(())
     }
@@ -8171,6 +9018,18 @@ verbosity = "barfly"
             irc: None,
             twitch: None,
             x_twitter: None,
+            teams: None,
+            webchat: None,
+            googlechat: None,
+            nextcloud: None,
+            nostr: None,
+            line: None,
+            feishu: None,
+            zalo: None,
+            bluebubbles: None,
+            sms: None,
+            twilio_whatsapp: None,
+            voice: None,
         });
         let warnings = config.validate_channels();
         assert!(warnings.iter().any(|w| w.contains("api_id")));
@@ -8205,6 +9064,18 @@ verbosity = "barfly"
             irc: None,
             twitch: None,
             x_twitter: None,
+            teams: None,
+            webchat: None,
+            googlechat: None,
+            nextcloud: None,
+            nostr: None,
+            line: None,
+            feishu: None,
+            zalo: None,
+            bluebubbles: None,
+            sms: None,
+            twilio_whatsapp: None,
+            voice: None,
         });
         let warnings = config.validate_channels();
         assert!(warnings.iter().any(|w| w.contains("homeserver")));
@@ -8232,6 +9103,18 @@ verbosity = "barfly"
             irc: None,
             twitch: None,
             x_twitter: None,
+            teams: None,
+            webchat: None,
+            googlechat: None,
+            nextcloud: None,
+            nostr: None,
+            line: None,
+            feishu: None,
+            zalo: None,
+            bluebubbles: None,
+            sms: None,
+            twilio_whatsapp: None,
+            voice: None,
         });
         let warnings = config.validate();
         assert!(warnings.iter().any(|w| w.contains("WhatsApp")));
@@ -9441,6 +10324,121 @@ mod sprint_tests {
             "a real (non-default) config must still save_unchecked normally"
         );
     }
+
+    fn named_real_config(agent_name: &str) -> Config {
+        Config {
+            loaded_from_default: false,
+            onboarding_complete: true,
+            model: "anthropic/claude-sonnet-4-6".to_string(),
+            agent: Some(AgentSection {
+                name: Some(agent_name.to_string()),
+                persona: Some("The Operator".to_string()),
+                role: Some("Infra".to_string()),
+                coordinator: Some("Zeus100".to_string()),
+            }),
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn test_save_rejects_prepended_duplicate_top_level_config_debris() {
+        // #309: a template prepended over a real config creates duplicate
+        // top-level keys/tables. Even if TOML parsing would otherwise fall back
+        // to writing the new struct, the central save path must refuse before
+        // replacing recoverable debris on disk.
+        let (_lock, home) = redirect_zeus_home();
+        let cfg_path = home.path().join("config.toml");
+        let debris = r#"model = "ollama/llama3.2"
+workspace = "/tmp/template-workspace"
+model = "anthropic/claude-sonnet-4-6"
+onboarding_complete = true
+
+[agent]
+name = "zeus106"
+"#;
+        std::fs::write(&cfg_path, debris).unwrap();
+
+        let err = named_real_config("zeus106")
+            .save()
+            .expect_err("duplicate top-level debris must be refused");
+        assert!(
+            err.to_string().contains("duplicate top-level key model"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&cfg_path).unwrap(),
+            debris,
+            "refused write must leave the debris file untouched for recovery"
+        );
+    }
+
+    #[test]
+    fn test_save_rejects_identityless_template_in_veteran_home_before_real_identity_merge() {
+        // #309 boot-check signature: no configured identity in a ZEUS_HOME that
+        // already has veteran runtime state. A later real-identity save must not
+        // merge/preserve that bootstrap/template body as if it were a healthy
+        // forward-compatible config.
+        let (_lock, home) = redirect_zeus_home();
+        let cfg_path = home.path().join("config.toml");
+        std::fs::write(home.path().join("memory.db"), b"veteran state").unwrap();
+        let identityless_template = r#"model = "anthropic/claude-sonnet-4-6"
+onboarding_complete = false
+
+[agent]
+persona = "The Herald"
+"#;
+        std::fs::write(&cfg_path, identityless_template).unwrap();
+
+        let err = named_real_config("zeus106")
+            .save()
+            .expect_err("identity-less veteran-state config must be refused");
+        assert!(
+            err.to_string().contains("identity-less"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&cfg_path).unwrap(),
+            identityless_template,
+            "refused write must preserve the identity-less template for operator recovery"
+        );
+    }
+
+    #[test]
+    fn test_save_preserves_unknown_sections_when_no_debris_shape_exists() {
+        // Forward-compat is intentional: unknown sections must survive a normal
+        // Config::save(). The #309 guard is narrow and rejects only debris shapes,
+        // not future config tables the current binary does not understand.
+        let (_lock, home) = redirect_zeus_home();
+        let cfg_path = home.path().join("config.toml");
+        let existing = r#"model = "anthropic/claude-opus-4"
+onboarding_complete = true
+
+[agent]
+name = "zeus106"
+persona = "The Operator"
+
+[future_feature]
+enabled = true
+label = "keep-me"
+
+[future_feature.nested]
+value = "still-here"
+"#;
+        std::fs::write(&cfg_path, existing).unwrap();
+
+        named_real_config("zeus106")
+            .save()
+            .expect("unknown sections are not debris and must be preserved");
+
+        let written = std::fs::read_to_string(&cfg_path).unwrap();
+        assert!(written.contains("[future_feature]"), "{written}");
+        assert!(written.contains("enabled = true"), "{written}");
+        assert!(written.contains("label = \"keep-me\""), "{written}");
+        assert!(written.contains("[future_feature.nested]"), "{written}");
+        assert!(written.contains("value = \"still-here\""), "{written}");
+        assert!(written.contains("name = \"zeus106\""), "{written}");
+    }
+
 
     #[test]
     fn test_load_parse_failure_preserves_config_and_guards_save() {

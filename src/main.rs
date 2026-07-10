@@ -9,6 +9,7 @@ mod zeus_paths;
 
 mod daemon;
 mod gateway;
+mod clock_sanity;
 mod logging;
 mod gateway_bootstrap;
 mod gateway_consumer;
@@ -18,6 +19,7 @@ mod gateway_web;
 mod logs_cmd;
 // inbox moved to zeus-core::inbox for cross-crate access
 mod onboard;
+mod power_assertion;
 mod presence_tracker;
 mod reset;
 
@@ -721,6 +723,8 @@ async fn main() -> Result<()> {
                 web_port: config.gateway.as_ref().map(|g| g.web_port).unwrap_or(8081),
                 timeout_secs: existing_gw.timeout_secs,
                 reconnect_delay_secs: existing_gw.reconnect_delay_secs,
+                shutdown_hard_deadline_secs: existing_gw.shutdown_hard_deadline_secs,
+                prevent_sleep: existing_gw.prevent_sleep,
                 max_ws_message_bytes: existing_gw.max_ws_message_bytes,
                 max_webhook_payload_bytes: existing_gw.max_webhook_payload_bytes,
                 max_webhook_message_bytes: existing_gw.max_webhook_message_bytes,

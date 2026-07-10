@@ -85,7 +85,7 @@ zeus_gateway_start()
     [ -n "${zeus_gateway_anthropic_key}" ] && _env_args="$_env_args ANTHROPIC_API_KEY=${zeus_gateway_anthropic_key}"
 
     echo "Starting ${name}."
-    /usr/sbin/daemon -f -p "${pidfile}" -o "${zeus_gateway_logfile}" \
+    /usr/sbin/daemon -r -P "${pidfile}" -o "${zeus_gateway_logfile}" \
         -u "${zeus_gateway_user}" \
         /usr/bin/env ${_env_args} \
         "${procname}" \

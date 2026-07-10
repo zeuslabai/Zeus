@@ -109,7 +109,7 @@ pub async fn start_matrix_relay(
     config: &Config,
     agent_inbox: &zeus_core::inbox::InboxSender,
     prometheus: &Option<Arc<RwLock<zeus_prometheus::Prometheus>>>,
-    tasks: &mut Vec<JoinHandle<Result<()>>>,
+    tasks: &mut Vec<(&'static str, JoinHandle<Result<()>>)>,
 ) {
     let Some(ref relay_config) = config.matrix_relay else { return };
     use zeus_channels::ChannelAdapter;
@@ -138,7 +138,7 @@ pub async fn start_matrix_relay(
                 let adapter_for_reply = adapter.clone();
                 let prometheus_for_matrix = prometheus.clone();
                 let inbox_for_matrix = agent_inbox.clone();
-                tasks.push(tokio::spawn(async move {
+                tasks.push(("matrix-relay", tokio::spawn(async move {
                     info!("Matrix relay consumer started");
                     while let Some(msg) = rx.recv().await {
                         let preview = safe_preview(&msg.content, 50);
@@ -164,7 +164,7 @@ pub async fn start_matrix_relay(
                         }
                     }
                     Ok(())
-                }));
+                })));
             }
         }
         Err(e) => error!("Failed to create Matrix relay adapter: {}", e),
@@ -177,7 +177,7 @@ pub async fn start_matrix_relay(
     config: &Config,
     _agent_inbox: &zeus_core::inbox::InboxSender,
     _prometheus: &Option<Arc<RwLock<zeus_prometheus::Prometheus>>>,
-    _tasks: &mut Vec<JoinHandle<Result<()>>>,
+    _tasks: &mut Vec<(&'static str, JoinHandle<Result<()>>)>,
 ) {
     if config.matrix_relay.is_some() {
         tracing::warn!("Matrix relay configured but built without 'matrix' feature — skipping");
@@ -189,7 +189,7 @@ pub async fn start_signal_relay(
     config: &Config,
     agent_inbox: &zeus_core::inbox::InboxSender,
     prometheus: &Option<Arc<RwLock<zeus_prometheus::Prometheus>>>,
-    tasks: &mut Vec<JoinHandle<Result<()>>>,
+    tasks: &mut Vec<(&'static str, JoinHandle<Result<()>>)>,
 ) {
     let Some(ref relay_config) = config.signal_relay else { return };
     use zeus_channels::ChannelAdapter;
@@ -216,7 +216,7 @@ pub async fn start_signal_relay(
                 let prometheus_for_signal = prometheus.clone();
                 let inbox_for_signal = agent_inbox.clone();
                 let allowed_senders = relay_config.allowed_senders.clone();
-                tasks.push(tokio::spawn(async move {
+                tasks.push(("signal-relay", tokio::spawn(async move {
                     info!("Signal relay consumer started");
                     if !allowed_senders.is_empty() {
                         info!("Signal relay: filtering to {} allowed sender(s)", allowed_senders.len());
@@ -252,7 +252,7 @@ pub async fn start_signal_relay(
                         }
                     }
                     Ok(())
-                }));
+                })));
             }
         }
         Err(e) => error!("Failed to create Signal relay adapter: {}", e),
@@ -264,7 +264,7 @@ pub async fn start_email_relay(
     config: &Config,
     agent_inbox: &zeus_core::inbox::InboxSender,
     prometheus: &Option<Arc<RwLock<zeus_prometheus::Prometheus>>>,
-    tasks: &mut Vec<JoinHandle<Result<()>>>,
+    tasks: &mut Vec<(&'static str, JoinHandle<Result<()>>)>,
 ) {
     let Some(ref relay_config) = config.email_relay else { return };
     use zeus_channels::ChannelAdapter;
@@ -294,7 +294,7 @@ pub async fn start_email_relay(
                 let prometheus_for_email = prometheus.clone();
                 let inbox_for_email = agent_inbox.clone();
                 let allowed_senders = relay_config.allowed_senders.clone();
-                tasks.push(tokio::spawn(async move {
+                tasks.push(("email-relay", tokio::spawn(async move {
                     info!("Email relay consumer started");
                     while let Some(msg) = rx.recv().await {
                         if !allowed_senders.is_empty() {
@@ -326,7 +326,7 @@ pub async fn start_email_relay(
                         }
                     }
                     Ok(())
-                }));
+                })));
             }
         }
         Err(e) => error!("Failed to create Email relay adapter: {}", e),
@@ -338,7 +338,7 @@ pub async fn start_mqtt_relay(
     config: &Config,
     agent_inbox: &zeus_core::inbox::InboxSender,
     prometheus: &Option<Arc<RwLock<zeus_prometheus::Prometheus>>>,
-    tasks: &mut Vec<JoinHandle<Result<()>>>,
+    tasks: &mut Vec<(&'static str, JoinHandle<Result<()>>)>,
 ) {
     let Some(ref relay_config) = config.mqtt_relay else { return };
     use zeus_channels::ChannelAdapter;
@@ -369,7 +369,7 @@ pub async fn start_mqtt_relay(
         let prometheus_for_mqtt = prometheus.clone();
         let inbox_for_mqtt = agent_inbox.clone();
         let reply_prefix = relay_config.reply_topic_prefix.clone();
-        tasks.push(tokio::spawn(async move {
+        tasks.push(("mqtt-relay", tokio::spawn(async move {
             info!("MQTT relay consumer started");
             while let Some(msg) = rx.recv().await {
                 let preview = safe_preview(&msg.content, 50);
@@ -402,7 +402,7 @@ pub async fn start_mqtt_relay(
                 }
             }
             Ok(())
-        }));
+        })));
     }
 }
 
@@ -411,7 +411,7 @@ pub async fn start_whatsapp_relay(
     config: &Config,
     agent_inbox: &zeus_core::inbox::InboxSender,
     prometheus: &Option<Arc<RwLock<zeus_prometheus::Prometheus>>>,
-    tasks: &mut Vec<JoinHandle<Result<()>>>,
+    tasks: &mut Vec<(&'static str, JoinHandle<Result<()>>)>,
 ) {
     let Some(ref relay_config) = config.whatsapp_relay else { return };
     use zeus_channels::ChannelAdapter;
@@ -449,7 +449,7 @@ pub async fn start_whatsapp_relay(
                 let prometheus_for_wa = prometheus.clone();
                 let inbox_for_wa = agent_inbox.clone();
                 let allowed_senders = relay_config.allowed_senders.clone();
-                tasks.push(tokio::spawn(async move {
+                tasks.push(("whatsapp-relay", tokio::spawn(async move {
                     info!("WhatsApp relay consumer started");
                     if !allowed_senders.is_empty() {
                         info!("WhatsApp relay: filtering to {} allowed sender(s)", allowed_senders.len());
@@ -485,7 +485,7 @@ pub async fn start_whatsapp_relay(
                         }
                     }
                     Ok(())
-                }));
+                })));
             }
         }
         Err(e) => error!("Failed to create WhatsApp relay adapter: {}", e),
@@ -497,7 +497,7 @@ pub async fn start_mattermost_relay(
     config: &Config,
     agent_inbox: &zeus_core::inbox::InboxSender,
     prometheus: &Option<Arc<RwLock<zeus_prometheus::Prometheus>>>,
-    tasks: &mut Vec<JoinHandle<Result<()>>>,
+    tasks: &mut Vec<(&'static str, JoinHandle<Result<()>>)>,
 ) {
     let Some(ref relay_config) = config.mattermost_relay else { return };
     use zeus_channels::ChannelAdapter;
@@ -519,7 +519,7 @@ pub async fn start_mattermost_relay(
                 let adapter_for_reply = adapter.clone();
                 let prometheus_for_mm = prometheus.clone();
                 let inbox_for_mm = agent_inbox.clone();
-                tasks.push(tokio::spawn(async move {
+                tasks.push(("mattermost-relay", tokio::spawn(async move {
                     info!("Mattermost relay consumer started");
                     while let Some(msg) = rx.recv().await {
                         let preview = safe_preview(&msg.content, 50);
@@ -545,7 +545,7 @@ pub async fn start_mattermost_relay(
                         }
                     }
                     Ok(())
-                }));
+                })));
             }
         }
         Err(e) => error!("Failed to create Mattermost relay adapter: {}", e),
@@ -576,7 +576,7 @@ pub async fn start_x_relay(
     config: &Config,
     agent_inbox: &zeus_core::inbox::InboxSender,
     prometheus: &Option<Arc<RwLock<zeus_prometheus::Prometheus>>>,
-    tasks: &mut Vec<JoinHandle<Result<()>>>,
+    tasks: &mut Vec<(&'static str, JoinHandle<Result<()>>)>,
 ) {
     use zeus_channels::ChannelAdapter;
 
@@ -653,7 +653,7 @@ pub async fn start_x_relay(
                 );
             }
 
-            tasks.push(tokio::spawn(async move {
+            tasks.push(("x-relay", tokio::spawn(async move {
                 info!("X relay consumer started");
                 while let Some(msg) = rx.recv().await {
                     let preview = safe_preview(&msg.content, 80);
@@ -709,7 +709,7 @@ pub async fn start_x_relay(
                     }
                 }
                 Ok(())
-            }));
+            })));
         }
         Err(e) => error!("X relay: failed to create adapter: {}", e),
     }

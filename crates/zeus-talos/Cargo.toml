@@ -5,9 +5,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["audio"]
+audio = ["zeus-channels/audio"]
+
 [dependencies]
 zeus-core.workspace = true
-zeus-channels.workspace = true
+zeus-channels = { workspace = true, default-features = false }
 
 # Async runtime
 tokio.workspace = true

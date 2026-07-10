@@ -622,12 +622,12 @@ impl ToolRegistry {
 
             ToolSchema::new("send_file", "Send a file (audio, image, document) to a channel. Audio files (.aiff, .wav, .mp3) sent to Discord are auto-converted to OGG/Opus voice messages. Use this tool to send attachments — do NOT use spawn for this.")
                 .with_param("path", "string", "Path to the file to send", true)
-                .with_param("channel", "string", "Channel: 'discord', 'telegram', 'slack'", true)
+                .with_param("channel", "string", "Any connected channel, e.g. 'discord', 'telegram', 'slack', 'email', 'imessage', 'matrix', 'mattermost', 'irc', 'whatsapp', 'signal'. Defaults to the source channel when resolvable.", true)
                 .with_param("target", "string", "Channel/chat ID to send to", true)
                 .with_param("caption", "string", "Optional caption/message text", false),
 
             ToolSchema::new("send_rich", "Send a structured rich response (title + text + inline image) to a channel. Tier-1 channels (Discord, Slack) render it natively as embeds; others gracefully degrade to plain text. Use for composed multi-part messages — for plain file attachments use send_file instead.")
-                .with_param("channel", "string", "Channel: 'discord', 'telegram', 'slack'", true)
+                .with_param("channel", "string", "Any connected channel, e.g. 'discord', 'telegram', 'slack', 'email', 'imessage', 'matrix', 'mattermost', 'irc', 'whatsapp', 'signal'.", true)
                 .with_param("target", "string", "Channel/chat ID to send to", true)
                 .with_param("text", "string", "Body text of the rich response", false)
                 .with_param("title", "string", "Title/header (rendered natively on rich channels)", false)

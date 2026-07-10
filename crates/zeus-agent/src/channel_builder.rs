@@ -465,23 +465,10 @@ pub async fn build_channel_manager_from_config(
             manager.add_adapter(Box::new(adapter));
         }
 
-        // MQTT adapter
-        if let Some(ref mq) = cc.mqtt {
-            let mqtt_config = zeus_channels::MqttConfig {
-                broker_url: mq.broker_url.clone(),
-                port: mq.port,
-                topic_prefix: mq.topic_prefix.clone(),
-                client_id: mq.client_id.clone().unwrap_or_default(),
-                qos: mq.qos,
-                subscribe_topics: mq.subscribe_topics.clone(),
-                username: mq.username.clone(),
-                password: mq.password.clone(),
-                ..Default::default()
-            };
-            let adapter = zeus_channels::MqttAdapter::new(mqtt_config);
-            info!("MQTT channel adapter created");
-            manager.add_adapter(Box::new(adapter));
-        }
+        // NOTE(#316): a second MQTT construction block lived here — an exact
+        // duplicate gate on `cc.mqtt` that added a SECOND adapter for the
+        // same broker (with a worse client_id fallback: empty string vs the
+        // uuid-suffixed one above). Removed; the block above is canonical.
 
         // Mattermost adapter
         if let Some(ref mm) = cc.mattermost {
@@ -496,6 +483,24 @@ pub async fn build_channel_manager_from_config(
                     manager.add_adapter(Box::new(adapter));
                 }
                 Err(e) => warn!("Failed to create Mattermost adapter: {}", e),
+            }
+        }
+
+        // Twitch adapter (#316: config existed end-to-end but was never
+        // constructed here — the inversion of the iMessage case)
+        if let Some(ref tw) = cc.twitch {
+            let twitch_config = zeus_channels::TwitchConfig {
+                oauth_token: tw.oauth_token.clone(),
+                username: tw.username.clone(),
+                channels: tw.channels.clone(),
+                client_id: tw.client_id.clone(),
+            };
+            match zeus_channels::TwitchAdapter::new(twitch_config).await {
+                Ok(adapter) => {
+                    info!("Twitch channel adapter created");
+                    manager.add_adapter(Box::new(adapter));
+                }
+                Err(e) => warn!("Failed to create Twitch adapter: {}", e),
             }
         }
 
@@ -525,6 +530,221 @@ pub async fn build_channel_manager_from_config(
                 }
                 Err(e) => warn!("Failed to create X (Twitter) adapter: {}", e),
             }
+        }
+
+        // Microsoft Teams adapter (#316 P3: config existed in zeus-channels
+        // but was never plumbed through zeus-core nor constructed here)
+        if let Some(ref tm) = cc.teams {
+            let teams_config = zeus_channels::TeamsConfig {
+                tenant_id: tm.tenant_id.clone(),
+                client_id: tm.client_id.clone(),
+                client_secret: tm.client_secret.clone(),
+                team_id: tm.team_id.clone(),
+                channel_id: tm.channel_id.clone(),
+            };
+            match zeus_channels::TeamsAdapter::new(teams_config).await {
+                Ok(adapter) => {
+                    info!("Microsoft Teams channel adapter created");
+                    manager.add_adapter(Box::new(adapter));
+                }
+                Err(e) => warn!("Failed to create Microsoft Teams adapter: {}", e),
+            }
+        }
+
+        // WebChat adapter (#316 P3) — embedded WebSocket chat; constructor is
+        // sync and infallible (server starts on adapter start_all)
+        if let Some(ref wc) = cc.webchat {
+            let mut webchat_config = zeus_channels::WebChatConfig {
+                websocket_path: wc.websocket_path.clone(),
+                auth_token: wc.auth_token.clone(),
+                allowed_origins: wc.allowed_origins.clone(),
+                ..Default::default()
+            };
+            if let Some(sz) = wc.max_message_size {
+                webchat_config.max_message_size = sz;
+            }
+            if let Some(t) = wc.connection_timeout_secs {
+                webchat_config.connection_timeout_secs = t;
+            }
+            let adapter = zeus_channels::WebChatAdapter::new(webchat_config);
+            info!("WebChat channel adapter created");
+            manager.add_adapter(Box::new(adapter));
+        }
+
+        // Google Chat adapter (#316 P3)
+        if let Some(ref gc) = cc.googlechat {
+            let gchat_config = zeus_channels::GoogleChatConfig {
+                service_account_key: gc.service_account_key.clone(),
+                credentials_path: gc.credentials_path.clone(),
+                access_token: gc.access_token.clone(),
+                webhook_path: gc.webhook_path.clone(),
+                project_id: gc.project_id.clone(),
+            };
+            match zeus_channels::GoogleChatAdapter::new(gchat_config).await {
+                Ok(adapter) => {
+                    info!("Google Chat channel adapter created");
+                    manager.add_adapter(Box::new(adapter));
+                }
+                Err(e) => warn!("Failed to create Google Chat adapter: {}", e),
+            }
+        }
+
+        // Nextcloud Talk adapter (#316 P3)
+        if let Some(ref nc) = cc.nextcloud {
+            let nc_config = zeus_channels::NextcloudConfig {
+                server_url: nc.server_url.clone(),
+                username: nc.username.clone(),
+                password: nc.password.clone(),
+                poll_interval_secs: nc.poll_interval_secs,
+            };
+            match zeus_channels::NextcloudAdapter::new(nc_config).await {
+                Ok(adapter) => {
+                    info!("Nextcloud Talk channel adapter created");
+                    manager.add_adapter(Box::new(adapter));
+                }
+                Err(e) => warn!("Failed to create Nextcloud Talk adapter: {}", e),
+            }
+        }
+
+        // Nostr adapter (#316 P3 batch-2a)
+        if let Some(ref ns) = cc.nostr {
+            let nostr_config = zeus_channels::NostrConfig {
+                private_key: ns.private_key.clone(),
+                nsec: ns.nsec.clone(),
+                public_key: ns.public_key.clone(),
+                relay_urls: ns.relay_urls.clone(),
+            };
+            match zeus_channels::NostrAdapter::new(nostr_config).await {
+                Ok(adapter) => {
+                    info!("Nostr channel adapter created");
+                    manager.add_adapter(Box::new(adapter));
+                }
+                Err(e) => warn!("Failed to create Nostr adapter: {}", e),
+            }
+        }
+
+        // LINE adapter (#316 P3 batch-2a)
+        if let Some(ref ln) = cc.line {
+            let line_config = zeus_channels::LineConfig {
+                channel_access_token: ln.channel_access_token.clone(),
+                channel_secret: ln.channel_secret.clone(),
+                webhook_path: ln.webhook_path.clone(),
+            };
+            match zeus_channels::LineAdapter::new(line_config).await {
+                Ok(adapter) => {
+                    info!("LINE channel adapter created");
+                    manager.add_adapter(Box::new(adapter));
+                }
+                Err(e) => warn!("Failed to create LINE adapter: {}", e),
+            }
+        }
+
+        // Feishu (Lark) adapter (#316 P3 batch-2a)
+        if let Some(ref fs) = cc.feishu {
+            let feishu_config = zeus_channels::FeishuConfig {
+                app_id: fs.app_id.clone(),
+                app_secret: fs.app_secret.clone(),
+                encrypt_key: fs.encrypt_key.clone(),
+                verification_token: fs.verification_token.clone(),
+                webhook_path: fs.webhook_path.clone(),
+                use_lark: fs.use_lark,
+            };
+            match zeus_channels::FeishuAdapter::new(feishu_config).await {
+                Ok(adapter) => {
+                    info!("Feishu channel adapter created");
+                    manager.add_adapter(Box::new(adapter));
+                }
+                Err(e) => warn!("Failed to create Feishu adapter: {}", e),
+            }
+        }
+
+        // Zalo adapter (#316 P3 batch-2a)
+        if let Some(ref zl) = cc.zalo {
+            let zalo_config = zeus_channels::ZaloConfig {
+                app_id: zl.app_id.clone(),
+                secret_key: zl.secret_key.clone(),
+                access_token: zl.access_token.clone(),
+                refresh_token: zl.refresh_token.clone(),
+                webhook_path: zl.webhook_path.clone(),
+            };
+            match zeus_channels::ZaloAdapter::new(zalo_config).await {
+                Ok(adapter) => {
+                    info!("Zalo channel adapter created");
+                    manager.add_adapter(Box::new(adapter));
+                }
+                Err(e) => warn!("Failed to create Zalo adapter: {}", e),
+            }
+        }
+
+        // BlueBubbles adapter (#316 P3 batch-2b)
+        if let Some(ref bb) = cc.bluebubbles {
+            let bb_config = zeus_channels::BlueBubblesConfig {
+                server_url: bb.server_url.clone(),
+                password: bb.password.clone(),
+            };
+            match zeus_channels::BlueBubblesAdapter::new(bb_config).await {
+                Ok(adapter) => {
+                    info!("BlueBubbles channel adapter created");
+                    manager.add_adapter(Box::new(adapter));
+                }
+                Err(e) => warn!("Failed to create BlueBubbles adapter: {}", e),
+            }
+        }
+
+        // SMS (Twilio) adapter (#316 P3 batch-2b) — sync infallible `new`,
+        // like WebChat; credential errors surface at start/send time.
+        if let Some(ref sc) = cc.sms {
+            let defaults = zeus_channels::SmsConfig::default();
+            let sms_config = zeus_channels::SmsConfig {
+                account_sid: sc.account_sid.clone(),
+                auth_token: sc.auth_token.clone(),
+                from_number: sc.from_number.clone(),
+                webhook_path: sc.webhook_path.clone().unwrap_or(defaults.webhook_path),
+            };
+            let adapter = zeus_channels::SmsAdapter::new(sms_config);
+            info!("SMS channel adapter created");
+            manager.add_adapter(Box::new(adapter));
+        }
+
+        // Twilio WhatsApp adapter (#316 P3 batch-2b) — sync infallible `new`.
+        if let Some(ref tw) = cc.twilio_whatsapp {
+            let defaults = zeus_channels::TwilioWhatsAppConfig::default();
+            let tw_config = zeus_channels::TwilioWhatsAppConfig {
+                account_sid: tw.account_sid.clone(),
+                auth_token: tw.auth_token.clone(),
+                whatsapp_number: tw.whatsapp_number.clone(),
+                webhook_path: tw.webhook_path.clone().unwrap_or(defaults.webhook_path),
+                sandbox: tw.sandbox,
+                status_callback_url: tw.status_callback_url.clone(),
+            };
+            let adapter = zeus_channels::TwilioWhatsAppAdapter::new(tw_config);
+            info!("Twilio WhatsApp channel adapter created");
+            manager.add_adapter(Box::new(adapter));
+        }
+
+        // Voice (Twilio phone calls) adapter (#316 P3 batch-2b) — sync
+        // infallible `new`; Option fields fall back to adapter defaults.
+        if let Some(ref vc) = cc.voice {
+            let defaults = zeus_channels::VoiceChannelConfig::default();
+            let voice_config = zeus_channels::VoiceChannelConfig {
+                account_sid: vc.account_sid.clone(),
+                auth_token: vc.auth_token.clone(),
+                from_number: vc.from_number.clone(),
+                webhook_base_url: vc
+                    .webhook_base_url
+                    .clone()
+                    .unwrap_or(defaults.webhook_base_url),
+                webhook_port: vc.webhook_port.unwrap_or(defaults.webhook_port),
+                tts_voice: vc.tts_voice.clone().unwrap_or(defaults.tts_voice),
+                incoming_greeting: vc
+                    .incoming_greeting
+                    .clone()
+                    .unwrap_or(defaults.incoming_greeting),
+                poll_interval_ms: defaults.poll_interval_ms,
+            };
+            let adapter = zeus_channels::VoiceAdapter::new(voice_config);
+            info!("Voice channel adapter created");
+            manager.add_adapter(Box::new(adapter));
         }
 
         // S82: Wire iMessage adapter if configured

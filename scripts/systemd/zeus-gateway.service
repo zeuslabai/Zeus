@@ -3,6 +3,8 @@ Description=Zeus AI Gateway
 Documentation=https://zeuslab.ai
 After=network-online.target
 Wants=network-online.target
+StartLimitBurst=5
+StartLimitIntervalSec=60
 
 [Service]
 Type=simple

@@ -11,8 +11,10 @@
 pub mod agent_loop;
 pub mod audio;
 pub mod call;
-#[cfg(not(target_os = "freebsd"))]
+#[cfg(all(feature = "audio", not(target_os = "freebsd")))]
 pub mod cpal_audio;
+#[cfg(not(all(feature = "audio", not(target_os = "freebsd"))))]
+pub mod cpal_audio_stub;
 pub mod elevenlabs;
 pub mod inbound;
 pub mod media;
@@ -32,8 +34,10 @@ pub use agent_loop::{
     VoiceAgentHandler, VoiceAgentLoop, VoiceCommand, VoiceLoopConfig, VoiceTTSProvider,
 };
 pub use call::{CallManager, CallRecord, CallState, TranscriptEntry};
-#[cfg(not(target_os = "freebsd"))]
+#[cfg(all(feature = "audio", not(target_os = "freebsd")))]
 pub use cpal_audio::{CpalAudioInput, CpalAudioOutput};
+#[cfg(not(all(feature = "audio", not(target_os = "freebsd"))))]
+pub use cpal_audio_stub::{CpalAudioInput, CpalAudioOutput};
 pub use elevenlabs::{ElevenLabsConfig, ElevenLabsProvider};
 pub use inbound::{
     InboundCallWebhook, RecordingStatusWebhook, TranscriptionResult, TwilioVoiceConfig,

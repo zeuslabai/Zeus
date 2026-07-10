@@ -2,8 +2,9 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 # deploy-identity.sh — Fleet Agent Identity Stamper
 #
-# Writes SOUL.md (personality), AGENTS.md (directives + @everyone rules),
-# and patches CLAUDE.md to every agent's workspace.
+# Writes identity docs (AGENTS.md, IDENTITY.md, HEARTBEAT.md, USER.md, TOOLS.md)
+# and patches CLAUDE.md to every agent's workspace. SOUL.md persona rendering is
+# owned by onboarding; re-run onboarding to intentionally re-render a persona SOUL.
 #
 # Run standalone:  ./scripts/deploy-identity.sh --agent zeus112 --host 192.168.1.112
 # Run via deploy:  Called automatically by deploy-macos.sh / deploy-freebsd.sh
@@ -585,39 +586,11 @@ write_identity() {
     mkdir -p "$zeus_home/logs"
     chmod 0700 "$zeus_home/workspace"
 
-    # ── SOUL.md — personality ─────────────────────────────────────────────────
-    local soul_file="$zeus_home/workspace/SOUL.md"
-    # #296: a SOUL.md that is still the install-time stub ("Run 'zeus onboard'")
-    # is a PLACEHOLDER, not a real persona — never preserve it (that was the #202
-    # root cause: the stub got locked in for unrecognized agents). Treat blank or
-    # stub files as absent so they get stamped with a real soul.
-    local soul_is_placeholder=false
-    if [ ! -s "$soul_file" ]; then
-        soul_is_placeholder=true
-    elif grep -q "Run 'zeus onboard'" "$soul_file" 2>/dev/null; then
-        soul_is_placeholder=true
-    elif grep -q "an autonomous Zeus agent" "$soul_file" 2>/dev/null; then
-        # The script's OWN 3-line fallback boilerplate (line ~503) is also a
-        # placeholder — without this it gets preserved as a "real" persona and
-        # locked in forever (the fleet-wide sludge-soul incident, 2026-07-09).
-        soul_is_placeholder=true
-    fi
-    # #202: for unrecognized agents a *real* existing SOUL.md IS the configured
-    # persona (written by onboarding) — preserve it even under --force. But a
-    # placeholder stub is fair game to overwrite.
-    if [ -f "$soul_file" ] && [ "$PRESERVE_EXISTING_SOUL" = true ] && [ "$soul_is_placeholder" = false ]; then
-        skip "SOUL.md preserved — configured persona wins over boilerplate (#202)"
-    elif [ ! -f "$soul_file" ] || [ "$soul_is_placeholder" = true ] || $FORCE; then
-        backup_before_force "$soul_file"
-        cat > "$soul_file" << SOUL_EOF
-# ${AGENT_DISPLAY} — Soul & Personality
-
-${AGENT_SOUL}
-SOUL_EOF
-        ok "SOUL.md → $soul_file"
-    else
-        skip "SOUL.md already exists (use --force to overwrite)"
-    fi
+    # ── SOUL.md — persona authority lives in onboarding (#326) ────────────────
+    # deploy-identity is identity-only. Do not write SOUL.md here, even with
+    # --force/--with-identity; onboarding owns stub/sludge healing and custom
+    # preserve semantics. To intentionally re-render SOUL.md, re-run onboarding.
+    skip "SOUL.md untouched — persona rendering is owned by onboarding (#326)"
 
     # ── AGENTS.md — directives + @everyone protocol ───────────────────────────
     local agents_file="$zeus_home/workspace/AGENTS.md"

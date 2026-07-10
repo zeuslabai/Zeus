@@ -54,20 +54,20 @@ zeus-core = { path = "crates/zeus-core" }
 zeus-llm = { path = "crates/zeus-llm" }
 zeus-memory = { path = "crates/zeus-memory" }
 zeus-session = { path = "crates/zeus-session" }
-zeus-agent = { path = "crates/zeus-agent" }
-zeus-mcp = { path = "crates/zeus-mcp" }
-zeus-api = { path = "crates/zeus-api" }
+zeus-agent = { path = "crates/zeus-agent", default-features = false }
+zeus-mcp = { path = "crates/zeus-mcp", default-features = false }
+zeus-api = { path = "crates/zeus-api", default-features = false }
 zeus-nous = { path = "crates/zeus-nous" }
-zeus-prometheus = { path = "crates/zeus-prometheus" }
-zeus-channels = { path = "crates/zeus-channels" }
+zeus-prometheus = { path = "crates/zeus-prometheus", default-features = false }
+zeus-channels = { path = "crates/zeus-channels", default-features = false }
 zeus-hermes = { path = "crates/zeus-hermes" }
 zeus-mnemosyne = { path = "crates/zeus-mnemosyne" }
 zeus-athena = { path = "crates/zeus-athena" }
 zeus-aegis = { path = "crates/zeus-aegis" }
-zeus-talos = { path = "crates/zeus-talos" }
+zeus-talos = { path = "crates/zeus-talos", default-features = false }
 zeus-browser = { path = "crates/zeus-browser" }
 zeus-skills = { path = "crates/zeus-skills" }
-zeus-voice = { path = "crates/zeus-voice" }
+zeus-voice = { path = "crates/zeus-voice", default-features = false }
 zeus-tts = { path = "crates/zeus-tts" }
 zeus-sandbox = { path = "crates/zeus-sandbox" }
 zeus-orchestra = { path = "crates/zeus-orchestra" }
@@ -229,8 +229,18 @@ name = "zeus"
 path = "src/main.rs"
 
 [features]
-default = ["mcp"]
+default = ["audio", "mcp"]
+audio = [
+    "zeus-agent/audio",
+    "zeus-api/audio",
+    "zeus-channels/audio",
+    "zeus-mcp?/audio",
+    "zeus-prometheus/audio",
+    "zeus-talos/audio",
+]
 mcp = ["dep:zeus-mcp"]
+# Full binary without local microphone/speaker support; used for Linux cross-builds.
+non-audio = ["mcp"]
 matrix = ["zeus-channels/matrix", "zeus-agent/matrix"]
 
 [dependencies]

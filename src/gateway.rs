@@ -230,6 +230,46 @@ fn enabled_channel_names(config: &Config) -> Vec<String> {
         ch.map(|c| c.x_twitter.is_some()).unwrap_or(false),
         false,
     );
+    add("teams", ch.map(|c| c.teams.is_some()).unwrap_or(false), false);
+    add(
+        "webchat",
+        ch.map(|c| c.webchat.is_some()).unwrap_or(false),
+        false,
+    );
+    add(
+        "googlechat",
+        ch.map(|c| c.googlechat.is_some()).unwrap_or(false),
+        false,
+    );
+    add(
+        "nextcloud",
+        ch.map(|c| c.nextcloud.is_some()).unwrap_or(false),
+        false,
+    );
+    add("nostr", ch.map(|c| c.nostr.is_some()).unwrap_or(false), false);
+    add("line", ch.map(|c| c.line.is_some()).unwrap_or(false), false);
+    add(
+        "feishu",
+        ch.map(|c| c.feishu.is_some()).unwrap_or(false),
+        false,
+    );
+    add("zalo", ch.map(|c| c.zalo.is_some()).unwrap_or(false), false);
+    add(
+        "bluebubbles",
+        ch.map(|c| c.bluebubbles.is_some()).unwrap_or(false),
+        false,
+    );
+    add("sms", ch.map(|c| c.sms.is_some()).unwrap_or(false), false);
+    add(
+        "twilio_whatsapp",
+        ch.map(|c| c.twilio_whatsapp.is_some()).unwrap_or(false),
+        false,
+    );
+    add("voice", ch.map(|c| c.voice.is_some()).unwrap_or(false), false);
+    // iMessage: macOS-only, constructed unconditionally by the channel
+    // builder (S82 — no config section, uses AppleScript). Mirror that here.
+    #[cfg(target_os = "macos")]
+    add("imessage", true, false);
     names
 }
 
@@ -239,6 +279,13 @@ use crate::gateway_lock::GatewayLock;
 /// Run the unified gateway daemon
 pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<()> {
     info!("Starting Zeus Gateway on {}:{}", gateway.host, gateway.port);
+
+    // #331 — macOS sleep immunity: hold a PreventSystemSleep IOPM assertion
+    // for the gateway's lifetime (config knob: [gateway] prevent_sleep,
+    // default true; structural no-op off-macOS). Guard is released on the
+    // normal teardown path below; abnormal exits (the #329 hatch, panics,
+    // SIGKILL) are auto-cleaned by powerd on process death.
+    let mut power_assertion = crate::power_assertion::PowerAssertion::acquire(gateway.prevent_sleep);
 
     // ── Boot banner (P2 observability) ──────────────────────────────────
     // One greppable INFO line with a stable `boot` target carrying the full
@@ -267,6 +314,10 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
             target: "boot",
             version = env!("CARGO_PKG_VERSION"),
             git_sha = env!("GIT_SHA"),
+            build_epoch = env!("ZEUS_BUILD_EPOCH"),
+            os = std::env::consts::OS,
+            arch = std::env::consts::ARCH,
+            pid = std::process::id(),
             instance = %instance,
             config_source = %config_source,
             channels = %channels,
@@ -276,6 +327,14 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
             "gateway boot"
         );
     }
+
+    // #332 ③ — clock sanity, immediately after the boot fingerprint: WARN
+    // (target=boot event=clock_skew) if the system clock is earlier than
+    // this binary's build date, or if the previous gateway.log was written
+    // "in the future". Either means every timestamp downstream is suspect
+    // (minibsd's 8-day-skew class). Detection only — clock policy is the
+    // operator's/NTP's.
+    crate::clock_sanity::warn_on_clock_skew(&crate::zeus_paths::zeus_home());
 
     // Sync the *effective* enable_channels (config.toml AND --no-channels CLI
     // flag, already folded into `gateway` by main.rs) into `config.gateway` so
@@ -337,6 +396,37 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
         });
     if !bot_snowflake.is_empty() {
         info!("Discord bot identity: {} (snowflake: {})", agent_name, bot_snowflake);
+    }
+
+    // #309 — post-nuke debris detection (detection + loud warn ONLY, no auto-repair).
+    //
+    // The minibsd incident: something removed ~/.zeus contents (including
+    // config.toml); on relaunch the onboarding wizard re-created a template
+    // config (no [agent].name, default model, default skills) — which looked
+    // like a "config nuke" but was really a re-creation over a LOSS. No code
+    // path on main can overwrite a real config with a template, so the
+    // detectable signature is the mismatch itself: an identity-less template
+    // config sitting in a zeus home full of veteran runtime state (memory.db,
+    // sessions, goals.db...) — impossible on a genuinely fresh install.
+    //
+    // Configs are sacred: we NAME the evidence and tell the operator where
+    // backups might be. We never touch the file.
+    {
+        let has_identity = agent_name != "<unnamed agent>";
+        let markers = collect_veteran_state_markers(&crate::zeus_paths::zeus_home());
+        if config_nuke_debris_detected(has_identity, &markers) {
+            warn!(
+                target: "boot",
+                event = "config_nuke_debris",
+                markers = %markers.join(", "),
+                "#309: config.toml has NO agent identity but this zeus home has veteran runtime state ({}). \
+                 This is the signature of a lost/recreated config (template written over a wiped ~/.zeus), \
+                 NOT a fresh install. NOT auto-repairing — configs are operator-owned. \
+                 Check for backups (config.toml.bak, VCS, fleet peers) and restore identity via \
+                 'zeus onboard' or by setting [agent].name in ~/.zeus/config.toml.",
+                markers.join(", ")
+            );
+        }
     }
 
     // Create workspace and session
@@ -812,7 +902,11 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
         };
 
     // Collect tasks to run concurrently
-    let mut tasks: Vec<tokio::task::JoinHandle<Result<()>>> = Vec::new();
+    // #332 ④: every background task carries a stable name so the shutdown
+    // drain can say WHICH tasks it is waiting on (and which never finished)
+    // instead of an anonymous count — the minibsd 8-day drain gave zero
+    // clues about what it was awaiting.
+    let mut tasks: Vec<(&'static str, tokio::task::JoinHandle<Result<()>>)> = Vec::new();
     // Shared shutdown token — all background tasks check this for graceful exit
     let shutdown_token = tokio_util::sync::CancellationToken::new();
 
@@ -1205,7 +1299,7 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
         info!("API server listening on http://{}", addr);
 
         let api_shutdown = shutdown_token.clone();
-        tasks.push(tokio::spawn(async move {
+        tasks.push(("api-server", tokio::spawn(async move {
             axum::serve(
                 listener,
                 router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
@@ -1215,7 +1309,7 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
                 })
                 .await
                 .map_err(|e| anyhow::anyhow!("API server error: {}", e))
-        }));
+        })));
     }
 
     // 1a. Web Frontend Server (separate port, serves SPA + API same-origin)
@@ -1227,7 +1321,7 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
             web_router,
             shutdown_token.clone(),
         ).await {
-            tasks.push(task);
+            tasks.push(("web-server", task));
         }
     }
 
@@ -1253,12 +1347,12 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
         let mcp_addr = mcp_server.address();
         info!("MCP server listening on http://{}", mcp_addr);
 
-        tasks.push(tokio::spawn(async move {
+        tasks.push(("mcp-server", tokio::spawn(async move {
             mcp_server
                 .run()
                 .await
                 .map_err(|e| anyhow::anyhow!("MCP server error: {}", e))
-        }));
+        })));
     }
 
     // 1c-1d. Bootstrap workspace (HEARTBEAT.md, CAPABILITIES.md, goal files)
@@ -1334,7 +1428,7 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
     // same-session cooks serialize FIFO via the lane's OwnedMutexGuard, which
     // the dispatcher acquires (lock_owned) BEFORE spawn and moves into the task.
     let inbox_lane_mgr = std::sync::Arc::new(zeus_core::SessionLaneManager::new());
-    tasks.push(tokio::spawn(async move {
+    tasks.push(("inbox-consumer", tokio::spawn(async move {
         let mut rx = inbox_rx;
         while let Some(msg) = rx.recv().await {
             // Counter-invariant: decrement BEFORE handler dispatch (panic-drift mitigation).
@@ -1600,7 +1694,7 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
             }
         }
         Ok::<(), anyhow::Error>(())
-    }));
+    })));
 
     // #13-B: snapshot prometheus config before channel spawns consume `config` via move.
     let prometheus_config_snapshot = config.prometheus.clone();
@@ -1649,7 +1743,7 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
                 zeus_channels::debouncer::MessageDebouncer::new(debouncer_config);
 
             // Feeder task: raw channel messages → debouncer
-            tasks.push(tokio::spawn(async move {
+            tasks.push(("discord-thread-agents", tokio::spawn(async move {
                 while let Some(msg) = rx.recv().await {
                     // P2 observability: stable greppable inbound-message line.
                     info!(
@@ -1663,7 +1757,7 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
                     debouncer.push(msg).await;
                 }
                 Ok(())
-            }));
+            })));
 
             let inbox_for_channel = agent_inbox.clone();
             let channel_default_agent_id = default_agent_id.clone();
@@ -1677,7 +1771,7 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
             // Used by check_mention_full_with_presence to skip offline/wedged peers in the
             // alphabetical winner selection for role/broadcast mentions.
             let presence = crate::presence_tracker::PresenceTracker::new();
-            tasks.push(tokio::spawn(async move {
+            tasks.push(("election-liveness", tokio::spawn(async move {
                 info!("Channel message consumer started");
                 if !enable_agent_processing {
                     info!("Agent processing DISABLED — relay-only mode (set [gateway] enable_agent_processing = true to re-enable)");
@@ -3265,7 +3359,7 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
                     pending_since = Some(std::time::Instant::now());
                 }
                 Ok(())
-            }));
+            })));
         } else {
             warn!("No channel receiver available");
         }
@@ -3292,7 +3386,7 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
         let agent_hb = agent.clone();
         let channel_cook_state = channel_cook_state.clone();
         let fleet_ch_hb = fleet_ch_global.clone();
-        tasks.push(tokio::spawn(async move {
+        tasks.push(("heartbeat-fallback", tokio::spawn(async move {
             info!(
                 "Heartbeat starting with interval {}s (fallback mode)",
                 interval
@@ -3364,7 +3458,7 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
             }
             #[allow(unreachable_code)]
             Ok(())
-        }));
+        })));
     }
 
     // Mnemosyne → MEMORY.md periodic sync (every 30 minutes)
@@ -3372,7 +3466,7 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
     // so cold starts and MEMORY.md readers get accumulated knowledge.
     {
         let agent_sync = agent.clone();
-        tasks.push(tokio::spawn(async move {
+        tasks.push(("memory-md-sync", tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(1800));
             // Run immediately on boot, then every 30 min
             loop {
@@ -3411,7 +3505,7 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
             }
             #[allow(unreachable_code)]
             Ok::<(), anyhow::Error>(())
-        }));
+        })));
     }
 
     // S66-P1B: Background autonomous orchestration loop
@@ -3426,7 +3520,7 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
             let fleet_ch_auto = fleet_ch_global.clone();
             let channel_cook_state_auto = channel_cook_state.clone();
             let auto_default_agent_id = default_agent_id.clone();
-            tasks.push(tokio::spawn(async move {
+            tasks.push(("autonomous-orchestrator", tokio::spawn(async move {
                 // Wait 30s for gateway to stabilize before first check
                 tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -3802,7 +3896,7 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
                 }
                 #[allow(unreachable_code)]
                 Ok::<(), anyhow::Error>(())
-            }));
+            })));
             info!("Autonomous orchestration loop registered (60s interval, 30s startup delay)");
         }
     }
@@ -3869,7 +3963,7 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
             .join(".zeus/workspace/goals");
         let poll_secs = engine_cfg.poll_interval_secs;
         let titan_role = engine_cfg.titan_role.clone();
-        tasks.push(tokio::spawn(async move {
+        tasks.push(("backlog-sync", tokio::spawn(async move {
             // 30s startup delay to let gateway stabilize.
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
             if let Err(e) = sync_loop(engine_cfg, goals_dir).await {
@@ -3877,7 +3971,7 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
             }
             #[allow(unreachable_code)]
             Ok::<(), anyhow::Error>(())
-        }));
+        })));
         info!(
             poll_interval_secs = poll_secs,
             titan_role = %titan_role,
@@ -4031,24 +4125,249 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
 
     // Signal all background tasks to shut down gracefully
     shutdown_token.cancel();
-    info!("Shutdown signal sent — waiting for tasks to complete...");
+    // #332 ④: name the drain roster up front — if this is the last line the
+    // gateway ever logs (the minibsd case), it says exactly WHAT it was
+    // waiting for instead of an anonymous count.
+    let task_names: Vec<&'static str> = tasks.iter().map(|(n, _)| *n).collect();
+    info!(
+        target: "boot",
+        event = "shutdown_drain",
+        tasks = %task_names.join(","),
+        "Shutdown signal sent — waiting for {} task(s) to complete: [{}]",
+        task_names.len(),
+        task_names.join(", ")
+    );
+
+    // #329 — runtime-INDEPENDENT hard shutdown deadline (OS-thread escape hatch).
+    //
+    // The tokio timeout below is NOT sufficient on its own: on minibsd the
+    // gateway sat in this drain for 8 DAYS with the 5s timeout armed but never
+    // firing — a hot busy-loop (#330) starved the tokio time driver, so async
+    // deadlines were dead on arrival. A plain OS thread does not depend on the
+    // tokio runtime, the time driver, or any executor state: it sleeps with the
+    // OS scheduler and force-exits nonzero so service managers notice.
+    //
+    // The hatch is disarmed by the normal exit path (completion flag) — if
+    // graceful teardown finishes first, the thread wakes, sees the flag, and
+    // exits harmlessly. Semantics of the happy path are untouched.
+    let hard_deadline_secs = gateway.shutdown_hard_deadline_secs.max(1);
+    let total_tasks = tasks.len();
+    let drained = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let drained = drained.clone();
+        let done = done.clone();
+        // #332 ④: the hatch names the stragglers. Tasks drain in roster
+        // order, so `drained` doubles as an index: everything at or past it
+        // is unfinished.
+        let roster = task_names.clone();
+        std::thread::Builder::new()
+            .name("zeus-shutdown-deadline".into())
+            .spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(hard_deadline_secs));
+                let drained_n = drained.load(std::sync::atomic::Ordering::SeqCst);
+                let unfinished = match shutdown_hatch_verdict(
+                    done.load(std::sync::atomic::Ordering::SeqCst),
+                    drained_n,
+                    total_tasks,
+                ) {
+                    None => return, // graceful teardown won the race — disarm.
+                    Some(unfinished) => unfinished,
+                };
+                let stragglers = unfinished_task_names(&roster, drained_n).join(", ");
+                // tracing works from any thread; eprintln! as a belt-and-suspenders
+                // fallback in case the log worker itself is wedged.
+                warn!(
+                    "#329 hard shutdown deadline hit after {}s — {}/{} background task(s) never completed [{}]; force-exiting (code 3)",
+                    hard_deadline_secs, unfinished, total_tasks, stragglers
+                );
+                eprintln!(
+                    "zeus-gateway: hard shutdown deadline ({}s) exceeded — {} of {} background task(s) unfinished [{}]; force-exiting",
+                    hard_deadline_secs, unfinished, total_tasks, stragglers
+                );
+                std::process::exit(3);
+            })
+            .ok(); // spawn failure = no hatch, but never block shutdown over it
+    }
 
     // Give tasks 5 seconds to finish gracefully, then abort
     let grace = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         async {
-            for task in tasks {
+            for (_, task) in tasks {
                 let _ = task.await;
+                drained.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
         }
     ).await;
 
     if grace.is_err() {
-        warn!("Graceful shutdown timed out after 5s — some tasks may have been interrupted");
+        let drained_n = drained.load(std::sync::atomic::Ordering::SeqCst);
+        warn!(
+            "Graceful shutdown timed out after 5s — {} task(s) interrupted: [{}]",
+            total_tasks.saturating_sub(drained_n),
+            unfinished_task_names(&task_names, drained_n).join(", ")
+        );
     }
+
+    // Disarm the #329 escape hatch — normal teardown completed.
+    done.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    power_assertion.release();
 
     info!("Gateway shut down");
     Ok(())
+}
+
+/// #309 — enumerate veteran runtime-state markers in a zeus home.
+///
+/// These files only exist after real agent operation (memories banked,
+/// sessions cooked, goals tracked). Their presence alongside an identity-less
+/// template config is the debris signature of a wiped-and-recreated config —
+/// a genuinely fresh install has neither identity NOR these files.
+fn collect_veteran_state_markers(zeus_home: &std::path::Path) -> Vec<String> {
+    const MARKERS: &[&str] = &[
+        "memory.db",
+        "sessions",
+        "goals.db",
+        "scheduler.db",
+        "learning.db",
+        "cooking_checkpoints.db",
+    ];
+    MARKERS
+        .iter()
+        .filter(|m| zeus_home.join(m).exists())
+        .map(|m| m.to_string())
+        .collect()
+}
+
+/// #309 — pure decision: does the (identity, markers) combination indicate
+/// post-nuke debris? True only when the config carries NO agent identity
+/// (template signature) while veteran state markers exist on disk.
+/// Detection only — callers must warn, never repair.
+fn config_nuke_debris_detected(has_identity: bool, markers: &[String]) -> bool {
+    !has_identity && !markers.is_empty()
+}
+
+/// #329 — pure decision for the hard-deadline escape hatch thread.
+///
+/// Returns `None` when graceful teardown already completed (hatch disarms,
+/// thread exits harmlessly) or `Some(unfinished_count)` when the deadline
+/// elapsed with work still pending (hatch fires: log + force-exit).
+/// Pure function so the disarm/fire semantics are unit-testable without
+/// spawning threads or a runtime.
+fn shutdown_hatch_verdict(done: bool, drained: usize, total_tasks: usize) -> Option<usize> {
+    if done {
+        None
+    } else {
+        Some(total_tasks.saturating_sub(drained))
+    }
+}
+
+/// #332 ④ — pure roster slice: which named tasks never finished draining.
+///
+/// The drain awaits tasks strictly in roster order, so `drained` (count of
+/// completed joins) is also the index of the first unfinished task —
+/// everything at or past it is a straggler. Pure so the naming logic is
+/// unit-testable without threads.
+fn unfinished_task_names<'a>(roster: &[&'a str], drained: usize) -> Vec<&'a str> {
+    roster.get(drained..).unwrap_or(&[]).to_vec()
+}
+
+/// #328 forensics — capture the sender PID/UID of a SIGTERM via `SA_SIGINFO`.
+///
+/// Exists because of a series of unexplained gateway SIGTERMs (#328): the
+/// plain handler tells us *that* we were killed but not *who* sent it. This
+/// layer records `siginfo_t.si_pid`/`si_uid` into atomics and then chains to
+/// the previously-installed handler (tokio's signal-hook registration), so
+/// shutdown semantics are identical — the only difference is that the
+/// post-shutdown log line can name the sender.
+#[cfg(unix)]
+mod sigterm_forensics {
+    use std::sync::Once;
+    use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
+
+    static SENDER_PID: AtomicI64 = AtomicI64::new(-1);
+    static SENDER_UID: AtomicI64 = AtomicI64::new(-1);
+    static CAPTURED: AtomicBool = AtomicBool::new(false);
+    static PREV_HANDLER: AtomicUsize = AtomicUsize::new(0);
+    static PREV_FLAGS: AtomicUsize = AtomicUsize::new(0);
+    static INSTALL: Once = Once::new();
+
+    /// The `SA_SIGINFO` handler. Async-signal-safe: atomic stores plus a
+    /// direct call into the previous handler (signal-hook's, itself
+    /// async-signal-safe).
+    extern "C" fn on_sigterm(
+        sig: libc::c_int,
+        info: *mut libc::siginfo_t,
+        ctx: *mut libc::c_void,
+    ) {
+        if !info.is_null() {
+            // Linux keeps si_pid/si_uid in a union (accessor methods);
+            // BSD-family libc exposes them as plain fields.
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            let (pid, uid) = unsafe { ((*info).si_pid() as i64, (*info).si_uid() as i64) };
+            #[cfg(not(any(target_os = "linux", target_os = "android")))]
+            let (pid, uid) = unsafe { ((*info).si_pid as i64, (*info).si_uid as i64) };
+            SENDER_PID.store(pid, Ordering::SeqCst);
+            SENDER_UID.store(uid, Ordering::SeqCst);
+            CAPTURED.store(true, Ordering::SeqCst);
+        }
+
+        // Chain to the previous handler so shutdown behavior is unchanged.
+        let prev = PREV_HANDLER.load(Ordering::SeqCst);
+        if prev == libc::SIG_DFL {
+            // Defensive: emulate the default disposition (terminate) by
+            // resetting and re-raising. Unreachable in practice — install()
+            // runs after tokio registers its own handler.
+            unsafe {
+                let mut act: libc::sigaction = std::mem::zeroed();
+                act.sa_sigaction = libc::SIG_DFL;
+                libc::sigaction(sig, &act, std::ptr::null_mut());
+                libc::raise(sig);
+            }
+        } else if prev == libc::SIG_IGN {
+            // Previous disposition was "ignore" — nothing to chain.
+        } else if PREV_FLAGS.load(Ordering::SeqCst) & (libc::SA_SIGINFO as usize) != 0 {
+            let f: extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void) =
+                unsafe { std::mem::transmute(prev) };
+            f(sig, info, ctx);
+        } else {
+            let f: extern "C" fn(libc::c_int) = unsafe { std::mem::transmute(prev) };
+            f(sig);
+        }
+    }
+
+    /// Install the forensics layer over the current SIGTERM disposition.
+    /// MUST be called *after* tokio's SIGTERM stream is created so the saved
+    /// previous handler is signal-hook's (which we chain to).
+    pub fn install() {
+        INSTALL.call_once(|| unsafe {
+            let mut new_act: libc::sigaction = std::mem::zeroed();
+            new_act.sa_sigaction = on_sigterm
+                as extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void)
+                as usize;
+            new_act.sa_flags = libc::SA_SIGINFO | libc::SA_RESTART;
+            libc::sigemptyset(&mut new_act.sa_mask);
+            let mut old_act: libc::sigaction = std::mem::zeroed();
+            if libc::sigaction(libc::SIGTERM, &new_act, &mut old_act) == 0 {
+                PREV_HANDLER.store(old_act.sa_sigaction, Ordering::SeqCst);
+                PREV_FLAGS.store(old_act.sa_flags as usize, Ordering::SeqCst);
+            }
+        });
+    }
+
+    /// Sender identity `(pid, uid)` of the captured SIGTERM, if one arrived.
+    pub fn sender() -> Option<(i64, i64)> {
+        if CAPTURED.load(Ordering::SeqCst) {
+            Some((
+                SENDER_PID.load(Ordering::SeqCst),
+                SENDER_UID.load(Ordering::SeqCst),
+            ))
+        } else {
+            None
+        }
+    }
 }
 
 /// Wait for a shutdown signal (Ctrl+C or SIGTERM)
@@ -4060,11 +4379,16 @@ async fn shutdown_signal() {
     };
 
     #[cfg(unix)]
-    let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler")
-            .recv()
-            .await;
+    let terminate = {
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("failed to install SIGTERM handler");
+        // Layer the #328 forensics capture over tokio's handler (chains to it,
+        // so shutdown semantics are unchanged).
+        sigterm_forensics::install();
+        async move {
+            sigterm.recv().await;
+        }
     };
 
     #[cfg(not(unix))]
@@ -4075,6 +4399,14 @@ async fn shutdown_signal() {
             info!("Received Ctrl+C, shutting down gateway...");
         }
         _ = terminate => {
+            #[cfg(unix)]
+            match sigterm_forensics::sender() {
+                Some((pid, uid)) => info!(
+                    "Received SIGTERM from pid={pid} uid={uid}, shutting down gateway... (#328 forensics)"
+                ),
+                None => info!("Received SIGTERM, shutting down gateway..."),
+            }
+            #[cfg(not(unix))]
             info!("Received SIGTERM, shutting down gateway...");
         }
     }
@@ -4109,6 +4441,69 @@ fn classify_mid_loop_interrupt(content: &str) -> Option<MidLoopInterruptKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_config_nuke_debris_detection() {
+        // #309: identity-less config + veteran state = debris (warn fires).
+        let veteran = vec!["memory.db".to_string(), "sessions".to_string()];
+        assert!(config_nuke_debris_detected(false, &veteran));
+        // Named config + veteran state = normal operation.
+        assert!(!config_nuke_debris_detected(true, &veteran));
+        // Identity-less config + empty home = genuinely fresh install.
+        assert!(!config_nuke_debris_detected(false, &[]));
+        // Named + fresh = normal too.
+        assert!(!config_nuke_debris_detected(true, &[]));
+    }
+
+    #[test]
+    fn test_veteran_state_markers_scan() {
+        // #309: marker scan finds only what exists.
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(collect_veteran_state_markers(dir.path()).is_empty());
+        std::fs::write(dir.path().join("memory.db"), b"x").unwrap();
+        std::fs::create_dir(dir.path().join("sessions")).unwrap();
+        let markers = collect_veteran_state_markers(dir.path());
+        assert_eq!(markers, vec!["memory.db".to_string(), "sessions".to_string()]);
+    }
+
+    #[test]
+    fn test_shutdown_hatch_verdict_disarms_when_done() {
+        // #329: graceful teardown completed before the deadline — the hatch
+        // must disarm regardless of the drain counter.
+        assert_eq!(shutdown_hatch_verdict(true, 0, 10), None);
+        assert_eq!(shutdown_hatch_verdict(true, 10, 10), None);
+    }
+
+    #[test]
+    fn test_shutdown_hatch_verdict_fires_with_unfinished_count() {
+        // #329: deadline elapsed with work pending — hatch fires and reports
+        // exactly how many tasks never completed.
+        assert_eq!(shutdown_hatch_verdict(false, 3, 10), Some(7));
+        assert_eq!(shutdown_hatch_verdict(false, 0, 10), Some(10));
+        // Saturating: a drain counter past total (double-count race) must not
+        // underflow — report 0 unfinished, but still fire (done=false means
+        // the flag write never happened, the wedge is real).
+        assert_eq!(shutdown_hatch_verdict(false, 12, 10), Some(0));
+    }
+
+    #[test]
+    fn test_unfinished_task_names_slices_roster_in_drain_order() {
+        let roster = ["api-server", "web-server", "inbox-consumer", "heartbeat-fallback"];
+        // Nothing drained → all named.
+        assert_eq!(
+            unfinished_task_names(&roster, 0),
+            vec!["api-server", "web-server", "inbox-consumer", "heartbeat-fallback"]
+        );
+        // Two drained → the tail two are the stragglers.
+        assert_eq!(
+            unfinished_task_names(&roster, 2),
+            vec!["inbox-consumer", "heartbeat-fallback"]
+        );
+        // All drained → empty.
+        assert!(unfinished_task_names(&roster, 4).is_empty());
+        // Past-the-end (double-count race) → empty, never panics.
+        assert!(unfinished_task_names(&roster, 12).is_empty());
+    }
 
     #[test]
     fn test_mid_loop_interrupt_command_preserves_stop_pause_cancel() {
@@ -4173,6 +4568,32 @@ mod tests {
         assert_eq!(cfg.port, 9090);
         assert!(!cfg.enable_channels);
         assert!(!cfg.enable_mcp);
+    }
+
+    /// #328 forensics: install the SA_SIGINFO layer, send ourselves a real
+    /// SIGTERM, and verify (a) tokio's chained stream still fires (shutdown
+    /// semantics preserved) and (b) the captured sender pid/uid name US.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_sigterm_forensics_captures_sender() {
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("failed to install SIGTERM handler");
+        sigterm_forensics::install();
+
+        unsafe {
+            libc::kill(libc::getpid(), libc::SIGTERM);
+        }
+
+        // The chained handler must still deliver to tokio's stream.
+        tokio::time::timeout(std::time::Duration::from_secs(5), sigterm.recv())
+            .await
+            .expect("tokio SIGTERM stream did not fire — forensics layer broke chaining");
+
+        let (pid, uid) = sigterm_forensics::sender()
+            .expect("forensics layer did not capture the SIGTERM sender");
+        assert_eq!(pid, std::process::id() as i64, "sender pid should be self");
+        assert_eq!(uid, unsafe { libc::getuid() } as i64, "sender uid should be self");
     }
 
     #[tokio::test]

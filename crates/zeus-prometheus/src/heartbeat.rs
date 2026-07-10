@@ -1096,6 +1096,25 @@ impl Heartbeat {
 // Background loop
 // ---------------------------------------------------------------------------
 
+/// #330: compute the timed branch's HEAD re-arm value.
+///
+/// Called first thing inside the timed `select!` arm, before any gate can
+/// `continue`, so a wake-driven `current_interval = 0` survives exactly one
+/// iteration. Without this, any early-`continue` gate (skip arms, PAUSE,
+/// quiet hours, plan-resume gating) left the interval at 0 → `sleep(0)`
+/// busy-loop → the minibsd ~1ms ENOENT spam + tokio time-driver starvation.
+///
+/// Pure function so the invariant is unit-testable.
+fn head_rearm_interval(event_driven_only: bool, safety_net_interval_secs: u64, interval_secs: u64) -> u64 {
+    if event_driven_only {
+        u64::MAX / 2 // effectively never — wake events re-zero it
+    } else {
+        // .max(1): even a degenerate config (both intervals 0) must not
+        // reproduce the busy-loop this function exists to prevent.
+        safety_net_interval_secs.max(interval_secs).max(1)
+    }
+}
+
 /// Spawn a background fast-pulse task that writes `last_heartbeat_tick = now()`
 /// to the state file every `period_secs` seconds. Pure liveness signal,
 /// decoupled from wake events — the agent process being alive IS the signal.
@@ -1269,6 +1288,28 @@ async fn heartbeat_loop(
             _ = tokio::time::sleep(std::time::Duration::from_secs(current_interval)) => {
                 debug!("Heartbeat safety-net tick (interval={}s, event_driven_only={})",
                     current_interval, config.event_driven_only);
+
+                // #330 fix — re-arm at the HEAD of the timed branch, not only the tail.
+                //
+                // The wake branch drains queued wakes and sets `current_interval = 0`
+                // so this timed branch fires immediately (drain-and-rearm). The re-arm
+                // back to the long interval used to live ONLY at the tail of this
+                // branch — but the branch has a dozen early `continue` paths (advisory
+                // skip arms, PAUSE sentinel, quiet hours, plan-resume gating, ...).
+                // Any of them jumped straight back to `select!` with the interval
+                // still 0 → `sleep(0)` → a hot busy-loop that (a) pegged a worker,
+                // (b) re-ran the pre-gate state write every iteration — the ~1ms
+                // "Failed to write heartbeat state temp file" ENOENT spam on minibsd
+                // when ~/.zeus vanished — and (c) starved the tokio time driver on
+                // small boxes, which is how the #329 drain's EXISTING 5s timeout sat
+                // unfired for 8 days.
+                //
+                // Re-arming here, before ANY gate can `continue`, makes the invariant
+                // structural: a zero interval survives exactly one iteration. The
+                // tail re-arm below is kept — it refines the value with the freshly
+                // computed adaptive interval on the full work path.
+                current_interval =
+                    head_rearm_interval(config.event_driven_only, config.safety_net_interval_secs, interval_secs);
 
                 // --- Lane A1.5b-i.β: advisory pre-acquire fire-decision (busy-aware) ---
                 // Atomic-load the 4-bucket disjunction signals and consult the pure
@@ -2864,6 +2905,24 @@ mod tests {
         std::fs::write(&path, b"\x00\xffnot json at all").unwrap();
         let loaded = load_state(&path);
         assert!(loaded.last_heartbeat_tick.is_some());
+    }
+
+    #[test]
+    fn test_head_rearm_never_returns_zero() {
+        // #330 regression guard: the head re-arm must NEVER yield 0 —
+        // 0 is the wake-branch's drain-and-rearm sentinel, and if it
+        // survives past one timed iteration the loop goes hot (sleep(0)
+        // busy-loop → ENOENT spam + time-driver starvation on small boxes).
+        assert!(head_rearm_interval(true, 3600, 60) > 0);
+        assert!(head_rearm_interval(false, 3600, 60) > 0);
+        // Even with degenerate config values, the invariant holds via .max().
+        assert_eq!(head_rearm_interval(false, 0, 60), 60);
+        assert_eq!(head_rearm_interval(false, 0, 0), 1); // both-zero config: floored to 1s, never 0
+        // Event-driven mode sleeps "forever" (u64::MAX/2 secs).
+        assert_eq!(head_rearm_interval(true, 0, 0), u64::MAX / 2);
+        // Safety-net mode takes the larger of the two intervals.
+        assert_eq!(head_rearm_interval(false, 3600, 7200), 7200);
+        assert_eq!(head_rearm_interval(false, 3600, 60), 3600);
     }
 
     #[test]
