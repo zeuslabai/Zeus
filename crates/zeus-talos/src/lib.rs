@@ -353,6 +353,8 @@ impl TalosRegistry {
         self.register(Box::new(x_tools::XReplyTool));
         self.register(Box::new(x_tools::XThreadTool));
         self.register(Box::new(x_tools::XDeleteTool));
+        self.register(Box::new(x_tools::XDeletePostTool));
+        self.register(Box::new(x_tools::XBatchDeleteTool));
         self.register(Box::new(x_tools::XMetricsTool));
 
         // Feishu/Lark tools (cross-platform, Feishu Open API)

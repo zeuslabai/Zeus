@@ -177,7 +177,7 @@ pub use instagram::{
 };
 pub use x::{
     CreateTweetOptions, MediaType as XMediaType, ThreadOptions, Tweet, TweetMedia, TweetMetrics,
-    XAdapter, XConfig, XUserProfile,
+    XAdapter, XBatchDeleteResult, XConfig, XDeleteResult, XDeleteStatus, XUserProfile,
 };
 
 /// Channel source identifier

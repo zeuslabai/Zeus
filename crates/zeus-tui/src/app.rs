@@ -2614,6 +2614,7 @@ pub fn frame(f: &mut ratatui::Frame, app: &App) {
             Step::Provider => {
                 let screen = ProviderScreen {
                     selected: app.provider_selected,
+                    ollama_detected: app.memory_screen.ollama_detected,
                 };
                 f.render_widget(screen, body[1]);
             }
@@ -4393,7 +4394,7 @@ persona = "The Strategist"
         // DIRTY: Providers (long list) -> clear_body_region -> Welcome, all into
         // one persistent buffer (replicating the dispatcher's body[1] path).
         let mut dirty = Buffer::empty(area);
-        ProviderScreen { selected: 0 }.render(area, &mut dirty);
+        ProviderScreen { selected: 0, ollama_detected: None }.render(area, &mut dirty);
         clear_body_region(area, &mut dirty);
         WelcomeScreen {
             existing_config: false,

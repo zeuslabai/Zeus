@@ -36,12 +36,17 @@ use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use tokio::sync::{Notify, RwLock, mpsc};
 use zeus_core::{Error, Result};
 
 type HmacSha1 = Hmac<Sha1>;
 
 const X_API_BASE: &str = "https://api.x.com/2";
+
+fn parse_retry_after_seconds(value: &str) -> Option<u64> {
+    value.trim().parse::<u64>().ok()
+}
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -124,6 +129,99 @@ pub struct ThreadOptions {
     pub media_per_tweet: Vec<Vec<String>>,
 }
 
+/// Per-item status returned by X delete operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum XDeleteStatus {
+    Deleted,
+    Failed,
+    Skipped,
+}
+
+/// Per-item result for single and batch X delete operations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XDeleteResult {
+    pub tweet_id: String,
+    pub status: XDeleteStatus,
+    pub index: usize,
+    pub attempts: u32,
+    pub http_status: Option<u16>,
+    pub error: Option<String>,
+}
+
+impl XDeleteResult {
+    fn deleted(tweet_id: impl Into<String>, index: usize, attempts: u32, http_status: u16) -> Self {
+        Self {
+            tweet_id: tweet_id.into(),
+            status: XDeleteStatus::Deleted,
+            index,
+            attempts,
+            http_status: Some(http_status),
+            error: None,
+        }
+    }
+
+    fn failed(
+        tweet_id: impl Into<String>,
+        index: usize,
+        attempts: u32,
+        http_status: Option<u16>,
+        error: impl Into<String>,
+    ) -> Self {
+        Self {
+            tweet_id: tweet_id.into(),
+            status: XDeleteStatus::Failed,
+            index,
+            attempts,
+            http_status,
+            error: Some(error.into()),
+        }
+    }
+
+    fn skipped(tweet_id: impl Into<String>, index: usize, error: impl Into<String>) -> Self {
+        Self {
+            tweet_id: tweet_id.into(),
+            status: XDeleteStatus::Skipped,
+            index,
+            attempts: 0,
+            http_status: None,
+            error: Some(error.into()),
+        }
+    }
+}
+
+/// Summary returned by sequential X batch deletes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XBatchDeleteResult {
+    pub results: Vec<XDeleteResult>,
+    pub deleted: usize,
+    pub failed: usize,
+    pub skipped: usize,
+}
+
+impl XBatchDeleteResult {
+    fn from_results(results: Vec<XDeleteResult>) -> Self {
+        let deleted = results
+            .iter()
+            .filter(|r| r.status == XDeleteStatus::Deleted)
+            .count();
+        let failed = results
+            .iter()
+            .filter(|r| r.status == XDeleteStatus::Failed)
+            .count();
+        let skipped = results
+            .iter()
+            .filter(|r| r.status == XDeleteStatus::Skipped)
+            .count();
+        Self {
+            results,
+            deleted,
+            failed,
+            skipped,
+        }
+    }
+}
+
 /// User profile from X
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XUserProfile {
@@ -145,6 +243,7 @@ pub struct XAdapter {
     connected: Arc<AtomicBool>,
     config: XConfig,
     client: reqwest::Client,
+    api_base: String,
     shutdown: Arc<Notify>,
     task_handle: RwLock<Option<tokio::task::JoinHandle<()>>>,
     /// Track the last seen mention ID for polling
@@ -180,11 +279,19 @@ impl XAdapter {
             connected: Arc::new(AtomicBool::new(false)),
             config,
             client: reqwest::Client::new(),
+            api_base: X_API_BASE.to_string(),
             shutdown: Arc::new(Notify::new()),
             task_handle: RwLock::new(None),
             last_mention_id: Arc::new(RwLock::new(None)),
             oauth2_access_token: Arc::new(RwLock::new(initial_oauth2)),
         })
+    }
+
+    #[cfg(test)]
+    async fn new_with_base_url(config: XConfig, api_base: impl Into<String>) -> Result<Self> {
+        let mut adapter = Self::new(config).await?;
+        adapter.api_base = api_base.into().trim_end_matches('/').to_string();
+        Ok(adapter)
     }
 
     /// Replace the live OAuth 2.0 user-context access token at runtime.
@@ -312,10 +419,11 @@ impl XAdapter {
             urlencoding::encode(&self.config.access_token_secret),
         );
 
-        let mut mac = HmacSha1::new_from_slice(signing_key.as_bytes())
-            .expect("HMAC accepts any key length");
+        let mut mac =
+            HmacSha1::new_from_slice(signing_key.as_bytes()).expect("HMAC accepts any key length");
         mac.update(base_string.as_bytes());
-        let signature = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
+        let signature =
+            base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
 
         format!(
             "OAuth oauth_consumer_key=\"{}\", oauth_nonce=\"{}\", oauth_signature=\"{}\", oauth_signature_method=\"HMAC-SHA1\", oauth_timestamp=\"{}\", oauth_token=\"{}\", oauth_version=\"1.0\"",
@@ -548,27 +656,110 @@ impl XAdapter {
         Ok(media_id)
     }
 
-    /// Delete a tweet
+    /// Delete a tweet, returning an error for compatibility with the legacy `x_delete` tool.
     pub async fn delete_tweet(&self, tweet_id: &str) -> Result<()> {
-        let delete_url = format!("{}/tweets/{}", X_API_BASE, tweet_id);
-        let resp = self
-            .client
-            .delete(&delete_url)
-            .header("Authorization", self.write_auth_header("DELETE", &delete_url))
-            .send()
-            .await
-            .map_err(|e| Error::Channel(format!("X delete error: {}", e)))?;
-
-        if !resp.status().is_success() {
-            let text = resp.text().await.unwrap_or_else(|_| "unknown".into());
-            return Err(Error::Channel(format!(
-                "X delete tweet {} failed: {}",
-                tweet_id, text
-            )));
+        let result = self.delete_tweet_result(tweet_id).await;
+        if result.status == XDeleteStatus::Deleted {
+            return Ok(());
         }
 
-        tracing::info!(tweet_id = %tweet_id, "X tweet deleted");
-        Ok(())
+        Err(Error::Channel(format!(
+            "X delete tweet {} failed: {}",
+            tweet_id,
+            result.error.unwrap_or_else(|| "unknown".into())
+        )))
+    }
+
+    /// Delete a single tweet/post with rate-limit retry and a structured per-item result.
+    pub async fn delete_tweet_result(&self, tweet_id: &str) -> XDeleteResult {
+        self.delete_tweet_result_at(tweet_id, 1).await
+    }
+
+    /// Delete tweets/posts sequentially. Every input receives an item result; one
+    /// failure never aborts the rest of the batch.
+    pub async fn batch_delete_tweets(&self, tweet_ids: &[String]) -> XBatchDeleteResult {
+        let mut results = Vec::with_capacity(tweet_ids.len());
+        for (index, tweet_id) in tweet_ids.iter().enumerate() {
+            results.push(self.delete_tweet_result_at(tweet_id, index + 1).await);
+        }
+        XBatchDeleteResult::from_results(results)
+    }
+
+    async fn delete_tweet_result_at(&self, tweet_id: &str, index: usize) -> XDeleteResult {
+        let tweet_id = tweet_id.trim();
+        if tweet_id.is_empty() {
+            return XDeleteResult::skipped(tweet_id, index, "tweet_id is empty");
+        }
+
+        const MAX_ATTEMPTS: u32 = 3;
+        let delete_url = format!("{}/tweets/{}", self.api_base, tweet_id);
+        for attempt in 1..=MAX_ATTEMPTS {
+            let resp = self
+                .client
+                .delete(&delete_url)
+                .header(
+                    "Authorization",
+                    self.write_auth_header("DELETE", &delete_url),
+                )
+                .send()
+                .await;
+
+            let resp = match resp {
+                Ok(resp) => resp,
+                Err(e) => {
+                    return XDeleteResult::failed(
+                        tweet_id,
+                        index,
+                        attempt,
+                        None,
+                        format!("X delete error: {e}"),
+                    );
+                }
+            };
+
+            let status = resp.status();
+            if status.is_success() {
+                tracing::info!(tweet_id = %tweet_id, attempts = attempt, "X tweet deleted");
+                return XDeleteResult::deleted(tweet_id, index, attempt, status.as_u16());
+            }
+
+            let retry_after = resp
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(parse_retry_after_seconds);
+            let text = resp.text().await.unwrap_or_else(|_| "unknown".into());
+
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < MAX_ATTEMPTS {
+                let delay = retry_after.unwrap_or_else(|| u64::from(attempt));
+                tracing::warn!(
+                    tweet_id = %tweet_id,
+                    attempt,
+                    delay_secs = delay,
+                    "X delete rate-limited; backing off before retry"
+                );
+                if delay > 0 {
+                    tokio::time::sleep(Duration::from_secs(delay)).await;
+                }
+                continue;
+            }
+
+            return XDeleteResult::failed(
+                tweet_id,
+                index,
+                attempt,
+                Some(status.as_u16()),
+                format!("{}: {}", status.as_u16(), text),
+            );
+        }
+
+        XDeleteResult::failed(
+            tweet_id,
+            index,
+            MAX_ATTEMPTS,
+            None,
+            "delete retry budget exhausted",
+        )
     }
 
     /// Get tweet metrics
@@ -900,7 +1091,7 @@ impl ChannelAdapter for XAdapter {
                 return Err(Error::channel(format!(
                     "Unsupported media type for X: {:?} (png/jpg/gif/webp/mp4 only)",
                     other
-                )))
+                )));
             }
         };
 
@@ -917,7 +1108,12 @@ impl ChannelAdapter for XAdapter {
         Ok(())
     }
 
-    async fn send_as(&self, to: &ChannelSource, content: &str, _identity: &AgentSendIdentity) -> Result<()> {
+    async fn send_as(
+        &self,
+        to: &ChannelSource,
+        content: &str,
+        _identity: &AgentSendIdentity,
+    ) -> Result<()> {
         // Don't prefix tweets with [name] — on a public social adapter that would
         // appear verbatim in every published tweet. Just send the content as-is.
         self.send(to, content).await
@@ -1471,6 +1667,98 @@ mod tests {
         assert_eq!(back.oauth2_access_token, "a");
         assert_eq!(back.oauth2_refresh_token, "r");
         assert_eq!(back.oauth2_expires_at, 1_700_000_000);
+    }
+
+    fn test_x_config_with_oauth2() -> XConfig {
+        XConfig {
+            oauth2_access_token: "test-oauth2-token".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_tweet_retries_rate_limit() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let responder_attempts = attempts.clone();
+        Mock::given(method("DELETE"))
+            .and(path("/tweets/123"))
+            .respond_with(move |_request: &Request| {
+                if responder_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    ResponseTemplate::new(429)
+                        .insert_header("retry-after", "0")
+                        .set_body_string("rate limited")
+                } else {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "data": { "deleted": true }
+                    }))
+                }
+            })
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let result = adapter.delete_tweet_result("123").await;
+
+        assert_eq!(result.status, XDeleteStatus::Deleted);
+        assert_eq!(result.attempts, 2);
+        assert_eq!(result.http_status, Some(200));
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_batch_delete_returns_partial_results_without_aborting() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/tweets/good"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "deleted": true }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/tweets/bad"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("forbidden"))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/tweets/after"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "deleted": true }
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let ids = vec![
+            "good".to_string(),
+            "bad".to_string(),
+            "after".to_string(),
+            "   ".to_string(),
+        ];
+        let batch = adapter.batch_delete_tweets(&ids).await;
+
+        assert_eq!(batch.deleted, 2);
+        assert_eq!(batch.failed, 1);
+        assert_eq!(batch.skipped, 1);
+        assert_eq!(batch.results.len(), 4);
+        assert_eq!(batch.results[0].status, XDeleteStatus::Deleted);
+        assert_eq!(batch.results[1].status, XDeleteStatus::Failed);
+        assert_eq!(batch.results[1].http_status, Some(403));
+        assert_eq!(batch.results[2].status, XDeleteStatus::Deleted);
+        assert_eq!(batch.results[3].status, XDeleteStatus::Skipped);
     }
 
     #[test]

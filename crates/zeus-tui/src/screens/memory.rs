@@ -41,16 +41,9 @@ struct MemoryProvider {
     sub: &'static str,
     model: &'static str,
     recommended: bool,
-    detected: bool,
 }
 
 /// All 3 memory providers from the JSX prototype (verified against the actual const).
-///
-/// FOLLOW-UP (per dispatch, don't block): Ollama's `detected: true` flag and the
-/// `● OLLAMA DETECTED` cyan box are a STATIC JSX-style example. The real behavior
-/// should probe `localhost:11434/api/tags` for `nomic-embed-text` and set
-/// `detected` / render the box from the live result. Tracked in the spec's
-/// cross-cutting follow-ups (REAL Ollama detection).
 const MEMORY_PROVIDERS: &[MemoryProvider] = &[
     MemoryProvider {
         id: "ollama",
@@ -60,7 +53,6 @@ const MEMORY_PROVIDERS: &[MemoryProvider] = &[
         sub: "Local, free, private",
         model: "nomic-embed-text",
         recommended: false,
-        detected: true,
     },
     MemoryProvider {
         id: "openai",
@@ -70,7 +62,6 @@ const MEMORY_PROVIDERS: &[MemoryProvider] = &[
         sub: "Cloud, paid, fast",
         model: "text-embedding-3-small",
         recommended: false,
-        detected: false,
     },
     MemoryProvider {
         id: "none",
@@ -80,7 +71,6 @@ const MEMORY_PROVIDERS: &[MemoryProvider] = &[
         sub: "No embeddings, full-text search only",
         model: "—",
         recommended: true,
-        detected: false,
     },
 ];
 
@@ -347,12 +337,6 @@ impl MemoryScreen {
                         ));
                     }
                 }
-            } else if p.detected {
-                spans.push(Span::raw("  "));
-                spans.push(Span::styled(
-                    "● DETECTED",
-                    Style::default().fg(theme::CYAN).add_modifier(Modifier::BOLD),
-                ));
             }
             if selected {
                 spans.push(Span::raw("  "));
@@ -647,7 +631,7 @@ mod tests {
         assert_eq!(s.selected_id(), "none");
         let p = &MEMORY_PROVIDERS[s.selected];
         assert!(p.recommended, "FTS-only must carry the ★ REC badge as default");
-        assert!(!p.detected, "FTS-only is not a detection target (no probe)");
+        assert_ne!(p.id, "ollama", "FTS-only is not a detection target (no probe)");
         // Ollama is no longer the default-recommended pick (#258).
         let ollama = &MEMORY_PROVIDERS[0];
         assert!(!ollama.recommended, "Ollama no longer default-recommended");

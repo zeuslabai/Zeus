@@ -9,8 +9,8 @@
 use crate::TalosTool;
 use async_trait::async_trait;
 use serde_json::Value;
-use zeus_core::{Error, Result, ToolSchema};
 use zeus_channels::{CreateTweetOptions, ThreadOptions, XAdapter, XConfig};
+use zeus_core::{Error, Result, ToolSchema};
 
 /// Build an XAdapter from `[channels.x_twitter]` config (env fallbacks
 /// included via the config layer's serde defaults). Mirrors the field
@@ -65,7 +65,9 @@ async fn upload_media_paths(adapter: &XAdapter, args: &Value) -> Result<Vec<Stri
         let Some(path) = p.as_str() else { continue };
         let data = std::fs::read(path)
             .map_err(|e| Error::Tool(format!("Cannot read media file '{}': {}", path, e)))?;
-        let id = adapter.upload_media(&data, mime_for(path), alt_text).await?;
+        let id = adapter
+            .upload_media(&data, mime_for(path), alt_text)
+            .await?;
         ids.push(id);
     }
     Ok(ids)
@@ -76,6 +78,21 @@ fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
         .and_then(|v| v.as_str())
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| Error::Tool(format!("Missing required '{}' parameter", key)))
+}
+
+fn require_string_array(args: &Value, key: &str) -> Result<Vec<String>> {
+    let values = args
+        .get(key)
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| Error::Tool(format!("Missing required '{}' parameter", key)))?;
+    if values.is_empty() {
+        return Err(Error::Tool(format!("{} must not be empty", key)));
+    }
+
+    Ok(values
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -104,7 +121,12 @@ impl TalosTool for XPostTool {
                 "Local file paths of images/video to attach (jpg/png/gif/webp/mp4)",
                 false,
             )
-            .with_param("alt_text", "string", "Alt text applied to attached media", false)
+            .with_param(
+                "alt_text",
+                "string",
+                "Alt text applied to attached media",
+                false,
+            )
             .with_param("quote_tweet_id", "string", "Tweet ID to quote", false)
     }
     async fn execute(&self, args: Value) -> Result<String> {
@@ -151,7 +173,12 @@ impl TalosTool for XReplyTool {
                 "Local file paths of images/video to attach",
                 false,
             )
-            .with_param("alt_text", "string", "Alt text applied to attached media", false)
+            .with_param(
+                "alt_text",
+                "string",
+                "Alt text applied to attached media",
+                false,
+            )
     }
     async fn execute(&self, args: Value) -> Result<String> {
         let text = require_str(&args, "text")?;
@@ -165,7 +192,10 @@ impl TalosTool for XReplyTool {
             ..Default::default()
         };
         let tweet = adapter.post_tweet(&opts).await?;
-        Ok(format!("Reply posted (id: {}, in reply to {})", tweet.id, reply_to))
+        Ok(format!(
+            "Reply posted (id: {}, in reply to {})",
+            tweet.id, reply_to
+        ))
     }
 }
 
@@ -186,8 +216,12 @@ impl TalosTool for XThreadTool {
          'tweets' becomes one tweet, replying to the previous."
     }
     fn schema(&self) -> ToolSchema {
-        ToolSchema::new(self.name(), self.description())
-            .with_param("tweets", "array", "Tweet texts, in thread order", true)
+        ToolSchema::new(self.name(), self.description()).with_param(
+            "tweets",
+            "array",
+            "Tweet texts, in thread order",
+            true,
+        )
     }
     async fn execute(&self, args: Value) -> Result<String> {
         let texts: Vec<String> = args
@@ -213,7 +247,11 @@ impl TalosTool for XThreadTool {
         };
         let tweets = adapter.post_thread(&thread).await?;
         let ids: Vec<&str> = tweets.iter().map(|t| t.id.as_str()).collect();
-        Ok(format!("Thread posted ({} tweets: {})", tweets.len(), ids.join(", ")))
+        Ok(format!(
+            "Thread posted ({} tweets: {})",
+            tweets.len(),
+            ids.join(", ")
+        ))
     }
 }
 
@@ -233,14 +271,80 @@ impl TalosTool for XDeleteTool {
         "Delete one of your tweets on X (Twitter) by tweet ID."
     }
     fn schema(&self) -> ToolSchema {
-        ToolSchema::new(self.name(), self.description())
-            .with_param("tweet_id", "string", "ID of the tweet to delete", true)
+        ToolSchema::new(self.name(), self.description()).with_param(
+            "tweet_id",
+            "string",
+            "ID of the tweet to delete",
+            true,
+        )
     }
     async fn execute(&self, args: Value) -> Result<String> {
         let tweet_id = require_str(&args, "tweet_id")?;
         let adapter = x_adapter().await?;
         adapter.delete_tweet(tweet_id).await?;
         Ok(format!("Tweet {} deleted", tweet_id))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 4b. XDeletePostTool — x_delete_post
+// ---------------------------------------------------------------------------
+
+/// Delete a single X post/tweet by ID, returning a structured per-item result
+pub struct XDeletePostTool;
+
+#[async_trait]
+impl TalosTool for XDeletePostTool {
+    fn name(&self) -> &'static str {
+        "x_delete_post"
+    }
+    fn description(&self) -> &'static str {
+        "Delete a single X post/tweet by ID, returning a structured per-item result"
+    }
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(self.name(), self.description()).with_param(
+            "post_id",
+            "string",
+            "ID of the X post/tweet to delete",
+            true,
+        )
+    }
+    async fn execute(&self, args: Value) -> Result<String> {
+        let post_id = require_str(&args, "post_id")?;
+        let adapter = x_adapter().await?;
+        let result = adapter.delete_tweet_result(post_id).await;
+        Ok(serde_json::to_string_pretty(&result).unwrap_or_else(|_| format!("{:?}", result)))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 4c. XBatchDeleteTool — x_batch_delete
+// ---------------------------------------------------------------------------
+
+/// Delete multiple X posts/tweets sequentially with per-item results
+pub struct XBatchDeleteTool;
+
+#[async_trait]
+impl TalosTool for XBatchDeleteTool {
+    fn name(&self) -> &'static str {
+        "x_batch_delete"
+    }
+    fn description(&self) -> &'static str {
+        "Delete multiple X posts/tweets sequentially, returning deleted/failed/skipped per item"
+    }
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(self.name(), self.description()).with_param(
+            "post_ids",
+            "array",
+            "IDs of X posts/tweets to delete",
+            true,
+        )
+    }
+    async fn execute(&self, args: Value) -> Result<String> {
+        let post_ids = require_string_array(&args, "post_ids")?;
+        let adapter = x_adapter().await?;
+        let result = adapter.batch_delete_tweets(&post_ids).await;
+        Ok(serde_json::to_string_pretty(&result).unwrap_or_else(|_| format!("{:?}", result)))
     }
 }
 
@@ -261,15 +365,18 @@ impl TalosTool for XMetricsTool {
          a tweet on X (Twitter)."
     }
     fn schema(&self) -> ToolSchema {
-        ToolSchema::new(self.name(), self.description())
-            .with_param("tweet_id", "string", "ID of the tweet", true)
+        ToolSchema::new(self.name(), self.description()).with_param(
+            "tweet_id",
+            "string",
+            "ID of the tweet",
+            true,
+        )
     }
     async fn execute(&self, args: Value) -> Result<String> {
         let tweet_id = require_str(&args, "tweet_id")?;
         let adapter = x_adapter().await?;
         let m = adapter.get_tweet_metrics(tweet_id).await?;
-        Ok(serde_json::to_string_pretty(&m)
-            .unwrap_or_else(|_| format!("{:?}", m)))
+        Ok(serde_json::to_string_pretty(&m).unwrap_or_else(|_| format!("{:?}", m)))
     }
 }
 
@@ -291,15 +398,14 @@ mod tests {
         assert_eq!(XReplyTool.name(), "x_reply");
         assert_eq!(XThreadTool.name(), "x_thread");
         assert_eq!(XDeleteTool.name(), "x_delete");
+        assert_eq!(XDeletePostTool.name(), "x_delete_post");
+        assert_eq!(XBatchDeleteTool.name(), "x_batch_delete");
         assert_eq!(XMetricsTool.name(), "x_metrics");
     }
 
     #[tokio::test]
     async fn test_x_post_requires_text() {
-        let err = XPostTool
-            .execute(serde_json::json!({}))
-            .await
-            .unwrap_err();
+        let err = XPostTool.execute(serde_json::json!({})).await.unwrap_err();
         assert!(err.to_string().contains("text"), "got: {err}");
     }
 
@@ -319,5 +425,23 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("tweets"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_x_delete_post_requires_post_id() {
+        let err = XDeletePostTool
+            .execute(serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("post_id"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_x_batch_delete_requires_post_ids() {
+        let err = XBatchDeleteTool
+            .execute(serde_json::json!({"post_ids": []}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("post_ids"), "got: {err}");
     }
 }

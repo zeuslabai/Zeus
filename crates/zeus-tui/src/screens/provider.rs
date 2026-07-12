@@ -25,6 +25,7 @@ pub fn provider_display(idx: usize) -> (&'static str, ratatui::style::Color, &'s
 /// Provider selection screen — step 3 (PROV).
 pub struct ProviderScreen {
     pub selected: usize,
+    pub ollama_detected: Option<bool>,
 }
 
 impl Widget for ProviderScreen {
@@ -72,11 +73,11 @@ impl Widget for ProviderScreen {
             Block::default().style(Style::default().bg(theme::BG)).render(rect, buf);
         };
         clear_region(cols[0], buf);
-        render_list(cols[0], buf, self.selected);
+        render_list(cols[0], buf, self.selected, self.ollama_detected);
 
         // ── Center: detail panel (badge + config-box) ──
         clear_region(cols[1], buf);
-        render_detail(cols[1], buf, self.selected);
+        render_detail(cols[1], buf, self.selected, self.ollama_detected);
 
         // ── Right: HINTS + RECOMMENDATIONS column ──
         if right_w > 0 {
@@ -86,7 +87,12 @@ impl Widget for ProviderScreen {
     }
 }
 
-fn render_list(area: Rect, buf: &mut ratatui::buffer::Buffer, selected: usize) {
+fn render_list(
+    area: Rect,
+    buf: &mut ratatui::buffer::Buffer,
+    selected: usize,
+    ollama_detected: Option<bool>,
+) {
     // Slim card (#271) = 2 content rows (badge+name / 1-line desc) + top/bottom
     // border (2) + 1-row gutter (JSX gap:6) = 5 total. Body is the inner 2 rows;
     // model/pricing/key moved to the center detail panel.
@@ -205,7 +211,7 @@ fn render_list(area: Rect, buf: &mut ratatui::buffer::Buffer, selected: usize) {
         }
 
         // Detected badge
-        if provider.detected {
+        if provider.id == "ollama" && matches!(ollama_detected, Some(true)) {
             spans.push(Span::raw("  "));
             spans.push(Span::styled(
                 "● DETECTED",
@@ -245,7 +251,12 @@ fn render_list(area: Rect, buf: &mut ratatui::buffer::Buffer, selected: usize) {
     }
 }
 
-fn render_detail(area: Rect, buf: &mut ratatui::buffer::Buffer, selected: usize) {
+fn render_detail(
+    area: Rect,
+    buf: &mut ratatui::buffer::Buffer,
+    selected: usize,
+    ollama_detected: Option<bool>,
+) {
     let provider = match PROVIDERS.get(selected) {
         Some(p) => p,
         None => return,
@@ -294,7 +305,7 @@ fn render_detail(area: Rect, buf: &mut ratatui::buffer::Buffer, selected: usize)
             Style::default().fg(theme::AMBER).add_modifier(Modifier::BOLD),
         ));
     }
-    if provider.detected {
+    if provider.id == "ollama" && matches!(ollama_detected, Some(true)) {
         name_spans.push(Span::raw("  "));
         name_spans.push(Span::styled(
             " ● DETECTED ",
@@ -473,6 +484,52 @@ mod tests {
         out
     }
 
+
+    #[test]
+    fn ollama_badge_absent_until_probe_success() {
+        let selected = PROVIDERS
+            .iter()
+            .position(|p| p.id == "ollama")
+            .expect("ollama provider present");
+        let area = Rect { x: 0, y: 0, width: 110, height: 30 };
+
+        for state in [None, Some(false)] {
+            let mut buf = Buffer::empty(area);
+            ProviderScreen {
+                selected,
+                ollama_detected: state,
+            }
+            .render(area, &mut buf);
+            let rendered = buffer_text(&buf);
+            assert!(
+                !rendered.contains("● DETECTED"),
+                "Ollama provider must not render DETECTED for {state:?}:\n{rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn ollama_badge_present_after_probe_success() {
+        let selected = PROVIDERS
+            .iter()
+            .position(|p| p.id == "ollama")
+            .expect("ollama provider present");
+        let area = Rect { x: 0, y: 0, width: 110, height: 30 };
+        let mut buf = Buffer::empty(area);
+
+        ProviderScreen {
+            selected,
+            ollama_detected: Some(true),
+        }
+        .render(area, &mut buf);
+
+        let rendered = buffer_text(&buf);
+        assert!(
+            rendered.contains("● DETECTED"),
+            "Ollama provider should render DETECTED after probe success:\n{rendered}"
+        );
+    }
+
     /// Render-fidelity gate for #250 (detail-over-card bleed). The detail panel
     /// writes via direct `buf`/`set_line` without padding to full region width,
     /// and its content length varies per provider. Without a per-region clear,
@@ -497,12 +554,12 @@ mod tests {
                 // Dirty buffer: render A, then B on top (no manual clear — the
                 // screen's own per-region bg repaint is what must clean it).
                 let mut dirty = Buffer::empty(area);
-                ProviderScreen { selected: a }.render(area, &mut dirty);
-                ProviderScreen { selected: b }.render(area, &mut dirty);
+                ProviderScreen { selected: a, ollama_detected: None }.render(area, &mut dirty);
+                ProviderScreen { selected: b, ollama_detected: None }.render(area, &mut dirty);
 
                 // Reference: fresh buffer, render B once.
                 let mut fresh = Buffer::empty(area);
-                ProviderScreen { selected: b }.render(area, &mut fresh);
+                ProviderScreen { selected: b, ollama_detected: None }.render(area, &mut fresh);
 
                 assert_eq!(
                     buffer_text(&dirty),
@@ -529,7 +586,7 @@ mod tests {
             height: 30,
         };
         let mut buf = Buffer::empty(area);
-        ProviderScreen { selected: 0 }.render(area, &mut buf);
+        ProviderScreen { selected: 0, ollama_detected: None }.render(area, &mut buf);
         let out = buffer_text(&buf);
 
         assert!(
@@ -553,11 +610,11 @@ mod tests {
         // width < 88 drops the right column.
         let area = Rect { x: 0, y: 0, width: 80, height: 26 };
         let mut dirty = Buffer::empty(area);
-        ProviderScreen { selected: 0 }.render(area, &mut dirty);
-        ProviderScreen { selected: PROVIDERS.len() - 1 }.render(area, &mut dirty);
+        ProviderScreen { selected: 0, ollama_detected: None }.render(area, &mut dirty);
+        ProviderScreen { selected: PROVIDERS.len() - 1, ollama_detected: None }.render(area, &mut dirty);
 
         let mut fresh = Buffer::empty(area);
-        ProviderScreen { selected: PROVIDERS.len() - 1 }.render(area, &mut fresh);
+        ProviderScreen { selected: PROVIDERS.len() - 1, ollama_detected: None }.render(area, &mut fresh);
 
         assert_eq!(buffer_text(&dirty), buffer_text(&fresh),
             "stale glyph survived narrow-width detail switch — per-region clear failed");
@@ -606,7 +663,7 @@ mod tests {
         let provider = &PROVIDERS[sel];
 
         let mut buf = Buffer::empty(area);
-        ProviderScreen { selected: sel }.render(area, &mut buf);
+        ProviderScreen { selected: sel, ollama_detected: None }.render(area, &mut buf);
 
         let cards = card_column_text(&buf, LEFT_W);
         let detail = detail_column_text(&buf, LEFT_W);

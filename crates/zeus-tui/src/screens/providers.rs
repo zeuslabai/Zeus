@@ -27,8 +27,6 @@ pub struct ProviderInfo {
     pub key_fmt: &'static str,
     /// `★ FEATURED` badge on the Provider screen.
     pub featured: bool,
-    /// `● DETECTED` badge (local provider running on this machine, e.g. Ollama).
-    pub detected: bool,
 }
 
 /// The canonical 13. Order = display order on the Provider 3-col grid.
@@ -43,7 +41,6 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         price: "$15/$75 per Mtok",
         key_fmt: "sk-ant-...",
         featured: true,
-        detected: false,
     },
     ProviderInfo {
         id: "openai",
@@ -55,7 +52,6 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         price: "$2.50/$10 per Mtok",
         key_fmt: "sk-...",
         featured: false,
-        detected: false,
     },
     ProviderInfo {
         id: "google",
@@ -67,7 +63,6 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         price: "$1.25/$10 per Mtok",
         key_fmt: "AIza...",
         featured: false,
-        detected: false,
     },
     ProviderInfo {
         id: "ollama",
@@ -75,11 +70,10 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         glyph: "OLM",
         color: theme::CYAN,
         sub: "Local models, zero cost, private",
-        flagship: "● DETECTED",
+        flagship: "Local model server",
         price: "Free / self-hosted",
         key_fmt: "(none)",
         featured: false,
-        detected: true,
     },
     ProviderInfo {
         id: "gemini-cli",
@@ -91,7 +85,6 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         price: "OAuth (no key)",
         key_fmt: "OAuth",
         featured: false,
-        detected: false,
     },
     ProviderInfo {
         id: "kimi",
@@ -103,7 +96,6 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         price: "$0.60/$2.50 per Mtok",
         key_fmt: "sk-...",
         featured: false,
-        detected: false,
     },
     ProviderInfo {
         id: "glm",
@@ -115,7 +107,6 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         price: "$0.60/$2.20 per Mtok",
         key_fmt: "...",
         featured: false,
-        detected: false,
     },
     ProviderInfo {
         id: "qwen",
@@ -127,7 +118,6 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         price: "$0.40/$1.20 per Mtok",
         key_fmt: "sk-...",
         featured: false,
-        detected: false,
     },
     ProviderInfo {
         id: "minimax",
@@ -140,7 +130,6 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         // MiniMax: keys start with `sk-api-` prefix.
         key_fmt: "sk-api-...",
         featured: false,
-        detected: false,
     },
     ProviderInfo {
         id: "mimo",
@@ -152,7 +141,6 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         price: "$0.30/$1.20 per Mtok",
         key_fmt: "...",
         featured: false,
-        detected: false,
     },
     ProviderInfo {
         id: "openrouter",
@@ -164,7 +152,6 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         price: "Varies by model",
         key_fmt: "sk-or-...",
         featured: false,
-        detected: false,
     },
     ProviderInfo {
         id: "xai",
@@ -176,7 +163,6 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         price: "$3/$15 per Mtok",
         key_fmt: "xai-...",
         featured: false,
-        detected: false,
     },
     ProviderInfo {
         id: "sakana",
@@ -191,7 +177,6 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         // `sk-...` hint would hard-block onboarding for valid Sakana keys.
         key_fmt: "fish_...",
         featured: false,
-        detected: false,
     },
 ];
 

@@ -20,6 +20,7 @@ pub mod skill_matcher;
 pub mod skill_permissions;
 pub mod skill_plugin;
 pub mod skill_versioning;
+pub mod soul_rewrite;
 pub mod wasm_metrics;
 pub mod wasm_sandbox;
 
@@ -38,6 +39,11 @@ pub use plugin::{Plugin, PluginRegistry};
 pub use security_scan::{security_scan, ScanResult, SecurityFinding, Severity};
 pub use skill_permissions::{SkillCapability, SkillPermissionPolicy, SkillPermissionRegistry};
 pub use skill_plugin::SkillPlugin;
+pub use soul_rewrite::{
+    SoulRewriteError, SoulRewriteLimits, SoulRewriteProposal, SoulRewriteRequest,
+    SoulRewriteValidation, approve_soul_rewrite, cleanup_expired_proposals, load_proposal_state,
+    propose_soul_rewrite, save_proposal_state,
+};
 pub use skill_versioning::{
     DependencyResolution, SkillDependency, SkillVersion, SkillVersionRegistry, UpgradeInfo,
     VersionReq,
