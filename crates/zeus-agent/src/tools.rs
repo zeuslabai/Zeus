@@ -457,7 +457,7 @@ impl ToolRegistry {
         // Core tools always included (the 8 essentials)
         let core_names: &[&str] = &[
             "read_file", "write_file", "edit_file", "list_dir",
-            "shell", "web_fetch", "spawn", "message",
+            "shell", "python_exec", "web_fetch", "spawn", "message",
         ];
 
         // Domain → (tool name prefixes/names, trigger keywords in message)
@@ -596,6 +596,11 @@ impl ToolRegistry {
                 .with_param("command", "string", "The command to execute", true)
                 .with_param("cwd", "string", "Working directory (optional)", false)
                 .with_param("timeout", "integer", "Timeout in seconds (default: 60)", false),
+
+            ToolSchema::new("python_exec", "Execute Python code via system python3 subprocess. Returns structured stdout/stderr/exit_code. Use for data processing, calculations, or scripting — NOT for system commands (use shell tool instead).")
+                .with_param("code", "string", "Python code to execute", true)
+                .with_param("timeout_secs", "integer", "Timeout in seconds (default: 60)", false)
+                .with_param("stdin", "string", "Optional data to pipe to stdin", false),
 
             ToolSchema::new("web_fetch", "Fetch content from a URL. Returns page content plus structured metadata (title, description, Open Graph tags) for HTML pages.")
                 .with_param("url", "string", "The URL to fetch", true)
@@ -747,6 +752,7 @@ impl ToolRegistry {
             "edit_file" => return edit_file(args).await,
             "list_dir" => return list_dir(args).await,
             "shell" => return shell(args).await,
+            "python_exec" => return python_exec(args).await,
             "web_fetch" => return web_fetch(args).await,
             "spawn" => return spawn(args).await,
             "collect_spawns" => {
@@ -1601,6 +1607,150 @@ fn validate_shell_command(command: &str) -> Result<()> {
     Ok(())
 }
 
+// ============================================================================
+// 5b. python_exec — Execute Python code via system python3
+// ============================================================================
+
+/// Validate Python code before execution.
+///
+/// Mirrors `validate_shell_command` for consistent security posture:
+/// - Rejects null bytes
+/// - Caps code length
+/// - Blocks dangerous import/execution patterns
+fn validate_python_code(code: &str) -> Result<()> {
+    // Reject null bytes
+    if code.contains('\0') {
+        return Err(tool_err!(security, "Python code contains null bytes"));
+    }
+
+    // Cap code length
+    if code.len() > 50_000 {
+        return Err(Error::Tool(
+            "Python code too long (max 50,000 characters)".to_string(),
+        ));
+    }
+
+    // When sandbox_level = "none", skip deeper checks
+    if sandbox_is_none() {
+        return Ok(());
+    }
+
+    // Block dangerous subprocess/os.system patterns that could bypass validation
+    let dangerous_patterns = [
+        "os.system(",
+        "os.popen(",
+        "subprocess.call(",
+        "subprocess.run(",
+        "subprocess.Popen(",
+        "os.exec",
+        "os.spawn",
+        "os.kill(",
+        "shutil.rmtree(",
+    ];
+    let code_lower = code.to_lowercase();
+    for pattern in &dangerous_patterns {
+        if code_lower.contains(&pattern.to_lowercase()) {
+            return Err(tool_err!(security,
+                "Python code blocked: '{}' is not allowed — use the shell tool for system commands",
+                pattern));
+        }
+    }
+
+    Ok(())
+}
+
+/// Execute Python code via system `python3` subprocess.
+///
+/// Runs code as `python3 -c <code>` with optional stdin piped in.
+/// Returns structured stdout/stderr/exit_code on success.
+async fn python_exec(args: Value) -> Result<String> {
+    let code = args
+        .get("code")
+        .and_then(|c| c.as_str())
+        .ok_or_else(|| tool_err!(validation, "Missing 'code' argument"))?;
+
+    let timeout_secs = args
+        .get("timeout_secs")
+        .and_then(|t| t.as_u64())
+        .unwrap_or(60);
+
+    let stdin_data = args.get("stdin").and_then(|s| s.as_str());
+
+    // Validate code before execution
+    validate_python_code(code)?;
+
+    // Check python3 is available
+    let python = which_python3().await?;
+
+    debug!(
+        "python_exec: {} chars (timeout: {}s, stdin: {})",
+        code.len(),
+        timeout_secs,
+        stdin_data.is_some()
+    );
+
+    let mut cmd = Command::new(&python);
+    cmd.arg("-c").arg(code);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    cmd.kill_on_drop(true);
+
+    if stdin_data.is_some() {
+        cmd.stdin(Stdio::piped());
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| tool_err!(tool, "Failed to spawn python3: {}", e))?;
+
+    // Write stdin if provided, then close
+    if let Some((stdin_str, mut stdin_pipe)) = stdin_data.zip(child.stdin.take()) {
+        use tokio::io::AsyncWriteExt;
+        stdin_pipe
+            .write_all(stdin_str.as_bytes())
+            .await
+            .map_err(|e| tool_err!(tool, "Failed to write stdin to python3: {}", e))?;
+        // stdin_pipe drops here, closing the pipe
+    }
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        child.wait_with_output(),
+    )
+    .await
+    .map_err(|_| tool_err!(timeout, "Python execution timed out after {}s", timeout_secs))?
+    .map_err(|e| tool_err!(tool, "Failed to execute python3: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let exit_code = output.status.code().unwrap_or(-1);
+
+    // Structured JSON return
+    let result = serde_json::json!({
+        "stdout": stdout.to_string(),
+        "stderr": stderr.to_string(),
+        "exit_code": exit_code,
+    });
+
+    Ok(serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string()))
+}
+
+/// Find the system python3 binary. Returns a graceful error if not installed.
+async fn which_python3() -> Result<String> {
+    // Try common locations in order
+    for candidate in &["python3", "python"] {
+        if let Ok(out) = Command::new("which").arg(candidate).output().await
+            && out.status.success()
+        {
+            let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Ok(path);
+            }
+        }
+    }
+    Err(tool_err!(tool, "python3 is not installed on this system. Install it to use python_exec."))
+}
+
 async fn shell(args: Value) -> Result<String> {
     let command = args
         .get("command")
@@ -1624,6 +1774,7 @@ async fn shell(args: Value) -> Result<String> {
     cmd.arg("-lc").arg(command);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    cmd.kill_on_drop(true);
 
     if let Some(dir) = cwd {
         let validated_dir = validate_tool_path(dir)?;
@@ -5821,5 +5972,35 @@ mod tests {
         let out = strip_hidden_html_content(json);
         // JSON has no HTML tags so it passes through unchanged
         assert!(out.contains("not stripped"));
+    }
+
+    // ── #344 kill_on_drop regression: child process reaped on timeout ──
+
+    #[tokio::test]
+    async fn test_shell_timeout_kills_child() {
+        // Spawn a sleeper via shell with a 1s timeout.
+        // After timeout, the child must be gone (not orphaned).
+        let args = serde_json::json!({
+            "command": "sleep 60",
+            "timeout": 1
+        });
+        let result = shell(args).await;
+        assert!(result.is_err(), "should have timed out");
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("timed out"), "error should mention timeout: {}", err);
+    }
+
+    #[tokio::test]
+    async fn test_python_exec_timeout_kills_child() {
+        // Spawn a long-running python script with a 1s timeout.
+        // After timeout, the child must be gone (not orphaned).
+        let args = serde_json::json!({
+            "code": "import time; time.sleep(60)",
+            "timeout_secs": 1
+        });
+        let result = python_exec(args).await;
+        assert!(result.is_err(), "should have timed out");
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("timed out"), "error should mention timeout: {}", err);
     }
 }

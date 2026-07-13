@@ -1,16 +1,8 @@
-//! C2b render-diff tests for the prod Memory tab — proves the de-mock:
-//! a populated `MemoryLive` renders REAL gateway data, not the static consts
-//! (`WORKSPACE_FILES` / `SESSIONS` / `SEARCH_RESULTS`), and that an empty
-//! `MemoryLive` still falls back to those consts.
+//! Render-diff tests for the prod Memory tab live gateway wiring.
 //!
-//! Mirrors the Wave-1 de-mock cut on `feat/wire-memory-settings-tabs` (C2b):
-//! the 3 sub-tabs (Workspace/Sessions/Mnemosyne) each borrow their live slice
-//! from `App` (`prod_memory_files` / `prod_sessions` / `prod_memory_search`),
-//! landed by the lib.rs `run()` poll-workers. These tests render the fn
-//! directly with hand-built live data so they assert the overlay path without
-//! a live gateway.
-//!
-//! Separate file = conflict-free with the other agents' tests.
+//! The Memory tab must render real `/v1/memory/files`, `/v1/sessions`, and
+//! `/v1/memory/search` payloads, or honest waiting/empty states. It must not
+//! fall back to prototype file trees, session rows, journal text, or facts.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -25,16 +17,10 @@ fn render(sub: MemorySubTab, live: MemoryLive<'_>) -> String {
     buf_to_string(&buf)
 }
 
-fn maybe_dump(label: &str, dump: &str) {
-    if std::env::var_os("ZEUS_DUMP_RENDER").is_some() {
-        println!("--- {label} ---\n{dump}");
-    }
-}
-
 fn buf_to_string(buf: &Buffer) -> String {
     let mut out = String::new();
-    for y in 0..buf.area().height {
-        for x in 0..buf.area().width {
+    for y in 0..buf.area.height {
+        for x in 0..buf.area.width {
             out.push_str(buf[(x, y)].symbol());
         }
         out.push('\n');
@@ -42,76 +28,104 @@ fn buf_to_string(buf: &Buffer) -> String {
     out
 }
 
-// ── Workspace ────────────────────────────────────────────────────────────────
+fn assert_no_prototype_memory(out: &str) {
+    for fake in [
+        "847 files",
+        "147 sessions",
+        "12,847 facts",
+        "scratch.md",
+        "s_2847",
+        "TUI prototype design",
+        "Mac Studio M5 Ultra",
+        "Track C blockers ship in Phase 0",
+        "2026-05-03.md",
+        "Render-gate every prod tab",
+    ] {
+        assert!(!out.contains(fake), "prototype memory fixture {fake:?} rendered:
+{out}");
+    }
+}
+
+#[test]
+fn memory_tab_counts_wait_for_real_payloads() {
+    let out = render(MemorySubTab::Workspace, MemoryLive::default());
+
+    for expected in [
+        "Workspace awaiting /v1/memory/files",
+        "Sessions awaiting /v1/sessions",
+        "Mnemosyne awaiting /v1/memory/search",
+    ] {
+        assert!(out.contains(expected), "missing {expected:?}:
+{out}");
+    }
+    assert_no_prototype_memory(&out);
+}
+
+#[test]
+fn workspace_waits_for_files_without_mock_tree_or_journal() {
+    let out = render(MemorySubTab::Workspace, MemoryLive::default());
+
+    assert!(out.contains("Waiting for /v1/memory/files"), "waiting state missing:
+{out}");
+    assert!(out.contains("FILE PREVIEW"), "preview shell missing:
+{out}");
+    assert!(out.contains("waiting for /v1/memory/files"), "preview wait missing:
+{out}");
+    assert_no_prototype_memory(&out);
+}
+
+#[test]
+fn workspace_empty_response_is_empty_not_mocked() {
+    let files: Vec<MemoryFileEntry> = Vec::new();
+    let live = MemoryLive { files: Some(&files), sessions: None, search: None };
+    let out = render(MemorySubTab::Workspace, live);
+
+    assert!(out.contains("Workspace 0 files"), "live zero count missing:
+{out}");
+    assert!(out.contains("No workspace files returned by /v1/memory/files"), "empty files state missing:
+{out}");
+    assert_no_prototype_memory(&out);
+}
 
 #[test]
 fn workspace_renders_live_files_not_const() {
     let files = vec![
-        MemoryFileEntry {
-            path: "ZZTOPMARKER_live_file.md".into(),
-            size: 42,
-            modified: "now".into(),
-        },
-        MemoryFileEntry {
-            path: "subdir/".into(),
-            size: 0,
-            modified: "now".into(),
-        },
+        MemoryFileEntry { path: "ZZTOPMARKER_live_file.md".into(), size: 42, modified: "2026-06-22".into() },
+        MemoryFileEntry { path: "live-dir/".into(), size: 0, modified: "".into() },
     ];
-    let live = MemoryLive {
-        files: Some(&files),
-        sessions: None,
-        search: None,
-    };
+    let live = MemoryLive { files: Some(&files), sessions: None, search: None };
     let out = render(MemorySubTab::Workspace, live);
 
-    // Live path is present...
-    assert!(
-        out.contains("ZZTOPMARKER_live_file.md"),
-        "live file path must render"
-    );
-    // ...and the const tree is NOT (its known leaf node is gone).
-    assert!(
-        !out.contains("MEMORY.md"),
-        "const WORKSPACE_FILES must not render when live present"
-    );
+    assert!(out.contains("ZZTOPMARKER_live_file.md"), "live file path must render:
+{out}");
+    assert!(out.contains("42 bytes · 2026-06-22"), "live metadata must render:
+{out}");
+    assert!(out.contains("# Live memory file"), "live preview shell must render:
+{out}");
+    assert_no_prototype_memory(&out);
 }
 
 #[test]
-fn workspace_falls_back_to_const_when_empty() {
-    let out = render(MemorySubTab::Workspace, MemoryLive::default());
-    // A const file tree node renders when no live data has landed.
-    assert!(
-        out.contains("scratch.md"),
-        "const fallback must render when live absent"
-    );
+fn sessions_waits_for_endpoint_without_mock_rows() {
+    let out = render(MemorySubTab::Sessions, MemoryLive::default());
+
+    assert!(out.contains("Waiting for /v1/sessions"), "waiting sessions state missing:
+{out}");
+    assert_no_prototype_memory(&out);
 }
 
 #[test]
-fn memory_workspace_matches_production_prototype_shell() {
-    let out = render(MemorySubTab::Workspace, MemoryLive::default());
-    maybe_dump("memory/workspace", &out);
+fn sessions_empty_response_is_empty_not_mocked() {
+    let sessions: Vec<SessionSummary> = Vec::new();
+    let live = MemoryLive { files: None, sessions: Some(&sessions), search: None };
+    let out = render(MemorySubTab::Sessions, live);
 
-    for expected in [
-        "Workspace 847 files",
-        "Sessions 147 sessions",
-        "Mnemosyne 12,847 facts",
-        "~/.zeus/workspace/",
-        "SOUL.md",
-        "│ ├ 2026-05-03.md",
-        "JOURNAL",
-        "2026-05-03.md",
-        "last modified · 2 minutes ago",
-        "# Journal · 2026-05-03",
-        "## Sessions",
-        "## Decisions",
-        "Render-gate every prod tab",
-    ] {
-        assert!(out.contains(expected), "missing {expected:?}:\n{out}");
-    }
+    assert!(out.contains("Sessions 0 sessions"), "live zero sessions count missing:
+{out}");
+    assert!(out.contains("No sessions returned by /v1/sessions"), "empty sessions state missing:
+{out}");
+    assert_no_prototype_memory(&out);
 }
-
-// ── Sessions ─────────────────────────────────────────────────────────────────
 
 #[test]
 fn sessions_renders_live_rows_not_const() {
@@ -122,64 +136,43 @@ fn sessions_renders_live_rows_not_const() {
         est_tokens: 1234,
         last_preview: "ZZSESSIONMARKER preview text".into(),
     }];
-    let live = MemoryLive {
-        files: None,
-        sessions: Some(&sessions),
-        search: None,
-    };
+    let live = MemoryLive { files: None, sessions: Some(&sessions), search: None };
     let out = render(MemorySubTab::Sessions, live);
 
-    assert!(
-        out.contains("ZZSESSIONMARKER"),
-        "live session preview must render"
-    );
-    assert!(
-        out.contains("7 msgs"),
-        "live message_count must render in stats"
-    );
+    assert!(out.contains("abcd1234"), "live session id must render:
+{out}");
+    assert!(out.contains("ZZSESSIONMARKER"), "live session preview must render:
+{out}");
+    assert!(out.contains("~1234 tok · 7 msgs"), "live session stats must render:
+{out}");
+    assert_no_prototype_memory(&out);
 }
 
 #[test]
-fn memory_sessions_matches_production_prototype_rows() {
-    let out = render(MemorySubTab::Sessions, MemoryLive::default());
-    maybe_dump("memory/sessions", &out);
-
-    for expected in [
-        "Workspace 847 files",
-        "Sessions 147 sessions",
-        "Mnemosyne 12,847 facts",
-        "s_2847",
-        "14:30",
-        "TUI prototype design",
-        "12m · 47 tools · 23 msgs",
-        "s_2842",
-        "Pitch deck v5",
-    ] {
-        assert!(out.contains(expected), "missing {expected:?}:\n{out}");
-    }
-}
-
-#[test]
-fn memory_mnemosyne_matches_production_prototype_cards() {
+fn mnemosyne_waits_for_search_without_mock_facts() {
     let out = render(MemorySubTab::Mnemosyne, MemoryLive::default());
-    maybe_dump("memory/mnemosyne", &out);
 
-    for expected in [
-        "Workspace 847 files",
-        "Sessions 147 sessions",
-        "Mnemosyne 12,847 facts",
-        "/  hybrid search · BM25 + vector embeddings",
-        "● ollama embedded",
-        "RECENT FACTS · 12,847 indexed",
-        "0.94 · session 2847 · 8m ago",
-        "Track C blockers ship in Phase 0",
-        "Mac Studio M5 Ultra",
-    ] {
-        assert!(out.contains(expected), "missing {expected:?}:\n{out}");
-    }
+    assert!(out.contains("RECENT FACTS · awaiting"), "awaiting search title missing:
+{out}");
+    assert!(out.contains("Waiting for /v1/memory/search"), "waiting search state missing:
+{out}");
+    assert_no_prototype_memory(&out);
 }
 
-// ── Mnemosyne / search ───────────────────────────────────────────────────────
+#[test]
+fn mnemosyne_empty_response_is_empty_not_mocked() {
+    let hits: Vec<MemorySearchHit> = Vec::new();
+    let live = MemoryLive { files: None, sessions: None, search: Some(&hits) };
+    let out = render(MemorySubTab::Mnemosyne, live);
+
+    assert!(out.contains("Mnemosyne 0 facts"), "live zero hit count missing:
+{out}");
+    assert!(out.contains("RECENT FACTS · 0"), "zero facts title missing:
+{out}");
+    assert!(out.contains("No memory hits returned by /v1/memory/search"), "empty hits state missing:
+{out}");
+    assert_no_prototype_memory(&out);
+}
 
 #[test]
 fn mnemosyne_renders_live_hits_not_const() {
@@ -192,25 +185,12 @@ fn mnemosyne_renders_live_hits_not_const() {
         importance: Some(0.8),
         path: None,
     }];
-    let live = MemoryLive {
-        files: None,
-        sessions: None,
-        search: Some(&hits),
-    };
+    let live = MemoryLive { files: None, sessions: None, search: Some(&hits) };
     let out = render(MemorySubTab::Mnemosyne, live);
 
-    assert!(
-        out.contains("ZZSEARCHMARKER"),
-        "live search hit content must render"
-    );
-}
-
-#[test]
-fn mnemosyne_falls_back_to_const_when_empty() {
-    let out = render(MemorySubTab::Mnemosyne, MemoryLive::default());
-    // SEARCH_RESULTS const carries this distinctive token.
-    assert!(
-        out.contains("Mac Studio") || out.contains("inference"),
-        "const SEARCH_RESULTS must render when live absent"
-    );
+    assert!(out.contains("ZZSEARCHMARKER"), "live search hit content must render:
+{out}");
+    assert!(out.contains("0.91 · semantic · live"), "live search metadata must render:
+{out}");
+    assert_no_prototype_memory(&out);
 }

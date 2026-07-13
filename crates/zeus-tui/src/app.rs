@@ -6,7 +6,8 @@
 
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-    MouseEventKind,
+    KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -19,6 +20,30 @@ use std::io;
 // Bring sibling module names into scope so inline `prod::`, `screens::`, `theme::`
 // paths resolve from within this library module (they were crate-root in the bin).
 use crate::{prod, screens, theme};
+
+fn expand_tilde_for_fs(path: &str) -> std::path::PathBuf {
+    let Some(rest) = path.strip_prefix('~') else {
+        return std::path::PathBuf::from(path);
+    };
+
+    if !rest.is_empty() && !rest.starts_with('/') {
+        return std::path::PathBuf::from(path);
+    }
+
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(dirs::home_dir);
+
+    let Some(home) = home else {
+        return std::path::PathBuf::from(path);
+    };
+
+    if rest.is_empty() {
+        home
+    } else {
+        home.join(rest.trim_start_matches('/'))
+    }
+}
 
 use crate::screens::complete::SummaryRow;
 use crate::screens::{
@@ -262,15 +287,14 @@ pub struct App {
     /// placeholder when a key is absent.
     pub prod_config_rows: Option<serde_json::Value>,
     /// Live workspace memory files (`GET /v1/memory/files`). `None` until the
-    /// memory poll-worker lands the first fetch; the Memory→Workspace sub-tab
-    /// falls back to the const file tree while absent.
+    /// memory poll-worker lands the first fetch; Memory renders an honest waiting
+    /// state while absent.
     pub prod_memory_files: Option<Vec<crate::api::MemoryFileEntry>>,
     /// Live session summaries (`GET /v1/sessions`). `None` until first fetch;
-    /// the Memory→Sessions sub-tab falls back to const rows while absent.
+    /// Memory renders an honest waiting state while absent.
     pub prod_sessions: Option<Vec<crate::api::SessionSummary>>,
     /// Live Mnemosyne search hits (`POST /v1/memory/search`). `None` until the
-    /// initial query lands; the Memory→Mnemosyne sub-tab falls back to const
-    /// results while absent.
+    /// initial query lands; Memory renders an honest waiting state while absent.
     pub prod_memory_search: Option<Vec<crate::api::MemorySearchHit>>,
     /// Live installed skills (`GET /v1/skills`). `None` until first fetch; the
     /// Advanced→Skills subview falls back to the const list while absent.
@@ -319,6 +343,7 @@ pub struct App {
     prod_pantheon_selected: usize, // Pantheon tab — selected mission index
     prod_wallet_view: prod::WalletView, // Wallet tab — active sub-view (1–6)
     prod_wallet_titan_sel: usize,  // Wallet tab — selected fleet titan index
+    prod_memory_subtab: prod::MemorySubTab, // Memory tab — active live endpoint sub-tab (1–3)
     prod_tools_filter: String,
     prod_tools_scroll: usize,
     // --- Gateway integration (Phase 2): live connection + identity ---
@@ -461,6 +486,7 @@ impl App {
             prod_pantheon_selected: 0,
             prod_wallet_view: prod::WalletView::Balance,
             prod_wallet_titan_sel: 0,
+            prod_memory_subtab: prod::MemorySubTab::Workspace,
             // Gateway integration defaults — overridden by run(config).
             gateway_host: "localhost".to_string(),
             gateway_port: 8080,
@@ -870,6 +896,22 @@ impl App {
                     self.prod_chat_input.push('/');
                 }
             }
+            // Memory tab — endpoint sub-tab switch (1–3) + h/l cycle.
+            KeyCode::Char(c)
+                if PRIMARY_TABS.get(self.prod_active_tab).map(|t| t.id) == Some("memory") =>
+            {
+                match c {
+                    '1'..='3' => {
+                        let n = (c as u8 - b'0') as usize;
+                        if let Some(tab) = prod::MemorySubTab::from_key(n) {
+                            self.prod_memory_subtab = tab;
+                        }
+                    }
+                    'h' => self.prod_memory_subtab = self.prod_memory_subtab.prev(),
+                    'l' => self.prod_memory_subtab = self.prod_memory_subtab.next(),
+                    _ => {}
+                }
+            }
             // Wallet tab — sub-view switch (1–6) + titan nav (j/k).
             KeyCode::Char(c)
                 if PRIMARY_TABS.get(self.prod_active_tab).map(|t| t.id) == Some("wallet") =>
@@ -1101,10 +1143,34 @@ impl App {
             agent.name = Some(name);
         }
         agent.persona = Some(persona);
+        let agent_name = agent
+            .name
+            .as_deref()
+            .or(cfg.name.as_deref())
+            .unwrap_or("zeus-agent")
+            .to_string();
 
         // ── workspace / sessions paths ──
+        // Preserve the user-facing literals in config.toml (#291 convention),
+        // but expand `~` for filesystem effects. `PathBuf::from("~/...")`
+        // treats tilde as an ordinary path component and would write under
+        // `./~/.zeus/...` relative to the TUI cwd.
         cfg.workspace = std::path::PathBuf::from(&self.workspace_path);
         cfg.sessions = std::path::PathBuf::from(&self.sessions_path);
+        let workspace_fs_path = expand_tilde_for_fs(&self.workspace_path);
+        let sessions_fs_path = expand_tilde_for_fs(&self.sessions_path);
+        std::fs::create_dir_all(&workspace_fs_path)
+            .map_err(|e| format!("create workspace directory: {e}"))?;
+        std::fs::create_dir_all(&sessions_fs_path)
+            .map_err(|e| format!("create sessions directory: {e}"))?;
+        let soul_body = self.agent_screen.persona_soul_body();
+        zeus_core::write_onboarding_soul(
+            &workspace_fs_path.join("SOUL.md"),
+            &agent_name,
+            &soul_body,
+            false,
+        )
+        .map_err(|e| format!("write SOUL.md: {e}"))?;
 
         // ── gateway host/port ──
         // #290: `get_or_insert_with` so a FRESH onboarding (no `[gateway]`
@@ -1913,6 +1979,23 @@ impl App {
             self.advance_step();
             return;
         }
+
+        // #348: when the terminal can report Shift+Enter distinctly (kitty
+        // keyboard protocol / CSI-u), chat uses it for a literal newline while
+        // plain Enter keeps the existing send behavior. Terminals that cannot
+        // distinguish Shift+Enter never set this modifier on Enter, so they
+        // gracefully degrade to plain Enter-to-send.
+        if self.onboarding_complete
+            && self.prod_active_tab == 0
+            && self.prod_active_adv.is_none()
+            && self.prod_adv_detail.is_none()
+            && key == KeyCode::Enter
+            && mods.contains(KeyModifiers::SHIFT)
+        {
+            self.prod_chat_input.push('\n');
+            return;
+        }
+
         self.handle_key(key);
     }
 
@@ -2113,22 +2196,12 @@ impl App {
                         self.advance_step();
                     }
                     Some(Step::ChannelConfig) => {
-                        // On the test button, Enter fires the test; on the
-                        // allow_bots selector, Enter cycles the policy;
-                        // otherwise Enter advances (server_id etc. are
-                        // arrow-navigable).
-                        if self.chanconfig_screen.focused_field.starts_with("test:") {
-                            self.chanconfig_screen.trigger_test();
-                        } else if let Some(ch_id) = self
-                            .chanconfig_screen
-                            .focused_field
-                            .strip_prefix("allowbots:")
-                            .map(str::to_string)
-                        {
-                            self.chanconfig_screen.cycle_bot_policy(&ch_id);
-                        } else {
-                            self.advance_step();
-                        }
+                        // #345: Enter is ALWAYS navigation on ChannelConfig.
+                        // Space owns toggle/cycle/test actions (see the
+                        // Char(' ') arm). This fixes the promised-key-vs-handler
+                        // mismatch where the hint said "⏎ cycle" but Enter was
+                        // intercepted by footer NEXT and advanced the page.
+                        self.advance_step();
                     }
                     Some(Step::Gateway) => {
                         self.gateway_screen.toggle_service();
@@ -2225,6 +2298,9 @@ impl App {
                 Some(Step::Channels) => {
                     self.channels_screen.move_up();
                 }
+                Some(Step::Instance) => {
+                    self.instance_screen.move_up();
+                }
                 Some(Step::ChannelConfig) => {
                     self.chanconfig_screen.focus_prev();
                 }
@@ -2280,6 +2356,9 @@ impl App {
                 }
                 Some(Step::Channels) => {
                     self.channels_screen.move_down();
+                }
+                Some(Step::Instance) => {
+                    self.instance_screen.move_down();
                 }
                 Some(Step::ChannelConfig) => {
                     self.chanconfig_screen.focus_next();
@@ -2356,6 +2435,22 @@ impl App {
                 } else if self.current_step == Step::Auth as usize {
                     self.auth_api_key.push(c);
                     self.auth_test_status = None;
+                } else if self.current_step == Step::ChannelConfig as usize && c == ' ' {
+                    // #345: Space cycles/toggles every toggle-type field on
+                    // ChannelConfig. allowbots: → cycle bot policy;
+                    // test: → trigger test; text fields → insert space.
+                    if self.chanconfig_screen.focused_field.starts_with("test:") {
+                        self.chanconfig_screen.trigger_test();
+                    } else if let Some(ch_id) = self
+                        .chanconfig_screen
+                        .focused_field
+                        .strip_prefix("allowbots:")
+                        .map(str::to_string)
+                    {
+                        self.chanconfig_screen.cycle_bot_policy(&ch_id);
+                    } else {
+                        self.chanconfig_screen.input_char(' ');
+                    }
                 } else if self.current_step == Step::ChannelConfig as usize {
                     self.chanconfig_screen.input_char(c);
                 } else if self.current_step == Step::Orchestration as usize {
@@ -2879,17 +2974,15 @@ fn frame_prod(f: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect) {
             prod::WalletTab::with_live(app.prod_wallet_view, app.prod_wallet_titan_sel, live);
         f.render_widget(wallet, chrome[2]);
     } else if tab_id == Some("memory") {
-        // Memory tab — overlay live gateway data (workspace files, sessions,
-        // Mnemosyne hits) onto the JSX-parity schema. Each `MemoryLive` field
-        // is `None` until its poll-worker (lib.rs run()) lands the first fetch;
-        // the matching sub-tab falls back to const placeholders while absent.
-        use prod::memory_tab::{MemoryLive, MemorySubTab, render_memory_tab};
+        // Memory tab — render only live gateway data (workspace files,
+        // sessions, Mnemosyne hits) or honest waiting/empty states.
+        use prod::memory_tab::{MemoryLive, render_memory_tab};
         let live = MemoryLive {
             files: app.prod_memory_files.as_deref(),
             sessions: app.prod_sessions.as_deref(),
             search: app.prod_memory_search.as_deref(),
         };
-        render_memory_tab(chrome[2], f.buffer_mut(), MemorySubTab::Workspace, 0, live);
+        render_memory_tab(chrome[2], f.buffer_mut(), app.prod_memory_subtab, 0, live);
     } else if tab_id == Some("settings") {
         // Settings tab — overlay live `GET /v1/config` values onto the static
         // section schema. `prod_config_rows` is `None` until the config
@@ -3063,12 +3156,20 @@ pub fn run_loop(app: std::sync::Arc<std::sync::Mutex<App>>) -> io::Result<()> {
     // Setup terminal
     crossterm::terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
+    let keyboard_enhancement_enabled =
+        crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
     crossterm::execute!(
         stdout,
         crossterm::terminal::EnterAlternateScreen,
         EnableMouseCapture,
         crossterm::cursor::Hide
     )?;
+    if keyboard_enhancement_enabled {
+        crossterm::execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )?;
+    }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -3123,6 +3224,9 @@ pub fn run_loop(app: std::sync::Arc<std::sync::Mutex<App>>) -> io::Result<()> {
     }
 
     // Restore terminal
+    if keyboard_enhancement_enabled {
+        crossterm::execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
+    }
     crossterm::execute!(
         terminal.backend_mut(),
         DisableMouseCapture,
@@ -3154,6 +3258,7 @@ mod persist_tests {
     struct ZeusHomeGuard {
         _lock: std::sync::MutexGuard<'static, ()>,
         previous: Option<std::ffi::OsString>,
+        previous_home: Option<Option<std::ffi::OsString>>,
     }
 
     impl Drop for ZeusHomeGuard {
@@ -3163,6 +3268,12 @@ mod persist_tests {
                 match self.previous.take() {
                     Some(prev) => std::env::set_var("ZEUS_HOME", prev),
                     None => std::env::remove_var("ZEUS_HOME"),
+                }
+                if let Some(previous_home) = self.previous_home.take() {
+                    match previous_home {
+                        Some(prev) => std::env::set_var("HOME", prev),
+                        None => std::env::remove_var("HOME"),
+                    }
                 }
             }
         }
@@ -3178,6 +3289,172 @@ mod persist_tests {
         ZeusHomeGuard {
             _lock: lock,
             previous,
+            previous_home: None,
+        }
+    }
+
+    fn zeus_home_and_home_guard(zeus_home: &std::path::Path, home: &std::path::Path) -> ZeusHomeGuard {
+        let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var_os("ZEUS_HOME");
+        let previous_home = std::env::var_os("HOME");
+        // SAFETY: serialized by ENV_LOCK for the guard's whole lifetime.
+        unsafe {
+            std::env::set_var("ZEUS_HOME", zeus_home);
+            std::env::set_var("HOME", home);
+        }
+        ZeusHomeGuard {
+            _lock: lock,
+            previous,
+            previous_home: Some(previous_home),
+        }
+    }
+
+    #[test]
+    fn tui_completion_writes_selected_persona_soul_and_preserves_custom() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _env = zeus_home_guard(tmp.path());
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let case_root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("tui-soul-test-{}-{unique}", std::process::id()));
+        let workspace = case_root.join("workspace");
+        let sessions = case_root.join("sessions");
+        let _ = std::fs::remove_dir_all(&case_root);
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            format!(
+                "model = \"anthropic/claude-opus-4-8\"\nworkspace = \"{}\"\nsessions = \"{}\"\n",
+                workspace.display(),
+                sessions.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("SOUL.md"),
+            "# SOUL.md — zeus-agent\n\n_an autonomous Zeus agent._\n",
+        )
+        .unwrap();
+
+        let mut app = App::new();
+        app.workspace_path = workspace.display().to_string();
+        app.sessions_path = sessions.display().to_string();
+        app.agent_screen.name = "zeus-agent".to_string();
+        app.agent_name_edited = true;
+        app.agent_screen.select_persona_name("Engineer");
+        app.collect_and_persist().expect("persist should succeed");
+
+        let healed = std::fs::read_to_string(workspace.join("SOUL.md")).unwrap();
+        assert!(
+            healed.contains("# SOUL.md — zeus-agent"),
+            "TUI completion must render SOUL.md through the shared writer; got:\n{healed}"
+        );
+        assert!(
+            healed.contains("Engineer"),
+            "selected persona body must appear in SOUL.md; got:\n{healed}"
+        );
+        assert!(
+            healed.contains("precise, technical, terse"),
+            "selected persona tone must appear in SOUL.md; got:\n{healed}"
+        );
+
+        std::fs::write(workspace.join("SOUL.md"), "# SOUL.md — Custom\n\nDo not overwrite me.\n")
+            .unwrap();
+        app.agent_screen.select_persona_name("Coordinator");
+        app.collect_and_persist().expect("persist should succeed");
+        let preserved = std::fs::read_to_string(workspace.join("SOUL.md")).unwrap();
+        assert!(
+            preserved.contains("Do not overwrite me."),
+            "custom SOUL.md must be preserved by force=false TUI completion; got:\n{preserved}"
+        );
+        assert!(
+            !preserved.contains("Coordinator —"),
+            "custom SOUL.md must not be replaced by the newly selected persona; got:\n{preserved}"
+        );
+        let _ = std::fs::remove_dir_all(&case_root);
+    }
+
+    #[test]
+    fn tui_completion_expands_tilde_paths_for_filesystem_but_persists_literals() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zeus_home = tmp.path().join("zeus-home");
+        std::fs::create_dir_all(&zeus_home).unwrap();
+
+        let unique = format!(
+            "tui-tilde-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let user_home = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(&unique)
+            .join("mock-home");
+        std::fs::create_dir_all(&user_home).unwrap();
+        let _env = zeus_home_and_home_guard(&zeus_home, &user_home);
+
+        let workspace_literal = format!("~/{unique}/workspace");
+        let sessions_literal = format!("~/{unique}/sessions");
+        std::fs::write(
+            zeus_home.join("config.toml"),
+            format!(
+                "model = \"anthropic/claude-opus-4-8\"\nworkspace = \"{workspace_literal}\"\nsessions = \"{sessions_literal}\"\n"
+            ),
+        )
+        .unwrap();
+
+        let literal_cwd_debris = std::env::current_dir().unwrap().join("~").join(&unique);
+        let _ = std::fs::remove_dir_all(&literal_cwd_debris);
+
+        let mut app = App::new();
+        app.workspace_path = workspace_literal.clone();
+        app.sessions_path = sessions_literal.clone();
+        app.agent_screen.name = "zeus-agent".to_string();
+        app.agent_name_edited = true;
+        app.agent_screen.select_persona_name("Engineer");
+
+        let cfg = app.collect_and_persist().expect("persist should succeed");
+
+        assert_eq!(cfg.workspace, std::path::PathBuf::from(&workspace_literal));
+        assert_eq!(cfg.sessions, std::path::PathBuf::from(&sessions_literal));
+
+        let expanded_workspace = user_home.join(&unique).join("workspace");
+        let expanded_sessions = user_home.join(&unique).join("sessions");
+        assert!(
+            expanded_sessions.is_dir(),
+            "sessions path must be created under mocked HOME"
+        );
+        let soul = std::fs::read_to_string(expanded_workspace.join("SOUL.md"))
+            .expect("SOUL.md must be written under mocked HOME");
+        assert!(
+            soul.contains("Engineer") && soul.contains("precise, technical, terse"),
+            "selected persona SOUL must be written to expanded workspace; got:\n{soul}"
+        );
+
+        let written = std::fs::read_to_string(zeus_home.join("config.toml")).unwrap();
+        assert!(
+            written.contains(&format!("workspace = \"{workspace_literal}\"")),
+            "config.toml must retain the unexpanded workspace literal; got:\n{written}"
+        );
+        assert!(
+            written.contains(&format!("sessions = \"{sessions_literal}\"")),
+            "config.toml must retain the unexpanded sessions literal; got:\n{written}"
+        );
+
+        if literal_cwd_debris.exists() {
+            let _ = std::fs::remove_dir_all(&literal_cwd_debris);
+            panic!(
+                "collect_and_persist created literal cwd tilde debris at {}",
+                literal_cwd_debris.display()
+            );
         }
     }
 
@@ -4018,6 +4295,50 @@ persona = "Innovator"
     }
 
     #[test]
+    fn chat_shift_enter_inserts_newline_and_plain_enter_sends() {
+        let mut app = App::new();
+        app.onboarding_complete = true;
+        app.prod_active_tab = 0;
+        app.prod_active_adv = None;
+        app.prod_adv_detail = None;
+
+        for c in "hello".chars() {
+            app.handle_key_mods(KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        app.handle_key_mods(KeyCode::Enter, KeyModifiers::SHIFT);
+        for c in "world".chars() {
+            app.handle_key_mods(KeyCode::Char(c), KeyModifiers::NONE);
+        }
+
+        assert_eq!(app.prod_chat_input, "hello\nworld");
+        assert!(app.prod_chat_messages.is_empty());
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        app.chat_tx = Some(tx);
+        app.handle_key_mods(KeyCode::Enter, KeyModifiers::NONE);
+
+        assert!(app.prod_chat_input.is_empty());
+        assert_eq!(app.prod_chat_messages.len(), 1);
+        assert_eq!(app.prod_chat_messages[0].role, Role::User);
+        assert_eq!(app.prod_chat_messages[0].text, "hello\nworld");
+        assert_eq!(rx.try_recv().unwrap(), "hello\nworld");
+    }
+
+    #[test]
+    fn shift_enter_only_affects_focused_chat_input() {
+        let mut app = App::new();
+        app.onboarding_complete = true;
+        app.prod_active_tab = 1;
+        app.prod_active_adv = None;
+        app.prod_adv_detail = None;
+        app.prod_chat_input = "draft".into();
+
+        app.handle_key_mods(KeyCode::Enter, KeyModifiers::SHIFT);
+
+        assert_eq!(app.prod_chat_input, "draft");
+    }
+
+    #[test]
     fn chat_scroll_page_keys_and_escape_restore_bottom() {
         let mut app = App::new();
         app.onboarding_complete = true;
@@ -4676,4 +4997,32 @@ onboarding_complete = false
             );
         }
     }
+
+    #[test]
+    fn memory_prod_keys_switch_live_endpoint_subtabs() {
+        let mut app = App::new();
+        app.onboarding_complete = true;
+        app.prod_active_tab = PRIMARY_TABS
+            .iter()
+            .position(|tab| tab.id == "memory")
+            .expect("memory tab exists");
+
+        assert_eq!(app.prod_memory_subtab, prod::MemorySubTab::Workspace);
+
+        app.handle_key_prod(KeyCode::Char('2'));
+        assert_eq!(app.prod_memory_subtab, prod::MemorySubTab::Sessions);
+
+        app.handle_key_prod(KeyCode::Char('3'));
+        assert_eq!(app.prod_memory_subtab, prod::MemorySubTab::Mnemosyne);
+
+        app.handle_key_prod(KeyCode::Char('1'));
+        assert_eq!(app.prod_memory_subtab, prod::MemorySubTab::Workspace);
+
+        app.handle_key_prod(KeyCode::Char('l'));
+        assert_eq!(app.prod_memory_subtab, prod::MemorySubTab::Sessions);
+
+        app.handle_key_prod(KeyCode::Char('h'));
+        assert_eq!(app.prod_memory_subtab, prod::MemorySubTab::Workspace);
+    }
+
 }

@@ -18,6 +18,16 @@ pub async fn economy_stake(agent_id: &str, amount: u64, purpose: &str) -> Result
     post_json("/v1/economy/stake", &serde_json::json!({ "agent_id": agent_id, "amount": amount, "purpose": purpose })).await
 }
 
+pub async fn economy_unstake(agent_id: &str, stake_id: &str) -> Result<serde_json::Value, String> {
+    post_json("/v1/economy/unstake", &serde_json::json!({ "agent_id": agent_id, "stake_id": stake_id })).await
+}
+
+pub async fn economy_transfer(from: &str, to: &str, amount: u64, note: Option<&str>) -> Result<serde_json::Value, String> {
+    post_json("/v1/economy/transfer", &serde_json::json!({
+        "from": from, "to": to, "amount": amount, "note": note,
+    })).await
+}
+
 pub async fn fetch_wallets() -> Result<WalletsResponse, String> {
     fetch_json("/v1/economy/wallets").await
 }

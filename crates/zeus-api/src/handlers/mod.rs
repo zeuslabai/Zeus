@@ -54,6 +54,8 @@ pub mod studio_handlers;
 pub use studio_handlers::*;
 pub mod economy_handlers;
 pub use economy_handlers::*;
+pub mod onchain_wallet;
+pub use onchain_wallet::*;
 pub mod studio_store;
 pub mod task_store;
 pub mod totp_store;

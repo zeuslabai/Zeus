@@ -1,14 +1,14 @@
 //! Ed25519 keypair management — generation, signing, verification, persistence
 
 use aes_gcm::{
-    Aes256Gcm, Nonce,
     aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce,
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use bs58;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use rand::RngCore;
 use rand::rngs::OsRng;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -248,6 +248,22 @@ impl WalletKeypair {
     /// specifically Solana address display, airdrop requests, or x402 headers.
     pub fn address_base58(&self) -> String {
         self.public_key_base58()
+    }
+
+    /// Export the 64-byte Solana keypair encoding (`secret || public`).
+    ///
+    /// This is intentionally narrower than a generic secret-key accessor: the
+    /// only supported use is transient Solana transaction construction in
+    /// `zeus-solana`. Callers should keep the returned bytes in memory only for
+    /// signing and zeroize their copy once the transaction is built.
+    pub fn solana_keypair_bytes(&self) -> [u8; 64] {
+        let mut secret = self.signing_key.to_bytes();
+        let public = self.public_key_bytes();
+        let mut bytes = [0u8; 64];
+        bytes[..32].copy_from_slice(&secret);
+        bytes[32..].copy_from_slice(&public);
+        secret.zeroize();
+        bytes
     }
 
     /// SHA-256 hash of a message (utility for signing structured data)
@@ -499,6 +515,22 @@ mod tests {
 
         // Consistent across calls
         assert_eq!(kp.public_key_base58(), b58);
+    }
+
+    #[test]
+    fn test_solana_keypair_bytes_export_secret_then_public() {
+        let tmp = TempDir::new().unwrap();
+        let kp = WalletKeypair::generate(tmp.path().join("w"), "test", "devnet").unwrap();
+
+        let bytes = kp.solana_keypair_bytes();
+        assert_eq!(&bytes[32..], kp.public_key_bytes().as_slice());
+
+        let secret: [u8; 32] = bytes[..32].try_into().unwrap();
+        let signing_key = SigningKey::from_bytes(&secret);
+        assert_eq!(
+            signing_key.verifying_key().to_bytes(),
+            kp.public_key_bytes()
+        );
     }
 
     #[test]

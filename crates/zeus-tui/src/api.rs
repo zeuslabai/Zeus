@@ -836,6 +836,44 @@ impl ApiClient {
         Ok(resp.transactions)
     }
 
+    /// Transfer credits between agents (`POST /v1/economy/transfer`). #190 P2.
+    /// Mirrors the ZeusWeb `economy_transfer` wrapper. The gateway's
+    /// `TransferRequest` requires `from`, `to`, `amount` (u64); `note` is
+    /// optional. Returns the new balance on success.
+    pub async fn economy_transfer(
+        &self,
+        from: &str,
+        to: &str,
+        amount: u64,
+        note: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        #[derive(Serialize)]
+        struct Req<'a> {
+            from: &'a str,
+            to: &'a str,
+            amount: u64,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            note: Option<&'a str>,
+        }
+        self.post("/v1/economy/transfer", &Req { from, to, amount, note }).await
+    }
+
+    /// Unstake tokens (`POST /v1/economy/unstake`). #190 P2.
+    /// Mirrors the ZeusWeb `economy_unstake` wrapper. The gateway's
+    /// `UnstakeRequest` requires `agent_id` and `stake_id`.
+    pub async fn economy_unstake(
+        &self,
+        agent_id: &str,
+        stake_id: &str,
+    ) -> Result<serde_json::Value, String> {
+        #[derive(Serialize)]
+        struct Req<'a> {
+            agent_id: &'a str,
+            stake_id: &'a str,
+        }
+        self.post("/v1/economy/unstake", &Req { agent_id, stake_id }).await
+    }
+
     /// Installed skills (`/v1/skills`) — name/description/enabled per entry (#185).
     pub async fn skills(&self) -> Result<Vec<SkillResponse>, String> {
         #[derive(Deserialize)]

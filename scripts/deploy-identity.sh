@@ -2,9 +2,8 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 # deploy-identity.sh — Fleet Agent Identity Stamper
 #
-# Writes identity docs (AGENTS.md, IDENTITY.md, HEARTBEAT.md, USER.md, TOOLS.md)
-# and patches CLAUDE.md to every agent's workspace. SOUL.md persona rendering is
-# owned by onboarding; re-run onboarding to intentionally re-render a persona SOUL.
+# Writes SOUL.md (personality), AGENTS.md (directives + @everyone rules),
+# and patches CLAUDE.md to every agent's workspace.
 #
 # Run standalone:  ./scripts/deploy-identity.sh --agent zeus112 --host 192.168.1.112
 # Run via deploy:  Called automatically by deploy-macos.sh / deploy-freebsd.sh
@@ -29,6 +28,7 @@ AGENT_HOST=""
 AGENT_USER="mike"
 REMOTE=false
 FORCE=false
+NO_HOST_FALLBACK=false
 ZEUS_HOME_OVERRIDE=""
 PRESERVE_EXISTING_SOUL=false
 AGENT_COORDINATOR=""
@@ -41,8 +41,9 @@ for arg in "$@"; do
         --home=*)   ZEUS_HOME_OVERRIDE="${arg#*=}" ;;
         --remote)   REMOTE=true ;;
         --force)    FORCE=true ;;
+        --no-host-fallback) NO_HOST_FALLBACK=true ;;
         --help|-h)
-            echo "Usage: deploy-identity.sh [--agent NAME] [--host IP] [--user USER] [--remote] [--force]"
+            echo "Usage: deploy-identity.sh [--agent NAME] [--host IP] [--user USER] [--remote] [--force] [--no-host-fallback]"
             echo ""
             echo "Options:"
             echo "  --agent NAME    Agent codename (zeus112, zeus100, zeus106, zeus107, zeus-spark, zeus-freebsd, etc.)"
@@ -51,6 +52,7 @@ for arg in "$@"; do
             echo "  --home PATH     Override ZEUS_HOME (default: ~/.zeus)"
             echo "  --remote        SSH into host and stamp remotely"
             echo "  --force         Overwrite even if files already exist"
+            echo "  --no-host-fallback  Skip loudly instead of deriving identity from hostname"
             echo ""
             echo "Agent names and their profiles:"
             echo "  zeus112   — The Polyglot (.112, MacBook Pro, Full Stack)"
@@ -83,39 +85,63 @@ while [ $i -lt ${#args[@]} ]; do
         --home)    i=$((i+1)); ZEUS_HOME_OVERRIDE="${args[$i]}" ;;
         --remote)  REMOTE=true ;;
         --force)   FORCE=true ;;
+        --no-host-fallback) NO_HOST_FALLBACK=true ;;
     esac
     i=$((i+1))
 done
 
 # ── Auto-detect local agent if not specified ──────────────────────────────────
-# #216: shared fallback — config.toml [agent].name wins; otherwise FAIL LOUD
-# instead of stamping the generic main-fleet identity onto an unknown host.
-resolve_agent_from_config_or_fail() {
-    local hn="$1"
-    local cfg_name
-    cfg_name="$(awk '
+# #346: config.toml [agent].name wins; otherwise skip loudly. Unknown
+# hostnames must never become fallback agent names during install/onboard ordering.
+read_agent_config_value() {
+    local key="$1" config="${2:-${ZEUS_HOME_OVERRIDE:-$HOME/.zeus}/config.toml}"
+    [ -f "$config" ] || return 0
+    awk -v key="$key" '
         /^\[agent\]/ { in_section=1; next }
         /^\[/ { in_section=0 }
-        in_section && $1 == "name" {
+        in_section && $1 == key {
             line=$0
             sub(/^[^=]*=[[:space:]]*/, "", line)
             gsub(/^"|"$/, "", line)
             print line
             exit
-        }' "${ZEUS_HOME_OVERRIDE:-$HOME/.zeus}/config.toml" 2>/dev/null || true)"
+        }' "$config"
+}
+
+resolve_agent_from_config_or_skip() {
+    local hn="$1"
+    local cfg_name cfg_persona config_path
+    config_path="${ZEUS_HOME_OVERRIDE:-$HOME/.zeus}/config.toml"
+    cfg_name="$(read_agent_config_value name "$config_path" 2>/dev/null || true)"
+    cfg_persona="$(read_agent_config_value persona "$config_path" 2>/dev/null || true)"
+
     if [ -n "$cfg_name" ]; then
         AGENT_NAME="$cfg_name"
+    elif [ -n "$cfg_persona" ]; then
+        echo "SKIP: $config_path has [agent].persona='$cfg_persona' but no [agent].name; not deriving identity from hostname '$hn'." >&2
+        echo "Set [agent].name or pass --agent explicitly before stamping workspace identity." >&2
+        exit 0
     else
-        echo "ERROR: Unknown hostname '$hn' and no [agent].name in config.toml." >&2
-        echo "Refusing to stamp a generic fleet identity onto an unknown host." >&2
-        echo "Pass --agent NAME explicitly, or set [agent].name in ${ZEUS_HOME_OVERRIDE:-$HOME/.zeus}/config.toml." >&2
-        exit 1
+        echo "SKIP: $config_path has no [agent].name or [agent].persona; not deriving identity from hostname '$hn'." >&2
+        echo "Run onboarding or pass --agent explicitly before stamping workspace identity." >&2
+        exit 0
     fi
 }
 
 if [ -z "$AGENT_NAME" ]; then
-    # Try to detect from hostname
+    cfg_name="$(read_agent_config_value name 2>/dev/null || true)"
+    if [ -n "$cfg_name" ]; then
+        AGENT_NAME="$cfg_name"
+    fi
+fi
+
+if [ -z "$AGENT_NAME" ]; then
+    # Try to detect from hostname only when explicitly allowed. Install/onboard
+    # repros pass --no-host-fallback so sandbox identity cannot inherit the host.
     HN=$(hostname -s 2>/dev/null || hostname)
+    if $NO_HOST_FALLBACK; then
+        resolve_agent_from_config_or_skip "$HN"
+    fi
     case "$HN" in
         # ── Real hostnames (canonical) ───────────────────────────────
         mikes-Mac-Studio|*Mac-Studio*) AGENT_NAME="zeus106" ;;
@@ -127,7 +153,7 @@ if [ -z "$AGENT_NAME" ]; then
         oracles1|oracles1.*)           AGENT_NAME="oraclescoord" ;;
         oracles2|oracles2.*)           AGENT_NAME="oraclesbackend" ;;
         oracles3|oracles3.*)           AGENT_NAME="oraclesfront" ;;
-        oracles*)                      resolve_agent_from_config_or_fail "$HN" ;;  # unknown oracles host — never legacy globs
+        oracles*)                      resolve_agent_from_config_or_skip "$HN" ;;  # unknown oracles host — never legacy globs
         # ── Legacy IP-suffix hostnames (back-compat) ─────────────────
         *112*) AGENT_NAME="zeus112" ;;
         *100*) AGENT_NAME="zeus100" ;;
@@ -137,7 +163,7 @@ if [ -z "$AGENT_NAME" ]; then
         *226*) AGENT_NAME="fbsd2" ;;
         *225*) AGENT_NAME="fbsd3" ;;
         *102*) AGENT_NAME="zeusmarketing" ;;
-        *)     resolve_agent_from_config_or_fail "$HN" ;;
+        *)     resolve_agent_from_config_or_skip "$HN" ;;
     esac
     info "Auto-detected agent: $AGENT_NAME (from hostname: $HN)"
 fi
@@ -146,19 +172,7 @@ fi
 # Read a key from the [agent] section of config.toml. Used so non-fleet deploys
 # get THEIR configured identity instead of hardcoded fleet values.
 read_agent_config_key() {
-    local key="$1" config="${2:-${ZEUS_HOME_OVERRIDE:-$HOME/.zeus}/config.toml}"
-    [ -f "$config" ] || return 0
-    # Extract value of `key = "value"` inside the [agent] section only.
-    awk -v key="$key" '
-        /^\[agent\]/ { in_section=1; next }
-        /^\[/ { in_section=0 }
-        in_section && $1 == key {
-            line=$0
-            sub(/^[^=]*=[[:space:]]*/, "", line)
-            gsub(/^"|"$/, "", line)
-            print line
-            exit
-        }' "$config"
+    read_agent_config_value "$@"
 }
 
 # #296: Resolve a configured persona name to its on-disk soul (the markdown body
@@ -499,7 +513,9 @@ SOUL_BODY_EOF
             if [ -n "$persona_soul" ]; then
                 AGENT_SOUL="$persona_soul"
             elif [ -n "$cfg_persona" ]; then
-                AGENT_SOUL="You are ${AGENT_DISPLAY} — ${cfg_persona}. Your full persona lives in config.toml ([agent].persona) and your existing SOUL.md. You are helpful, precise, and proactive."
+                echo "ERROR: [agent].persona '$cfg_persona' is configured, but no matching personality markdown was found in ${ZEUS_HOME_OVERRIDE:-$HOME/.zeus}/personalities." >&2
+                echo "Seed the persona library, correct [agent].persona, or pass a known --agent before stamping workspace identity." >&2
+                exit 1
             else
                 AGENT_SOUL="You are ${AGENT_DISPLAY}, an autonomous Zeus agent. You are helpful, precise, and proactive."
             fi
@@ -561,6 +577,10 @@ write_identity() {
 
     # Sanitize inputs to prevent heredoc injection
     agent_name="${agent_name//[^a-zA-Z0-9._-]/}"
+    if [ -z "$agent_name" ]; then
+        echo "SKIP: no agent identity resolved; workspace identity not stamped." >&2
+        return 0
+    fi
 
     get_profile "$agent_name"
 
@@ -586,11 +606,38 @@ write_identity() {
     mkdir -p "$zeus_home/logs"
     chmod 0700 "$zeus_home/workspace"
 
-    # ── SOUL.md — persona authority lives in onboarding (#326) ────────────────
-    # deploy-identity is identity-only. Do not write SOUL.md here, even with
-    # --force/--with-identity; onboarding owns stub/sludge healing and custom
-    # preserve semantics. To intentionally re-render SOUL.md, re-run onboarding.
-    skip "SOUL.md untouched — persona rendering is owned by onboarding (#326)"
+    # ── SOUL.md — personality ─────────────────────────────────────────────────
+    local soul_file="$zeus_home/workspace/SOUL.md"
+    # A SOUL.md that is still an install/generated/default stub is a placeholder,
+    # not a real persona — never preserve it. Treat blank/stub/sludge files as
+    # absent so --with-identity can heal bad stamps while preserving custom souls.
+    local soul_is_placeholder=false
+    if [ ! -s "$soul_file" ]; then
+        soul_is_placeholder=true
+    elif grep -qi "Run 'zeus onboard'" "$soul_file" 2>/dev/null; then
+        soul_is_placeholder=true
+    elif grep -qi "an autonomous Zeus agent" "$soul_file" 2>/dev/null; then
+        # Legacy deploy fallback boilerplate — placeholder/sludge, not a persona.
+        soul_is_placeholder=true
+    elif grep -qi "a focused, technically sharp Zeus AI agent" "$soul_file" 2>/dev/null; then
+        # TUI/generated default boilerplate — placeholder/sludge, not a persona.
+        soul_is_placeholder=true
+    fi
+    # #202: a real existing SOUL.md is the configured persona — preserve it even
+    # under --force. Placeholders are healed by the profile/configured AGENT_SOUL.
+    if [ -f "$soul_file" ] && [ "$soul_is_placeholder" != true ] && [ "${PRESERVE_EXISTING_SOUL:-false}" = true ]; then
+        skip "SOUL.md custom persona preserved (#202)"
+    elif [ ! -f "$soul_file" ] || [ "$soul_is_placeholder" = true ] || $FORCE; then
+        backup_before_force "$soul_file"
+        cat > "$soul_file" << SOUL_EOF
+# ${AGENT_DISPLAY} — Soul & Personality
+
+${AGENT_SOUL}
+SOUL_EOF
+        ok "SOUL.md → $soul_file"
+    else
+        skip "SOUL.md already exists (use --force to overwrite)"
+    fi
 
     # ── AGENTS.md — directives + @everyone protocol ───────────────────────────
     local agents_file="$zeus_home/workspace/AGENTS.md"

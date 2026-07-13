@@ -799,7 +799,7 @@ impl ChanConfigScreen {
                 buf.set_string(inner.x + 4, cy, "Bot messages", label_style);
 
                 // Render the three choices inline; highlight the active one.
-                // Focused row shows a hint that ⏎ cycles the value.
+                // Focused row shows a hint that Space cycles the value (#345).
                 let mut spans: Vec<Span> = Vec::new();
                 for (i, p) in BOT_POLICIES.iter().enumerate() {
                     if i > 0 {
@@ -816,7 +816,7 @@ impl ChanConfigScreen {
                 }
                 if is_ab_focused {
                     spans.push(Span::styled(
-                        "  (⏎ cycle)",
+                        "  (Space cycle)",
                         Style::default().fg(theme::FIRE_ORANGE),
                     ));
                 }

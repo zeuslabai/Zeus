@@ -26,9 +26,11 @@ pub mod content_tools;
 pub mod googlechat_tools;
 pub mod homebrew;
 pub mod image_provider;
+pub mod image_tools;
 pub mod instagram_tools;
 pub mod irc_tools;
 pub mod iteration;
+pub mod keychain;
 pub mod line_tools;
 pub mod mail;
 pub mod matrix_tools;
@@ -42,10 +44,7 @@ pub mod nextcloud_tools;
 pub mod nostr_tools;
 pub mod notes;
 pub mod ocr;
-pub mod keychain;
 pub mod ollama;
-pub mod tmux;
-pub mod image_tools;
 pub mod pdf;
 pub mod relay;
 pub mod reminders;
@@ -58,6 +57,7 @@ pub mod system;
 pub mod teams_tools;
 pub mod telegram_tools;
 pub mod tiktok_tools;
+pub mod tmux;
 pub mod twitch_tools;
 pub mod video;
 pub mod voice;
@@ -355,7 +355,45 @@ impl TalosRegistry {
         self.register(Box::new(x_tools::XDeleteTool));
         self.register(Box::new(x_tools::XDeletePostTool));
         self.register(Box::new(x_tools::XBatchDeleteTool));
+        self.register(Box::new(x_tools::XSearchRecentTool));
+        self.register(Box::new(x_tools::XGetMentionsTool));
+        self.register(Box::new(x_tools::XGetTweetTool));
+        self.register(Box::new(x_tools::XGetUserTimelineTool));
+        self.register(Box::new(x_tools::XLikeTool));
+        self.register(Box::new(x_tools::XUnlikeTool));
+        self.register(Box::new(x_tools::XRetweetTool));
+        self.register(Box::new(x_tools::XUnretweetTool));
+        self.register(Box::new(x_tools::XQuoteTool));
+        self.register(Box::new(x_tools::XFollowTool));
+        self.register(Box::new(x_tools::XUnfollowTool));
+        self.register(Box::new(x_tools::XBookmarkTool));
+        self.register(Box::new(x_tools::XUnbookmarkTool));
+        self.register(Box::new(x_tools::XUploadMediaTool));
         self.register(Box::new(x_tools::XMetricsTool));
+        self.register(Box::new(x_tools::XAccountMetricsTool));
+        self.register(Box::new(x_tools::XBlockTool));
+        self.register(Box::new(x_tools::XUnblockTool));
+        self.register(Box::new(x_tools::XMuteTool));
+        self.register(Box::new(x_tools::XUnmuteTool));
+        self.register(Box::new(x_tools::XHideReplyTool));
+        self.register(Box::new(x_tools::XUnhideReplyTool));
+        self.register(Box::new(x_tools::XReportTweetTool));
+        self.register(Box::new(x_tools::XGetListTool));
+        self.register(Box::new(x_tools::XGetOwnedListsTool));
+        self.register(Box::new(x_tools::XGetListMembershipsTool));
+        self.register(Box::new(x_tools::XGetFollowedListsTool));
+        self.register(Box::new(x_tools::XGetListTweetsTool));
+        self.register(Box::new(x_tools::XCreateListTool));
+        self.register(Box::new(x_tools::XUpdateListTool));
+        self.register(Box::new(x_tools::XDeleteListTool));
+        self.register(Box::new(x_tools::XAddListMemberTool));
+        self.register(Box::new(x_tools::XRemoveListMemberTool));
+        self.register(Box::new(x_tools::XFollowListTool));
+        self.register(Box::new(x_tools::XUnfollowListTool));
+        self.register(Box::new(x_tools::XGetDmEventsTool));
+        self.register(Box::new(x_tools::XGetDmConversationEventsTool));
+        self.register(Box::new(x_tools::XSendDmTool));
+        self.register(Box::new(x_tools::XSendDmToUserTool));
 
         // Feishu/Lark tools (cross-platform, Feishu Open API)
         self.register(Box::new(feishu_tools::FeishuSendMessageTool));
@@ -942,8 +980,14 @@ mod tests {
         // Screen record tools are macOS-only
         #[cfg(target_os = "macos")]
         {
-            assert!(tools.contains(&"screen_record_start"), "screen_record_start should be registered");
-            assert!(tools.contains(&"screen_record_stop"), "screen_record_stop should be registered");
+            assert!(
+                tools.contains(&"screen_record_start"),
+                "screen_record_start should be registered"
+            );
+            assert!(
+                tools.contains(&"screen_record_stop"),
+                "screen_record_stop should be registered"
+            );
         }
     }
 }

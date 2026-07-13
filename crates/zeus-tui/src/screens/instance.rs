@@ -78,17 +78,29 @@ impl InstanceScreen {
         self.focused_field = 0;
     }
 
+    pub fn move_up(&mut self) {
+        self.target = InstanceTarget::Default;
+        self.focused_field = 0;
+    }
+
+    pub fn move_down(&mut self) {
+        self.target = InstanceTarget::Named;
+        self.focused_field = 0;
+    }
+
     pub fn selected_path(&self) -> String {
         match self.target {
             InstanceTarget::Default => "~/.zeus".to_string(),
-            InstanceTarget::Named => {
-                let name = self.name.trim();
-                if name.is_empty() {
-                    "~/.zeus/instances/<name>".to_string()
-                } else {
-                    format!("~/.zeus/instances/{name}")
-                }
-            }
+            InstanceTarget::Named => self.named_path_preview(),
+        }
+    }
+
+    fn named_path_preview(&self) -> String {
+        let name = self.name.trim();
+        if name.is_empty() {
+            "~/.zeus/instances/<name>".to_string()
+        } else {
+            format!("~/.zeus/instances/{name}")
         }
     }
 
@@ -152,7 +164,7 @@ impl InstanceScreen {
             1,
             "Named instance",
             "Preview isolated instance home",
-            &self.selected_path(),
+            &self.named_path_preview(),
         );
 
         let name_line = if self.target == InstanceTarget::Named {

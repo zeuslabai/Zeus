@@ -437,8 +437,10 @@ impl WalletTab<'_> {
         }
     }
 
-    /// Send view — prototype SEND TOKENS + x402 pay-flow, disabled honestly until
-    /// zeus-wallet exposes a send endpoint to the TUI.
+    /// Send view — prototype SEND TOKENS + x402 pay-flow. The gateway endpoint
+    /// `POST /v1/economy/transfer` is live (#190 P2) and the TUI API client has
+    /// `economy_transfer()` ready, but this view is still render-only: interactive
+    /// input (recipient/amount fields, SIGN action) needs a follow-up UI pass.
     fn render_send(&self, area: Rect, buf: &mut Buffer) {
         let x = area.x + 2;
         let mut y = area.y;
@@ -481,7 +483,7 @@ impl WalletTab<'_> {
         buf.set_string_clamped(
             x + 3,
             y,
-            "waiting for zeus-wallet send endpoint",
+            "endpoint live — interactive input pending",
             Style::default().fg(theme::DIM),
         );
         y += 2;

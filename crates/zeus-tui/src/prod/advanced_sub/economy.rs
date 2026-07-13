@@ -15,7 +15,8 @@
 //!   amount in credits, colored by kind (earn/mint = green, spend/burn = red,
 //!   transfer/fee = amber).
 //!
-//! #190 human→titan token-SEND stays future-scope; this panel is read-only.
+//! #190 P2: `economy_transfer()` is available in the TUI API client but this
+//! panel remains read-only. Interactive send needs a UI input pass.
 //! When no fetch has landed yet, an honest "awaiting" line paints — no
 //! fabricated balance or transactions (#284 de-mock).
 

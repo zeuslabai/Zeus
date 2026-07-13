@@ -9,15 +9,19 @@ pub mod settlement;
 pub mod transfer;
 
 pub use settlement::SolanaSettlement;
-pub use transfer::{SolanaTransferError, TransferParams, TransferResult, submit_transfer};
+pub use transfer::{
+    SolanaTransferError, TransferParams, TransferPlan, TransferResult, build_transfer_plan,
+    submit_transfer,
+};
+
+// Re-export solana types needed by downstream crates (e.g. zeus-api handlers)
+pub use solana_client;
+pub use solana_sdk;
 
 use std::str::FromStr;
 
 use solana_client::rpc_client::RpcClient;
-use solana_sdk::{
-    commitment_config::CommitmentConfig,
-    pubkey::Pubkey,
-};
+use solana_sdk::{commitment_config::CommitmentConfig, pubkey::Pubkey};
 
 /// Derive the associated token account (ATA) address for a given wallet + mint.
 pub fn derive_ata(wallet: &Pubkey, mint: &Pubkey) -> Pubkey {
@@ -56,10 +60,7 @@ pub fn request_devnet_airdrop(
     pubkey: &Pubkey,
     lamports: u64,
 ) -> Result<String, SolanaTransferError> {
-    let client = RpcClient::new_with_commitment(
-        rpc_url.to_string(),
-        CommitmentConfig::confirmed(),
-    );
+    let client = RpcClient::new_with_commitment(rpc_url.to_string(), CommitmentConfig::confirmed());
     let sig = client
         .request_airdrop(pubkey, lamports)
         .map_err(|e| SolanaTransferError::Rpc(format!("Airdrop request failed: {e}")))?;
@@ -74,10 +75,7 @@ pub fn request_devnet_airdrop(
 
 /// Query the SOL balance (in lamports) for a given pubkey.
 pub fn get_sol_balance(rpc_url: &str, pubkey: &Pubkey) -> Result<u64, SolanaTransferError> {
-    let client = RpcClient::new_with_commitment(
-        rpc_url.to_string(),
-        CommitmentConfig::confirmed(),
-    );
+    let client = RpcClient::new_with_commitment(rpc_url.to_string(), CommitmentConfig::confirmed());
     client
         .get_balance(pubkey)
         .map_err(|e| SolanaTransferError::Rpc(format!("Balance query failed: {e}")))
@@ -88,25 +86,24 @@ pub fn get_sol_balance(rpc_url: &str, pubkey: &Pubkey) -> Result<u64, SolanaTran
 /// Returns the raw token amount (before decimal adjustment). Returns 0 if the
 /// ATA does not exist (not yet created).
 pub fn get_token_balance(rpc_url: &str, ata: &Pubkey) -> Result<u64, SolanaTransferError> {
-    let client = RpcClient::new_with_commitment(
-        rpc_url.to_string(),
-        CommitmentConfig::confirmed(),
-    );
+    let client = RpcClient::new_with_commitment(rpc_url.to_string(), CommitmentConfig::confirmed());
+    get_token_balance_with_client(&client, ata)
+}
+
+/// Query the SPL token balance for an ATA using an existing RPC client.
+///
+/// This is the reusable backend primitive for previewing transfer readiness
+/// without creating extra clients or submitting a transaction.
+pub fn get_token_balance_with_client(
+    client: &RpcClient,
+    ata: &Pubkey,
+) -> Result<u64, SolanaTransferError> {
     match client.get_token_account_balance(ata) {
-        Ok(ui_amount) => {
-            // ui_amount.amount is a string representation of the raw amount
-            ui_amount
-                .amount
-                .parse::<u64>()
-                .map_err(|e| SolanaTransferError::Rpc(format!(
-                    "Failed to parse token balance '{}': {e}",
-                    ui_amount.amount
-                )))
-        }
+        Ok(ui_amount) => parse_raw_token_amount(&ui_amount.amount),
         Err(e) => {
             let msg = e.to_string();
-            // AccountNotFound is expected when ATA hasn't been created yet
-            if msg.contains("AccountNotFound") || msg.contains("could not find account") {
+            // AccountNotFound is expected when ATA hasn't been created yet.
+            if is_token_account_missing(&msg) {
                 Ok(0)
             } else {
                 Err(SolanaTransferError::Rpc(format!(
@@ -115,6 +112,18 @@ pub fn get_token_balance(rpc_url: &str, ata: &Pubkey) -> Result<u64, SolanaTrans
             }
         }
     }
+}
+
+/// Whether an RPC token-account lookup error means the ATA simply does not exist.
+pub fn is_token_account_missing(message: &str) -> bool {
+    message.contains("AccountNotFound") || message.contains("could not find account")
+}
+
+/// Parse a raw SPL token amount returned by the RPC API.
+pub fn parse_raw_token_amount(amount: &str) -> Result<u64, SolanaTransferError> {
+    amount.parse::<u64>().map_err(|e| {
+        SolanaTransferError::Rpc(format!("Failed to parse token balance '{amount}': {e}"))
+    })
 }
 
 #[cfg(test)]
@@ -167,6 +176,30 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_raw_token_amount_valid() {
+        assert_eq!(parse_raw_token_amount("0").unwrap(), 0);
+        assert_eq!(
+            parse_raw_token_amount("18446744073709551615").unwrap(),
+            u64::MAX
+        );
+    }
+
+    #[test]
+    fn test_parse_raw_token_amount_invalid() {
+        let err = parse_raw_token_amount("not-a-number")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Failed to parse token balance"));
+    }
+
+    #[test]
+    fn test_is_token_account_missing_matches_expected_rpc_messages() {
+        assert!(is_token_account_missing("AccountNotFound: pubkey missing"));
+        assert!(is_token_account_missing("could not find account"));
+        assert!(!is_token_account_missing("rate limit exceeded"));
+    }
+
+    #[test]
     fn test_request_devnet_airdrop_and_balance() {
         if std::env::var("ZEUS_RUN_SOLANA_TESTS").is_err() {
             return;
@@ -182,7 +215,10 @@ mod tests {
 
         // Check SOL balance — should be >= 1 SOL (minus any fees)
         let balance = get_sol_balance(rpc_url, &pubkey).unwrap();
-        assert!(balance >= 1_000_000_000, "Balance should be >= 1 SOL, got {balance}");
+        assert!(
+            balance >= 1_000_000_000,
+            "Balance should be >= 1 SOL, got {balance}"
+        );
 
         // Token balance for a non-existent ATA should return 0
         let fake_ata = Pubkey::new_unique();

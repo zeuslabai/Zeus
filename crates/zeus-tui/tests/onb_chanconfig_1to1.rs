@@ -189,9 +189,9 @@ fn send_test_transitions_to_delivered_and_tested_badge() {
     app.chanconfig_screen
         .config_values
         .insert("telegram.phone".to_string(), "+15551234567".to_string());
-    // Focus the telegram test button and trigger it (Enter = trigger_test).
+    // Focus the telegram test button and trigger it (Space = trigger_test, #345).
     app.chanconfig_screen.focused_field = "test:telegram".to_string();
-    app.handle_key(KeyCode::Enter);
+    app.handle_key(KeyCode::Char(' '));
     let s = render(&app);
     assert!(
         s.contains("DELIVERED"),
@@ -204,6 +204,76 @@ fn send_test_transitions_to_delivered_and_tested_badge() {
     assert!(
         s.contains("Test message delivered to Telegram"),
         "success line must name the channel:\n{s}"
+    );
+}
+
+
+#[test]
+fn channelconfig_enter_advances_space_activates_focused_control() {
+    let mut app = App::new();
+    chanconfig_with(&mut app, &["telegram"]);
+    app.chanconfig_screen
+        .config_values
+        .insert("telegram.api_id".to_string(), "12345678".to_string());
+    app.chanconfig_screen.config_values.insert(
+        "telegram.api_hash".to_string(),
+        "abcdef0123456789".to_string(),
+    );
+    app.chanconfig_screen
+        .config_values
+        .insert("telegram.phone".to_string(), "+15551234567".to_string());
+    app.chanconfig_screen.focused_field = "test:telegram".to_string();
+
+    let before = app.current_step;
+    app.handle_key(KeyCode::Enter);
+    assert_eq!(
+        app.current_step,
+        before + 1,
+        "Enter should navigate forward from ChannelConfig, not fire SEND TEST"
+    );
+    assert!(
+        !app.chanconfig_screen.test_statuses.contains_key("telegram"),
+        "Enter must not trigger the focused ChannelConfig control"
+    );
+
+    app.current_step = before;
+    app.handle_key(KeyCode::Char(' '));
+    assert_eq!(
+        app.current_step, before,
+        "Space should activate the focused ChannelConfig control without navigating"
+    );
+    assert!(
+        render(&app).contains("DELIVERED"),
+        "Space should still trigger SEND TEST on the focused test button"
+    );
+}
+
+#[test]
+fn channelconfig_space_cycles_allow_bots_enter_advances() {
+    let mut app = App::new();
+    chanconfig_with(&mut app, &["discord"]);
+    app.chanconfig_screen.focused_field = "allowbots:discord".to_string();
+
+    let before = app.current_step;
+    assert_eq!(app.chanconfig_screen.bot_policy("discord"), "mentions");
+    app.handle_key(KeyCode::Char(' '));
+    assert_eq!(
+        app.chanconfig_screen.bot_policy("discord"),
+        "on",
+        "Space should cycle the allow_bots selector"
+    );
+    assert_eq!(app.current_step, before, "Space cycle should stay on the page");
+
+    app.handle_key(KeyCode::Enter);
+    assert_eq!(
+        app.current_step,
+        before + 1,
+        "Enter should continue navigation even on an allow_bots selector"
+    );
+    assert_eq!(
+        app.chanconfig_screen.bot_policy("discord"),
+        "on",
+        "Enter must not also cycle allow_bots"
     );
 }
 

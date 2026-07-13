@@ -84,6 +84,18 @@ pub struct TweetMetrics {
     pub bookmark_count: u64,
 }
 
+/// Public account metrics returned by X API v2.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct XAccountMetrics {
+    pub user_id: String,
+    pub username: Option<String>,
+    pub name: Option<String>,
+    pub followers_count: u64,
+    pub following_count: u64,
+    pub tweet_count: u64,
+    pub listed_count: u64,
+}
+
 /// Media attached to a tweet
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TweetMedia {
@@ -127,6 +139,132 @@ pub struct ThreadOptions {
     pub tweets: Vec<String>,
     /// Media IDs per tweet (indexed same as tweets, empty vec for no media)
     pub media_per_tweet: Vec<Vec<String>>,
+}
+
+/// Cursor and result-limit options for X read/listening endpoints.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct XReadOptions {
+    /// Return posts newer than this tweet ID.
+    pub since_id: Option<String>,
+    /// Return posts older than this tweet ID.
+    pub until_id: Option<String>,
+    /// X pagination token from a previous response.
+    pub pagination_token: Option<String>,
+    /// Requested page size. Clamped to endpoint-supported bounds.
+    pub max_results: Option<u32>,
+}
+
+/// Page of tweets returned by X read/listening endpoints.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct XTweetList {
+    pub tweets: Vec<Tweet>,
+    pub newest_id: Option<String>,
+    pub oldest_id: Option<String>,
+    pub result_count: usize,
+    pub next_token: Option<String>,
+}
+
+/// Cursor and result-limit options for X Direct Message read endpoints.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct XDmOptions {
+    /// X pagination token from a previous response.
+    pub pagination_token: Option<String>,
+    /// Requested page size. Clamped to endpoint-supported bounds.
+    pub max_results: Option<u32>,
+}
+
+/// Media attachment metadata included on an X Direct Message event.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct XDmAttachment {
+    pub media_key: String,
+    pub media_type: Option<String>,
+    pub url: Option<String>,
+    pub preview_image_url: Option<String>,
+}
+
+/// X Direct Message event returned by API v2 DM read endpoints.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct XDmEvent {
+    pub id: String,
+    pub text: Option<String>,
+    pub event_type: Option<String>,
+    pub created_at: Option<String>,
+    pub dm_conversation_id: Option<String>,
+    pub sender_id: Option<String>,
+    pub participant_ids: Vec<String>,
+    pub attachments: Vec<XDmAttachment>,
+}
+
+/// Page of X Direct Message events returned by API v2.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct XDmEventPage {
+    pub events: Vec<XDmEvent>,
+    pub result_count: usize,
+    pub next_token: Option<String>,
+}
+
+/// Result returned after sending an X Direct Message.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct XDmSendResult {
+    pub dm_event_id: Option<String>,
+    pub dm_conversation_id: Option<String>,
+    pub participant_id: Option<String>,
+    pub text: Option<String>,
+}
+
+/// Cursor and result-limit options for X list endpoints.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct XListOptions {
+    /// X pagination token from a previous response.
+    pub pagination_token: Option<String>,
+    /// Requested page size. Clamped to endpoint-supported bounds.
+    pub max_results: Option<u32>,
+}
+
+/// X list metadata returned by API v2 list endpoints.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct XListInfo {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub private: bool,
+    pub member_count: u64,
+    pub follower_count: u64,
+    pub owner_id: Option<String>,
+    pub created_at: Option<String>,
+}
+
+/// Page of X lists returned by API v2 list endpoints.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct XListPage {
+    pub lists: Vec<XListInfo>,
+    pub result_count: usize,
+    pub next_token: Option<String>,
+}
+
+/// Result for mutating X list membership/follow/delete state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct XListMutationResult {
+    pub action: String,
+    pub list_id: String,
+    pub user_id: Option<String>,
+    pub success: bool,
+}
+
+impl XListMutationResult {
+    fn new(
+        action: impl Into<String>,
+        list_id: impl Into<String>,
+        user_id: Option<String>,
+        success: bool,
+    ) -> Self {
+        Self {
+            action: action.into(),
+            list_id: list_id.into(),
+            user_id,
+            success,
+        }
+    }
 }
 
 /// Per-item status returned by X delete operations.
@@ -197,6 +335,30 @@ pub struct XBatchDeleteResult {
     pub deleted: usize,
     pub failed: usize,
     pub skipped: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct XActionResult {
+    pub action: String,
+    pub user_id: String,
+    pub target_id: String,
+    pub success: bool,
+}
+
+impl XActionResult {
+    fn new(
+        action: impl Into<String>,
+        user_id: impl Into<String>,
+        target_id: impl Into<String>,
+        success: bool,
+    ) -> Self {
+        Self {
+            action: action.into(),
+            user_id: user_id.into(),
+            target_id: target_id.into(),
+            success,
+        }
+    }
 }
 
 impl XBatchDeleteResult {
@@ -331,19 +493,51 @@ impl XAdapter {
     ///   1. OAuth 2.0 user-context access token (PKCE) — live, runtime-updatable
     ///   2. OAuth 2.0 App-Only bearer token
     ///   3. OAuth 1.0a (fallback)
-    fn read_auth_header(&self) -> String {
+    fn read_auth_header(&self) -> Result<String> {
         let oauth2 = self.try_oauth2_token_snapshot();
         if !oauth2.is_empty() {
-            format!("Bearer {}", oauth2)
+            Ok(format!("Bearer {}", oauth2))
         } else if !self.config.bearer_token.is_empty() {
-            format!("Bearer {}", self.config.bearer_token)
+            Ok(format!("Bearer {}", self.config.bearer_token))
         } else {
-            // Fall back to OAuth 1.0a for reads too
-            self.oauth1_header("GET", &format!("{}/users/me", X_API_BASE), &[])
+            Err(Error::Channel(
+                "X reads require bearer_token or OAuth 2.0 access token; OAuth 1.0a is only used for write endpoints"
+                    .into(),
+            ))
         }
     }
 
     /// Get authorization header for write operations.
+    fn has_oauth1_user_tokens(&self) -> bool {
+        !self.config.api_key.is_empty()
+            && !self.config.api_secret.is_empty()
+            && !self.config.access_token.is_empty()
+            && !self.config.access_token_secret.is_empty()
+    }
+
+    fn user_context_auth_header(
+        &self,
+        method: &str,
+        url: &str,
+        query_params: &[(String, String)],
+    ) -> Result<String> {
+        let oauth2 = self.try_oauth2_token_snapshot();
+        if !oauth2.is_empty() {
+            return Ok(format!("Bearer {}", oauth2));
+        }
+        if self.has_oauth1_user_tokens() {
+            let pairs = query_params
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect::<Vec<_>>();
+            return Ok(self.oauth1_header(method, url, &pairs));
+        }
+        Err(Error::Channel(
+            "X DMs require OAuth 2.0 user-context access token or OAuth 1.0a user tokens with DM scopes; app-only bearer tokens cannot access DMs"
+                .into(),
+        ))
+    }
+
     ///
     /// Priority order:
     ///   1. OAuth 2.0 user-context access token (PKCE) — required for posting
@@ -685,6 +879,233 @@ impl XAdapter {
         XBatchDeleteResult::from_results(results)
     }
 
+    // X POST actions need request metadata plus response contract fields in one shared helper.
+    #[allow(clippy::too_many_arguments)]
+    async fn post_user_action(
+        &self,
+        action: &str,
+        user_id: &str,
+        target_id: &str,
+        path: &str,
+        body: serde_json::Value,
+        success_field: &str,
+        expected: bool,
+    ) -> Result<XActionResult> {
+        let user_id = user_id.trim();
+        let target_id = target_id.trim();
+        if user_id.is_empty() || target_id.is_empty() {
+            return Err(Error::Channel(format!(
+                "X {action} requires user_id and target_id"
+            )));
+        }
+
+        let url = format!("{}{}", self.api_base, path);
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", self.write_auth_header("POST", &url))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| Error::Channel(format!("X {action} error: {e}")))?;
+
+        Self::parse_action_response(resp, action, user_id, target_id, success_field, expected).await
+    }
+
+    async fn delete_user_action(
+        &self,
+        action: &str,
+        user_id: &str,
+        target_id: &str,
+        path: &str,
+        success_field: &str,
+        expected: bool,
+    ) -> Result<XActionResult> {
+        let user_id = user_id.trim();
+        let target_id = target_id.trim();
+        if user_id.is_empty() || target_id.is_empty() {
+            return Err(Error::Channel(format!(
+                "X {action} requires user_id and target_id"
+            )));
+        }
+
+        let url = format!("{}{}", self.api_base, path);
+        let resp = self
+            .client
+            .delete(&url)
+            .header("Authorization", self.write_auth_header("DELETE", &url))
+            .send()
+            .await
+            .map_err(|e| Error::Channel(format!("X {action} error: {e}")))?;
+
+        Self::parse_action_response(resp, action, user_id, target_id, success_field, expected).await
+    }
+
+    async fn parse_action_response(
+        resp: reqwest::Response,
+        action: &str,
+        user_id: &str,
+        target_id: &str,
+        success_field: &str,
+        expected: bool,
+    ) -> Result<XActionResult> {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_else(|_| "unknown".into());
+        if !status.is_success() {
+            return Err(Error::Channel(format!(
+                "X {action} failed: {}: {}",
+                status.as_u16(),
+                text
+            )));
+        }
+
+        let data: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({}));
+        let success = data
+            .get("data")
+            .and_then(|d| d.get(success_field))
+            .and_then(|v| v.as_bool())
+            .map(|v| v == expected)
+            .unwrap_or(true);
+
+        Ok(XActionResult::new(action, user_id, target_id, success))
+    }
+
+    pub async fn like_tweet(&self, user_id: &str, tweet_id: &str) -> Result<XActionResult> {
+        let uid = user_id.trim();
+        let tid = tweet_id.trim();
+        self.post_user_action(
+            "like",
+            uid,
+            tid,
+            &format!("/users/{uid}/likes"),
+            serde_json::json!({ "tweet_id": tid }),
+            "liked",
+            true,
+        )
+        .await
+    }
+
+    pub async fn unlike_tweet(&self, user_id: &str, tweet_id: &str) -> Result<XActionResult> {
+        let uid = user_id.trim();
+        let tid = tweet_id.trim();
+        self.delete_user_action(
+            "unlike",
+            uid,
+            tid,
+            &format!("/users/{uid}/likes/{tid}"),
+            "liked",
+            false,
+        )
+        .await
+    }
+
+    pub async fn retweet(&self, user_id: &str, tweet_id: &str) -> Result<XActionResult> {
+        let uid = user_id.trim();
+        let tid = tweet_id.trim();
+        self.post_user_action(
+            "retweet",
+            uid,
+            tid,
+            &format!("/users/{uid}/retweets"),
+            serde_json::json!({ "tweet_id": tid }),
+            "retweeted",
+            true,
+        )
+        .await
+    }
+
+    pub async fn unretweet(&self, user_id: &str, tweet_id: &str) -> Result<XActionResult> {
+        let uid = user_id.trim();
+        let tid = tweet_id.trim();
+        self.delete_user_action(
+            "unretweet",
+            uid,
+            tid,
+            &format!("/users/{uid}/retweets/{tid}"),
+            "retweeted",
+            false,
+        )
+        .await
+    }
+
+    pub async fn quote_tweet(&self, text: &str, quote_tweet_id: &str) -> Result<Tweet> {
+        if text.trim().is_empty() || quote_tweet_id.trim().is_empty() {
+            return Err(Error::Channel(
+                "X quote_tweet requires text and quote_tweet_id".into(),
+            ));
+        }
+        self.post_tweet(&CreateTweetOptions {
+            text: text.to_string(),
+            quote_tweet_id: Some(quote_tweet_id.trim().to_string()),
+            ..Default::default()
+        })
+        .await
+    }
+
+    pub async fn follow_user(&self, user_id: &str, target_user_id: &str) -> Result<XActionResult> {
+        let uid = user_id.trim();
+        let target = target_user_id.trim();
+        self.post_user_action(
+            "follow",
+            uid,
+            target,
+            &format!("/users/{uid}/following"),
+            serde_json::json!({ "target_user_id": target }),
+            "following",
+            true,
+        )
+        .await
+    }
+
+    pub async fn unfollow_user(
+        &self,
+        user_id: &str,
+        target_user_id: &str,
+    ) -> Result<XActionResult> {
+        let uid = user_id.trim();
+        let target = target_user_id.trim();
+        self.delete_user_action(
+            "unfollow",
+            uid,
+            target,
+            &format!("/users/{uid}/following/{target}"),
+            "following",
+            false,
+        )
+        .await
+    }
+
+    pub async fn bookmark_tweet(&self, user_id: &str, tweet_id: &str) -> Result<XActionResult> {
+        let uid = user_id.trim();
+        let tid = tweet_id.trim();
+        self.post_user_action(
+            "bookmark",
+            uid,
+            tid,
+            &format!("/users/{uid}/bookmarks"),
+            serde_json::json!({ "tweet_id": tid }),
+            "bookmarked",
+            true,
+        )
+        .await
+    }
+
+    pub async fn unbookmark_tweet(&self, user_id: &str, tweet_id: &str) -> Result<XActionResult> {
+        let uid = user_id.trim();
+        let tid = tweet_id.trim();
+        self.delete_user_action(
+            "unbookmark",
+            uid,
+            tid,
+            &format!("/users/{uid}/bookmarks/{tid}"),
+            "bookmarked",
+            false,
+        )
+        .await
+    }
+
     async fn delete_tweet_result_at(&self, tweet_id: &str, index: usize) -> XDeleteResult {
         let tweet_id = tweet_id.trim();
         if tweet_id.is_empty() {
@@ -762,15 +1183,1045 @@ impl XAdapter {
         )
     }
 
+    fn read_query_params(&self, opts: &XReadOptions, min_results: u32) -> Vec<(String, String)> {
+        let mut params = vec![
+            (
+                "tweet.fields".to_string(),
+                "id,text,author_id,created_at,public_metrics,conversation_id,referenced_tweets,attachments".to_string(),
+            ),
+            ("expansions".to_string(), "author_id,attachments.media_keys".to_string()),
+            ("user.fields".to_string(), "id,username,name".to_string()),
+            ("media.fields".to_string(), "media_key,type,url,alt_text".to_string()),
+        ];
+
+        let max_results = opts.max_results.unwrap_or(25).clamp(min_results, 100);
+        params.push(("max_results".to_string(), max_results.to_string()));
+
+        if let Some(since_id) = opts.since_id.as_deref().filter(|s| !s.trim().is_empty()) {
+            params.push(("since_id".to_string(), since_id.trim().to_string()));
+        }
+        if let Some(until_id) = opts.until_id.as_deref().filter(|s| !s.trim().is_empty()) {
+            params.push(("until_id".to_string(), until_id.trim().to_string()));
+        }
+        if let Some(token) = opts
+            .pagination_token
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+        {
+            params.push(("pagination_token".to_string(), token.trim().to_string()));
+        }
+
+        params
+    }
+
+    fn read_url(&self, path: &str, params: Vec<(String, String)>) -> String {
+        let query = params
+            .into_iter()
+            .map(|(k, v)| format!("{}={}", urlencoding::encode(&k), urlencoding::encode(&v)))
+            .collect::<Vec<_>>()
+            .join("&");
+        format!("{}{}?{}", self.api_base, path, query)
+    }
+
+    async fn get_x_json(&self, url: String, label: &str) -> Result<serde_json::Value> {
+        let resp = self
+            .client
+            .get(&url)
+            .header("Authorization", self.read_auth_header()?)
+            .send()
+            .await
+            .map_err(|e| Error::Channel(format!("X {label} error: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_else(|_| "unknown".into());
+            return Err(Error::Channel(format!(
+                "X {label} failed: {}: {}",
+                status.as_u16(),
+                text
+            )));
+        }
+
+        resp.json()
+            .await
+            .map_err(|e| Error::Channel(format!("X {label} parse: {e}")))
+    }
+
+    fn parse_tweet(value: &serde_json::Value, includes: &serde_json::Value) -> Tweet {
+        let author_id = value["author_id"].as_str();
+        let (author_username, author_name) = author_id
+            .and_then(|id| {
+                includes
+                    .get("users")
+                    .and_then(|users| users.as_array())
+                    .and_then(|users| users.iter().find(|u| u["id"].as_str() == Some(id)))
+                    .map(|u| {
+                        (
+                            u["username"].as_str().map(|s| s.to_string()),
+                            u["name"].as_str().map(|s| s.to_string()),
+                        )
+                    })
+            })
+            .unwrap_or((None, None));
+
+        let metrics = value.get("public_metrics").map(|metrics| TweetMetrics {
+            like_count: metrics["like_count"].as_u64().unwrap_or(0),
+            retweet_count: metrics["retweet_count"].as_u64().unwrap_or(0),
+            reply_count: metrics["reply_count"].as_u64().unwrap_or(0),
+            quote_count: metrics["quote_count"].as_u64().unwrap_or(0),
+            impression_count: metrics["impression_count"].as_u64().unwrap_or(0),
+            bookmark_count: metrics["bookmark_count"].as_u64().unwrap_or(0),
+        });
+
+        let media_keys = value
+            .get("attachments")
+            .and_then(|a| a.get("media_keys"))
+            .and_then(|keys| keys.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|key| key.as_str())
+            .collect::<Vec<_>>();
+        let media = media_keys
+            .iter()
+            .filter_map(|key| {
+                includes
+                    .get("media")
+                    .and_then(|media| media.as_array())
+                    .and_then(|media| media.iter().find(|m| m["media_key"].as_str() == Some(*key)))
+                    .map(|m| TweetMedia {
+                        media_id: (*key).to_string(),
+                        media_type: match m["type"].as_str().unwrap_or("photo") {
+                            "video" => MediaType::Video,
+                            "animated_gif" => MediaType::Gif,
+                            _ => MediaType::Image,
+                        },
+                        url: m["url"].as_str().map(|s| s.to_string()),
+                        alt_text: m["alt_text"].as_str().map(|s| s.to_string()),
+                    })
+            })
+            .collect();
+
+        let in_reply_to = value
+            .get("referenced_tweets")
+            .and_then(|refs| refs.as_array())
+            .and_then(|refs| {
+                refs.iter()
+                    .find(|r| r["type"].as_str() == Some("replied_to"))
+                    .and_then(|r| r["id"].as_str())
+            })
+            .map(|s| s.to_string());
+
+        Tweet {
+            id: value["id"].as_str().unwrap_or_default().to_string(),
+            text: value["text"].as_str().unwrap_or_default().to_string(),
+            author_username,
+            author_name,
+            created_at: value["created_at"].as_str().map(|s| s.to_string()),
+            metrics,
+            media,
+            conversation_id: value["conversation_id"].as_str().map(|s| s.to_string()),
+            in_reply_to,
+        }
+    }
+
+    fn parse_tweet_list(data: serde_json::Value) -> XTweetList {
+        let includes = data.get("includes").cloned().unwrap_or_default();
+        let tweets = match data.get("data") {
+            Some(value) if value.is_array() => value
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|tweet| Self::parse_tweet(tweet, &includes))
+                .collect::<Vec<_>>(),
+            Some(value) if value.is_object() => vec![Self::parse_tweet(value, &includes)],
+            _ => Vec::new(),
+        };
+        let meta = &data["meta"];
+        XTweetList {
+            result_count: meta["result_count"].as_u64().unwrap_or(tweets.len() as u64) as usize,
+            newest_id: meta["newest_id"].as_str().map(|s| s.to_string()),
+            oldest_id: meta["oldest_id"].as_str().map(|s| s.to_string()),
+            next_token: meta["next_token"].as_str().map(|s| s.to_string()),
+            tweets,
+        }
+    }
+
+    fn list_query_params(&self, opts: &XListOptions) -> Vec<(String, String)> {
+        let mut params = vec![(
+            "list.fields".to_string(),
+            "id,name,description,private,member_count,follower_count,owner_id,created_at"
+                .to_string(),
+        )];
+
+        let max_results = opts.max_results.unwrap_or(25).clamp(1, 100);
+        params.push(("max_results".to_string(), max_results.to_string()));
+
+        if let Some(token) = opts
+            .pagination_token
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+        {
+            params.push(("pagination_token".to_string(), token.trim().to_string()));
+        }
+
+        params
+    }
+
+    fn parse_list_info(value: &serde_json::Value) -> XListInfo {
+        XListInfo {
+            id: value["id"].as_str().unwrap_or_default().to_string(),
+            name: value["name"].as_str().unwrap_or_default().to_string(),
+            description: value["description"].as_str().map(|s| s.to_string()),
+            private: value["private"].as_bool().unwrap_or(false),
+            member_count: value["member_count"].as_u64().unwrap_or(0),
+            follower_count: value["follower_count"].as_u64().unwrap_or(0),
+            owner_id: value["owner_id"].as_str().map(|s| s.to_string()),
+            created_at: value["created_at"].as_str().map(|s| s.to_string()),
+        }
+    }
+
+    fn parse_list_page(data: serde_json::Value) -> XListPage {
+        let lists = match data.get("data") {
+            Some(value) if value.is_array() => value
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(Self::parse_list_info)
+                .collect::<Vec<_>>(),
+            Some(value) if value.is_object() => vec![Self::parse_list_info(value)],
+            _ => Vec::new(),
+        };
+        let meta = &data["meta"];
+        XListPage {
+            result_count: meta["result_count"].as_u64().unwrap_or(lists.len() as u64) as usize,
+            next_token: meta["next_token"].as_str().map(|s| s.to_string()),
+            lists,
+        }
+    }
+
+    fn dm_query_params(&self, opts: &XDmOptions) -> Vec<(String, String)> {
+        let mut params = vec![
+            (
+                "dm_event.fields".to_string(),
+                "id,text,event_type,created_at,dm_conversation_id,sender_id,participant_ids,attachments,referenced_tweets".to_string(),
+            ),
+            (
+                "expansions".to_string(),
+                "sender_id,participant_ids,attachments.media_keys,referenced_tweets.id".to_string(),
+            ),
+            (
+                "user.fields".to_string(),
+                "id,name,username,verified,profile_image_url".to_string(),
+            ),
+            (
+                "media.fields".to_string(),
+                "media_key,type,url,preview_image_url".to_string(),
+            ),
+            (
+                "max_results".to_string(),
+                opts.max_results.unwrap_or(100).clamp(1, 100).to_string(),
+            ),
+        ];
+        if let Some(token) = opts
+            .pagination_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            params.push(("pagination_token".to_string(), token.to_string()));
+        }
+        params
+    }
+
+    fn parse_dm_event(value: &serde_json::Value, includes: &serde_json::Value) -> XDmEvent {
+        let media_keys = value
+            .get("attachments")
+            .and_then(|a| a.get("media_keys"))
+            .and_then(|keys| keys.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|key| key.as_str())
+            .collect::<Vec<_>>();
+        let attachments = media_keys
+            .iter()
+            .map(|key| {
+                let media = includes
+                    .get("media")
+                    .and_then(|m| m.as_array())
+                    .and_then(|items| items.iter().find(|m| m["media_key"].as_str() == Some(*key)));
+                XDmAttachment {
+                    media_key: (*key).to_string(),
+                    media_type: media
+                        .and_then(|m| m.get("type"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                    url: media
+                        .and_then(|m| m.get("url"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                    preview_image_url: media
+                        .and_then(|m| m.get("preview_image_url"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                }
+            })
+            .collect();
+
+        XDmEvent {
+            id: value["id"].as_str().unwrap_or_default().to_string(),
+            text: value["text"].as_str().map(str::to_string),
+            event_type: value["event_type"].as_str().map(str::to_string),
+            created_at: value["created_at"].as_str().map(str::to_string),
+            dm_conversation_id: value["dm_conversation_id"].as_str().map(str::to_string),
+            sender_id: value["sender_id"].as_str().map(str::to_string),
+            participant_ids: value
+                .get("participant_ids")
+                .and_then(|ids| ids.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|id| id.as_str().map(str::to_string))
+                .collect(),
+            attachments,
+        }
+    }
+
+    fn parse_dm_event_page(data: serde_json::Value) -> XDmEventPage {
+        let includes = data.get("includes").cloned().unwrap_or_default();
+        let events = data
+            .get("data")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .map(|event| Self::parse_dm_event(event, &includes))
+            .collect::<Vec<_>>();
+        let meta = data.get("meta").cloned().unwrap_or_default();
+        XDmEventPage {
+            result_count: meta["result_count"].as_u64().unwrap_or(events.len() as u64) as usize,
+            next_token: meta["next_token"].as_str().map(str::to_string),
+            events,
+        }
+    }
+
+    fn parse_dm_send(data: serde_json::Value, participant_id: Option<String>) -> XDmSendResult {
+        let event = data.get("data").unwrap_or(&data);
+        XDmSendResult {
+            dm_event_id: event
+                .get("dm_event_id")
+                .or_else(|| event.get("id"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            dm_conversation_id: event
+                .get("dm_conversation_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            participant_id,
+            text: event
+                .get("text")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+        }
+    }
+
+    async fn get_dm_json(
+        &self,
+        action: &str,
+        path: &str,
+        params: Vec<(String, String)>,
+    ) -> Result<serde_json::Value> {
+        let query = params
+            .iter()
+            .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
+            .collect::<Vec<_>>()
+            .join("&");
+        let bare_url = format!("{}{}", self.api_base, path);
+        let url = if query.is_empty() {
+            bare_url.clone()
+        } else {
+            format!("{}?{}", bare_url, query)
+        };
+        let resp = self
+            .client
+            .get(&url)
+            .header(
+                "Authorization",
+                self.user_context_auth_header("GET", &bare_url, &params)?,
+            )
+            .send()
+            .await
+            .map_err(|e| Error::Channel(format!("X {action} error: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_else(|_| "unknown".into());
+            return Err(Error::Channel(format!(
+                "X {action} failed: {}: {}",
+                status.as_u16(),
+                text
+            )));
+        }
+
+        resp.json()
+            .await
+            .map_err(|e| Error::Channel(format!("X {action} parse error: {e}")))
+    }
+
+    async fn post_dm_json(
+        &self,
+        action: &str,
+        path: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}{}", self.api_base, path);
+        let resp = self
+            .client
+            .post(&url)
+            .header(
+                "Authorization",
+                self.user_context_auth_header("POST", &url, &[])?,
+            )
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| Error::Channel(format!("X {action} error: {e}")))?;
+
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_else(|_| "unknown".into());
+        if !status.is_success() {
+            return Err(Error::Channel(format!(
+                "X {action} failed: {}: {}",
+                status.as_u16(),
+                text
+            )));
+        }
+
+        Ok(serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({})))
+    }
+
+    fn parse_list_mutation(
+        data: serde_json::Value,
+        action: &str,
+        list_id: &str,
+        user_id: Option<String>,
+        success_field: &str,
+        expected: bool,
+    ) -> XListMutationResult {
+        let success = data
+            .get("data")
+            .and_then(|d| d.get(success_field))
+            .and_then(|v| v.as_bool())
+            .map(|v| v == expected)
+            .unwrap_or(true);
+        XListMutationResult::new(action, list_id.trim(), user_id, success)
+    }
+
+    async fn post_list_json(
+        &self,
+        action: &str,
+        path: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}{}", self.api_base, path);
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", self.write_auth_header("POST", &url))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| Error::Channel(format!("X {action} error: {e}")))?;
+
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_else(|_| "unknown".into());
+        if !status.is_success() {
+            return Err(Error::Channel(format!(
+                "X {action} failed: {}: {}",
+                status.as_u16(),
+                text
+            )));
+        }
+
+        Ok(serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({})))
+    }
+
+    async fn put_list_json(
+        &self,
+        action: &str,
+        path: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}{}", self.api_base, path);
+        let resp = self
+            .client
+            .put(&url)
+            .header("Authorization", self.write_auth_header("PUT", &url))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| Error::Channel(format!("X {action} error: {e}")))?;
+
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_else(|_| "unknown".into());
+        if !status.is_success() {
+            return Err(Error::Channel(format!(
+                "X {action} failed: {}: {}",
+                status.as_u16(),
+                text
+            )));
+        }
+
+        Ok(serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({})))
+    }
+
+    async fn delete_json(&self, action: &str, path: &str) -> Result<serde_json::Value> {
+        let url = format!("{}{}", self.api_base, path);
+        let resp = self
+            .client
+            .delete(&url)
+            .header("Authorization", self.write_auth_header("DELETE", &url))
+            .send()
+            .await
+            .map_err(|e| Error::Channel(format!("X {action} error: {e}")))?;
+
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_else(|_| "unknown".into());
+        if !status.is_success() {
+            return Err(Error::Channel(format!(
+                "X {action} failed: {}: {}",
+                status.as_u16(),
+                text
+            )));
+        }
+
+        Ok(serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({})))
+    }
+
+    // Search recent public X posts by keyword/query. Use since_id/pagination_token for polling.
+    pub async fn block_user(&self, user_id: &str, target_user_id: &str) -> Result<XActionResult> {
+        let uid = user_id.trim();
+        let target = target_user_id.trim();
+        self.post_user_action(
+            "block",
+            uid,
+            target,
+            &format!("/users/{uid}/blocking"),
+            serde_json::json!({ "target_user_id": target }),
+            "blocking",
+            true,
+        )
+        .await
+    }
+
+    pub async fn unblock_user(&self, user_id: &str, target_user_id: &str) -> Result<XActionResult> {
+        let uid = user_id.trim();
+        let target = target_user_id.trim();
+        self.delete_user_action(
+            "unblock",
+            uid,
+            target,
+            &format!("/users/{uid}/blocking/{target}"),
+            "blocking",
+            false,
+        )
+        .await
+    }
+
+    pub async fn mute_user(&self, user_id: &str, target_user_id: &str) -> Result<XActionResult> {
+        let uid = user_id.trim();
+        let target = target_user_id.trim();
+        self.post_user_action(
+            "mute",
+            uid,
+            target,
+            &format!("/users/{uid}/muting"),
+            serde_json::json!({ "target_user_id": target }),
+            "muting",
+            true,
+        )
+        .await
+    }
+
+    pub async fn unmute_user(&self, user_id: &str, target_user_id: &str) -> Result<XActionResult> {
+        let uid = user_id.trim();
+        let target = target_user_id.trim();
+        self.delete_user_action(
+            "unmute",
+            uid,
+            target,
+            &format!("/users/{uid}/muting/{target}"),
+            "muting",
+            false,
+        )
+        .await
+    }
+
+    pub async fn hide_reply(&self, tweet_id: &str) -> Result<XActionResult> {
+        self.set_reply_hidden(tweet_id, true).await
+    }
+
+    pub async fn unhide_reply(&self, tweet_id: &str) -> Result<XActionResult> {
+        self.set_reply_hidden(tweet_id, false).await
+    }
+
+    async fn set_reply_hidden(&self, tweet_id: &str, hidden: bool) -> Result<XActionResult> {
+        let tweet_id = tweet_id.trim();
+        if tweet_id.is_empty() {
+            return Err(Error::Channel("X hide/unhide requires tweet_id".into()));
+        }
+        let url = format!("{}/tweets/{tweet_id}/hidden", self.api_base);
+        let resp = self
+            .client
+            .put(&url)
+            .header("Authorization", self.write_auth_header("PUT", &url))
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({ "hidden": hidden }))
+            .send()
+            .await
+            .map_err(|e| Error::Channel(format!("X hide reply error: {e}")))?;
+        Self::parse_action_response(
+            resp,
+            if hidden { "hide_reply" } else { "unhide_reply" },
+            "",
+            tweet_id,
+            "hidden",
+            hidden,
+        )
+        .await
+    }
+
+    pub async fn report_tweet(
+        &self,
+        tweet_id: &str,
+        reason: Option<&str>,
+    ) -> Result<XActionResult> {
+        if tweet_id.trim().is_empty() {
+            return Err(Error::Channel("X report tweet requires tweet_id".into()));
+        }
+        let _ = reason;
+        Err(Error::Channel(
+            "X report_tweet is not available through the public X API v2 for standard developer apps; use the native X safety flow or an elevated enterprise endpoint"
+                .into(),
+        ))
+    }
+
+    pub async fn search_recent(&self, query: &str, opts: &XReadOptions) -> Result<XTweetList> {
+        if query.trim().is_empty() {
+            return Err(Error::Channel("X recent search query is required".into()));
+        }
+        let mut params = self.read_query_params(opts, 10);
+        params.push(("query".to_string(), query.trim().to_string()));
+        let url = self.read_url("/tweets/search/recent", params);
+        let data = self.get_x_json(url, "recent search").await?;
+        Ok(Self::parse_tweet_list(data))
+    }
+
+    /// Get recent mentions for a user ID. Use since_id/pagination_token for polling.
+    pub async fn get_mentions(&self, user_id: &str, opts: &XReadOptions) -> Result<XTweetList> {
+        if user_id.trim().is_empty() {
+            return Err(Error::Channel("X mentions user_id is required".into()));
+        }
+        let params = self.read_query_params(opts, 5);
+        let url = self.read_url(&format!("/users/{}/mentions", user_id.trim()), params);
+        let data = self.get_x_json(url, "mentions").await?;
+        Ok(Self::parse_tweet_list(data))
+    }
+
+    /// Get one X post/tweet by ID.
+    pub async fn get_tweet(&self, tweet_id: &str) -> Result<Tweet> {
+        if tweet_id.trim().is_empty() {
+            return Err(Error::Channel("X tweet_id is required".into()));
+        }
+        let params = vec![
+            (
+                "tweet.fields".to_string(),
+                "id,text,author_id,created_at,public_metrics,conversation_id,referenced_tweets,attachments".to_string(),
+            ),
+            ("expansions".to_string(), "author_id,attachments.media_keys".to_string()),
+            ("user.fields".to_string(), "id,username,name".to_string()),
+            ("media.fields".to_string(), "media_key,type,url,alt_text".to_string()),
+        ];
+        let url = self.read_url(&format!("/tweets/{}", tweet_id.trim()), params);
+        let data = self.get_x_json(url, "get tweet").await?;
+        Self::parse_tweet_list(data)
+            .tweets
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::Channel(format!("X tweet {} not found", tweet_id.trim())))
+    }
+
+    /// Get recent posts for a user ID. Use since_id/pagination_token for polling.
+    pub async fn get_user_timeline(
+        &self,
+        user_id: &str,
+        opts: &XReadOptions,
+    ) -> Result<XTweetList> {
+        if user_id.trim().is_empty() {
+            return Err(Error::Channel("X timeline user_id is required".into()));
+        }
+        let params = self.read_query_params(opts, 5);
+        let url = self.read_url(&format!("/users/{}/tweets", user_id.trim()), params);
+        let data = self.get_x_json(url, "user timeline").await?;
+        Ok(Self::parse_tweet_list(data))
+    }
+
+    /// Read recent Direct Message events for the authenticated user. Use pagination_token for polling.
+    pub async fn get_dm_events(&self, opts: &XDmOptions) -> Result<XDmEventPage> {
+        let params = self.dm_query_params(opts);
+        let data = self.get_dm_json("dm events", "/dm_events", params).await?;
+        Ok(Self::parse_dm_event_page(data))
+    }
+
+    /// Read Direct Message events for one conversation. Use pagination_token for polling.
+    pub async fn get_dm_conversation_events(
+        &self,
+        dm_conversation_id: &str,
+        opts: &XDmOptions,
+    ) -> Result<XDmEventPage> {
+        let conversation = dm_conversation_id.trim();
+        if conversation.is_empty() {
+            return Err(Error::Channel("X DM conversation_id is required".into()));
+        }
+        let params = self.dm_query_params(opts);
+        let data = self
+            .get_dm_json(
+                "dm conversation events",
+                &format!("/dm_conversations/{conversation}/dm_events"),
+                params,
+            )
+            .await?;
+        Ok(Self::parse_dm_event_page(data))
+    }
+
+    /// Send a Direct Message into an existing X DM conversation.
+    pub async fn send_dm(
+        &self,
+        dm_conversation_id: &str,
+        text: &str,
+        media_id: Option<&str>,
+    ) -> Result<XDmSendResult> {
+        let conversation = dm_conversation_id.trim();
+        let text = text.trim();
+        if conversation.is_empty() || text.is_empty() {
+            return Err(Error::Channel(
+                "X send DM requires dm_conversation_id and text".into(),
+            ));
+        }
+        let mut body = serde_json::json!({ "text": text });
+        if let Some(media_id) = media_id.map(str::trim).filter(|s| !s.is_empty()) {
+            body["attachments"] = serde_json::json!([{ "media_id": media_id }]);
+        }
+        let data = self
+            .post_dm_json(
+                "send dm",
+                &format!("/dm_conversations/{conversation}/messages"),
+                body,
+            )
+            .await?;
+        Ok(Self::parse_dm_send(data, None))
+    }
+
+    /// Send a Direct Message to a user, creating/reusing the one-to-one conversation.
+    pub async fn send_dm_to_user(
+        &self,
+        participant_id: &str,
+        text: &str,
+        media_id: Option<&str>,
+    ) -> Result<XDmSendResult> {
+        let participant = participant_id.trim();
+        let text = text.trim();
+        if participant.is_empty() || text.is_empty() {
+            return Err(Error::Channel(
+                "X send DM to user requires user_id and text".into(),
+            ));
+        }
+        let mut body = serde_json::json!({ "text": text });
+        if let Some(media_id) = media_id.map(str::trim).filter(|s| !s.is_empty()) {
+            body["attachments"] = serde_json::json!([{ "media_id": media_id }]);
+        }
+        let data = self
+            .post_dm_json(
+                "send dm to user",
+                &format!("/dm_conversations/with/{participant}/messages"),
+                body,
+            )
+            .await?;
+        Ok(Self::parse_dm_send(data, Some(participant.to_string())))
+    }
+
+    /// Get metadata for a single X list by ID.
+    pub async fn get_list(&self, list_id: &str) -> Result<XListInfo> {
+        if list_id.trim().is_empty() {
+            return Err(Error::Channel("X list_id is required".into()));
+        }
+        let params = vec![(
+            "list.fields".to_string(),
+            "id,name,description,private,member_count,follower_count,owner_id,created_at"
+                .to_string(),
+        )];
+        let url = self.read_url(&format!("/lists/{}", list_id.trim()), params);
+        let data = self.get_x_json(url, "get list").await?;
+        data.get("data")
+            .map(Self::parse_list_info)
+            .ok_or_else(|| Error::Channel(format!("X list {} not found", list_id.trim())))
+    }
+
+    /// Get lists owned by a user ID.
+    pub async fn get_owned_lists(&self, user_id: &str, opts: &XListOptions) -> Result<XListPage> {
+        if user_id.trim().is_empty() {
+            return Err(Error::Channel("X owned lists user_id is required".into()));
+        }
+        let url = self.read_url(
+            &format!("/users/{}/owned_lists", user_id.trim()),
+            self.list_query_params(opts),
+        );
+        let data = self.get_x_json(url, "owned lists").await?;
+        Ok(Self::parse_list_page(data))
+    }
+
+    /// Get lists a user is a member of.
+    pub async fn get_list_memberships(
+        &self,
+        user_id: &str,
+        opts: &XListOptions,
+    ) -> Result<XListPage> {
+        if user_id.trim().is_empty() {
+            return Err(Error::Channel(
+                "X list memberships user_id is required".into(),
+            ));
+        }
+        let url = self.read_url(
+            &format!("/users/{}/list_memberships", user_id.trim()),
+            self.list_query_params(opts),
+        );
+        let data = self.get_x_json(url, "list memberships").await?;
+        Ok(Self::parse_list_page(data))
+    }
+
+    /// Get lists followed by a user ID.
+    pub async fn get_followed_lists(
+        &self,
+        user_id: &str,
+        opts: &XListOptions,
+    ) -> Result<XListPage> {
+        if user_id.trim().is_empty() {
+            return Err(Error::Channel(
+                "X followed lists user_id is required".into(),
+            ));
+        }
+        let url = self.read_url(
+            &format!("/users/{}/followed_lists", user_id.trim()),
+            self.list_query_params(opts),
+        );
+        let data = self.get_x_json(url, "followed lists").await?;
+        Ok(Self::parse_list_page(data))
+    }
+
+    /// Get recent posts from a list. Use since_id/pagination_token for polling.
+    pub async fn get_list_tweets(&self, list_id: &str, opts: &XReadOptions) -> Result<XTweetList> {
+        if list_id.trim().is_empty() {
+            return Err(Error::Channel("X list_tweets list_id is required".into()));
+        }
+        let params = self.read_query_params(opts, 5);
+        let url = self.read_url(&format!("/lists/{}/tweets", list_id.trim()), params);
+        let data = self.get_x_json(url, "list tweets").await?;
+        Ok(Self::parse_tweet_list(data))
+    }
+
+    /// Create an X list.
+    pub async fn create_list(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        private: Option<bool>,
+    ) -> Result<XListInfo> {
+        if name.trim().is_empty() {
+            return Err(Error::Channel("X list name is required".into()));
+        }
+        let mut body = serde_json::json!({ "name": name.trim() });
+        if let Some(description) = description.map(str::trim).filter(|s| !s.is_empty()) {
+            body["description"] = serde_json::json!(description);
+        }
+        if let Some(private) = private {
+            body["private"] = serde_json::json!(private);
+        }
+        let data = self.post_list_json("create list", "/lists", body).await?;
+        data.get("data")
+            .map(Self::parse_list_info)
+            .ok_or_else(|| Error::Channel("X create list returned no list data".into()))
+    }
+
+    /// Update an X list's metadata.
+    pub async fn update_list(
+        &self,
+        list_id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        private: Option<bool>,
+    ) -> Result<XListInfo> {
+        if list_id.trim().is_empty() {
+            return Err(Error::Channel("X list_id is required".into()));
+        }
+        let mut body = serde_json::json!({});
+        if let Some(name) = name.map(str::trim).filter(|s| !s.is_empty()) {
+            body["name"] = serde_json::json!(name);
+        }
+        if let Some(description) = description.map(str::trim) {
+            body["description"] = serde_json::json!(description);
+        }
+        if let Some(private) = private {
+            body["private"] = serde_json::json!(private);
+        }
+        if body.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+            return Err(Error::Channel(
+                "X update list requires name, description, or private".into(),
+            ));
+        }
+        let data = self
+            .put_list_json("update list", &format!("/lists/{}", list_id.trim()), body)
+            .await?;
+        data.get("data")
+            .map(Self::parse_list_info)
+            .ok_or_else(|| Error::Channel("X update list returned no list data".into()))
+    }
+
+    /// Delete an X list.
+    pub async fn delete_list(&self, list_id: &str) -> Result<XListMutationResult> {
+        if list_id.trim().is_empty() {
+            return Err(Error::Channel("X list_id is required".into()));
+        }
+        let path = format!("/lists/{}", list_id.trim());
+        let data = self.delete_json("delete list", &path).await?;
+        Ok(Self::parse_list_mutation(
+            data,
+            "delete_list",
+            list_id,
+            None,
+            "deleted",
+            true,
+        ))
+    }
+
+    /// Add a user to an X list.
+    pub async fn add_list_member(
+        &self,
+        list_id: &str,
+        user_id: &str,
+    ) -> Result<XListMutationResult> {
+        let list = list_id.trim();
+        let user = user_id.trim();
+        if list.is_empty() || user.is_empty() {
+            return Err(Error::Channel(
+                "X add list member requires list_id and user_id".into(),
+            ));
+        }
+        let data = self
+            .post_list_json(
+                "add list member",
+                &format!("/lists/{list}/members"),
+                serde_json::json!({ "user_id": user }),
+            )
+            .await?;
+        Ok(Self::parse_list_mutation(
+            data,
+            "add_list_member",
+            list,
+            Some(user.to_string()),
+            "is_member",
+            true,
+        ))
+    }
+
+    /// Remove a user from an X list.
+    pub async fn remove_list_member(
+        &self,
+        list_id: &str,
+        user_id: &str,
+    ) -> Result<XListMutationResult> {
+        let list = list_id.trim();
+        let user = user_id.trim();
+        if list.is_empty() || user.is_empty() {
+            return Err(Error::Channel(
+                "X remove list member requires list_id and user_id".into(),
+            ));
+        }
+        let data = self
+            .delete_json(
+                "remove list member",
+                &format!("/lists/{list}/members/{user}"),
+            )
+            .await?;
+        Ok(Self::parse_list_mutation(
+            data,
+            "remove_list_member",
+            list,
+            Some(user.to_string()),
+            "is_member",
+            false,
+        ))
+    }
+
+    /// Follow an X list as a user.
+    pub async fn follow_list(&self, user_id: &str, list_id: &str) -> Result<XListMutationResult> {
+        let user = user_id.trim();
+        let list = list_id.trim();
+        if user.is_empty() || list.is_empty() {
+            return Err(Error::Channel(
+                "X follow list requires user_id and list_id".into(),
+            ));
+        }
+        let data = self
+            .post_list_json(
+                "follow list",
+                &format!("/users/{user}/followed_lists"),
+                serde_json::json!({ "list_id": list }),
+            )
+            .await?;
+        Ok(Self::parse_list_mutation(
+            data,
+            "follow_list",
+            list,
+            Some(user.to_string()),
+            "following",
+            true,
+        ))
+    }
+
+    /// Unfollow an X list as a user.
+    pub async fn unfollow_list(&self, user_id: &str, list_id: &str) -> Result<XListMutationResult> {
+        let user = user_id.trim();
+        let list = list_id.trim();
+        if user.is_empty() || list.is_empty() {
+            return Err(Error::Channel(
+                "X unfollow list requires user_id and list_id".into(),
+            ));
+        }
+        let data = self
+            .delete_json(
+                "unfollow list",
+                &format!("/users/{user}/followed_lists/{list}"),
+            )
+            .await?;
+        Ok(Self::parse_list_mutation(
+            data,
+            "unfollow_list",
+            list,
+            Some(user.to_string()),
+            "following",
+            false,
+        ))
+    }
+
     /// Get tweet metrics
     pub async fn get_tweet_metrics(&self, tweet_id: &str) -> Result<TweetMetrics> {
         let resp = self
             .client
             .get(format!(
                 "{}/tweets/{}?tweet.fields=public_metrics",
-                X_API_BASE, tweet_id
+                self.api_base, tweet_id
             ))
-            .header("Authorization", self.read_auth_header())
+            .header("Authorization", self.read_auth_header()?)
             .send()
             .await
             .map_err(|e| Error::Channel(format!("X metrics error: {}", e)))?;
@@ -796,6 +2247,50 @@ impl XAdapter {
         })
     }
 
+    /// Get public account metrics by user ID.
+    pub async fn get_account_metrics(&self, user_id: &str) -> Result<XAccountMetrics> {
+        let user_id = user_id.trim();
+        if user_id.is_empty() {
+            return Err(Error::Channel("X account metrics requires user_id".into()));
+        }
+
+        let url = format!(
+            "{}/users/{}?user.fields=public_metrics",
+            self.api_base, user_id
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .header("Authorization", self.read_auth_header()?)
+            .send()
+            .await
+            .map_err(|e| Error::Channel(format!("X account metrics error: {e}")))?;
+
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_else(|_| "unknown".into());
+            return Err(Error::Channel(format!("X account metrics failed: {text}")));
+        }
+
+        let data: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::Channel(format!("X account metrics parse: {e}")))?;
+        Ok(Self::parse_account_metrics(&data["data"]))
+    }
+
+    fn parse_account_metrics(user: &serde_json::Value) -> XAccountMetrics {
+        let metrics = &user["public_metrics"];
+        XAccountMetrics {
+            user_id: user["id"].as_str().unwrap_or_default().to_string(),
+            username: user["username"].as_str().map(str::to_string),
+            name: user["name"].as_str().map(str::to_string),
+            followers_count: metrics["followers_count"].as_u64().unwrap_or(0),
+            following_count: metrics["following_count"].as_u64().unwrap_or(0),
+            tweet_count: metrics["tweet_count"].as_u64().unwrap_or(0),
+            listed_count: metrics["listed_count"].as_u64().unwrap_or(0),
+        }
+    }
+
     /// Get authenticated user's profile
     pub async fn get_me(&self) -> Result<XUserProfile> {
         let resp = self
@@ -804,7 +2299,7 @@ impl XAdapter {
                 "{}/users/me?user.fields=description,public_metrics,verified,profile_image_url",
                 X_API_BASE
             ))
-            .header("Authorization", self.read_auth_header())
+            .header("Authorization", self.read_auth_header()?)
             .send()
             .await
             .map_err(|e| Error::Channel(format!("X get_me error: {}", e)))?;
@@ -1638,7 +3133,7 @@ mod tests {
             write_hdr, "Bearer user_ctx_token",
             "OAuth 2.0 must take priority over OAuth 1.0a for writes"
         );
-        let read_hdr = adapter.read_auth_header();
+        let read_hdr = adapter.read_auth_header().unwrap();
         assert_eq!(
             read_hdr, "Bearer user_ctx_token",
             "OAuth 2.0 must take priority over App-Only bearer for reads"
@@ -1761,6 +3256,164 @@ mod tests {
         assert_eq!(batch.results[3].status, XDeleteStatus::Skipped);
     }
 
+    #[tokio::test]
+    async fn test_search_recent_builds_polling_query_and_parses_page() {
+        use wiremock::matchers::{method, path, query_param, query_param_contains};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/tweets/search/recent"))
+            .and(query_param("query", "zeus"))
+            .and(query_param("since_id", "100"))
+            .and(query_param("max_results", "10"))
+            .and(query_param_contains("tweet.fields", "public_metrics"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{
+                    "id": "101",
+                    "text": "hello zeus",
+                    "author_id": "u1",
+                    "created_at": "2026-07-12T00:00:00.000Z",
+                    "conversation_id": "101",
+                    "public_metrics": {"like_count": 3, "retweet_count": 2, "reply_count": 1, "quote_count": 0, "impression_count": 99, "bookmark_count": 4},
+                    "attachments": {"media_keys": ["m1"]}
+                }],
+                "includes": {
+                    "users": [{"id": "u1", "username": "zeus", "name": "Zeus"}],
+                    "media": [{"media_key": "m1", "type": "photo", "url": "https://cdn.example/img.jpg", "alt_text": "diagram"}]
+                },
+                "meta": {"result_count": 1, "newest_id": "101", "oldest_id": "101", "next_token": "next"}
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let page = adapter
+            .search_recent(
+                "zeus",
+                &XReadOptions {
+                    since_id: Some("100".into()),
+                    max_results: Some(2),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(page.result_count, 1);
+        assert_eq!(page.next_token.as_deref(), Some("next"));
+        assert_eq!(page.tweets[0].id, "101");
+        assert_eq!(page.tweets[0].author_username.as_deref(), Some("zeus"));
+        assert_eq!(page.tweets[0].metrics.as_ref().unwrap().like_count, 3);
+        assert_eq!(page.tweets[0].media[0].media_type, MediaType::Image);
+    }
+
+    #[tokio::test]
+    async fn test_get_mentions_uses_user_id_path_and_since_cursor() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/42/mentions"))
+            .and(query_param("since_id", "200"))
+            .and(query_param("max_results", "5"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "201", "text": "@zeus ping", "author_id": "u2"}],
+                "includes": {"users": [{"id": "u2", "username": "friend", "name": "Friend"}]},
+                "meta": {"result_count": 1, "newest_id": "201", "oldest_id": "201"}
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let page = adapter
+            .get_mentions(
+                "42",
+                &XReadOptions {
+                    since_id: Some("200".into()),
+                    max_results: Some(1),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(page.tweets.len(), 1);
+        assert_eq!(page.tweets[0].author_name.as_deref(), Some("Friend"));
+    }
+
+    #[tokio::test]
+    async fn test_get_tweet_fetches_by_id_and_parses_reply_reference() {
+        use wiremock::matchers::{method, path, query_param_contains};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/tweets/300"))
+            .and(query_param_contains("tweet.fields", "referenced_tweets"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "id": "300",
+                    "text": "reply body",
+                    "author_id": "u3",
+                    "referenced_tweets": [{"type": "replied_to", "id": "299"}]
+                },
+                "includes": {"users": [{"id": "u3", "username": "replybot", "name": "Reply Bot"}]}
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let tweet = adapter.get_tweet("300").await.unwrap();
+
+        assert_eq!(tweet.id, "300");
+        assert_eq!(tweet.in_reply_to.as_deref(), Some("299"));
+        assert_eq!(tweet.author_username.as_deref(), Some("replybot"));
+    }
+
+    #[tokio::test]
+    async fn test_get_user_timeline_uses_pagination_token() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/42/tweets"))
+            .and(query_param("pagination_token", "cursor"))
+            .and(query_param("max_results", "25"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "401", "text": "timeline", "author_id": "42"}],
+                "includes": {"users": [{"id": "42", "username": "zeus", "name": "Zeus"}]},
+                "meta": {"result_count": 1, "newest_id": "401", "oldest_id": "401"}
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let page = adapter
+            .get_user_timeline(
+                "42",
+                &XReadOptions {
+                    pagination_token: Some("cursor".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(page.tweets[0].text, "timeline");
+        assert_eq!(page.newest_id.as_deref(), Some("401"));
+    }
+
     #[test]
     fn test_build_authorize_url() {
         let url = build_authorize_url(
@@ -1779,5 +3432,460 @@ mod tests {
         // redirect_uri and scopes must be percent-encoded.
         assert!(url.contains("redirect_uri=https%3A%2F%2Fexample.com%2Fcallback"));
         assert!(url.contains("scope=tweet.read%20tweet.write%20users.read%20offline.access"));
+    }
+
+    #[tokio::test]
+    async fn test_read_auth_header_rejects_oauth1_only_for_reads() {
+        let config = XConfig {
+            api_key: "ck".into(),
+            api_secret: "cs".into(),
+            access_token: "at".into(),
+            access_token_secret: "ats".into(),
+            ..Default::default()
+        };
+        let adapter = XAdapter::new(config).await.unwrap();
+        let err = adapter.read_auth_header().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("X reads require bearer_token or OAuth 2.0 access token"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_like_tweet_posts_user_action() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/users/42/likes"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "liked": true }
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let result = adapter.like_tweet("42", "99").await.unwrap();
+
+        assert_eq!(result.action, "like");
+        assert_eq!(result.user_id, "42");
+        assert_eq!(result.target_id, "99");
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_unlike_tweet_deletes_user_action() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/users/42/likes/99"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "liked": false }
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let result = adapter.unlike_tweet("42", "99").await.unwrap();
+
+        assert_eq!(result.action, "unlike");
+        assert_eq!(result.user_id, "42");
+        assert_eq!(result.target_id, "99");
+        assert!(result.success);
+    }
+    #[tokio::test]
+    async fn test_block_user_posts_user_action() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/users/42/blocking"))
+            .and(body_json(serde_json::json!({ "target_user_id": "99" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "blocking": true }
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let result = adapter.block_user("42", "99").await.unwrap();
+
+        assert_eq!(result.action, "block");
+        assert_eq!(result.user_id, "42");
+        assert_eq!(result.target_id, "99");
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_unmute_user_deletes_user_action() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/users/42/muting/99"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "muting": false }
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let result = adapter.unmute_user("42", "99").await.unwrap();
+
+        assert_eq!(result.action, "unmute");
+        assert_eq!(result.user_id, "42");
+        assert_eq!(result.target_id, "99");
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_hide_reply_puts_hidden_flag() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/tweets/777/hidden"))
+            .and(body_json(serde_json::json!({ "hidden": true })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "hidden": true }
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let result = adapter.hide_reply("777").await.unwrap();
+
+        assert_eq!(result.action, "hide_reply");
+        assert_eq!(result.target_id, "777");
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_get_owned_lists_parses_page() {
+        use wiremock::matchers::{method, path, query_param, query_param_contains};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/42/owned_lists"))
+            .and(query_param_contains("list.fields", "member_count"))
+            .and(query_param("max_results", "50"))
+            .and(query_param("pagination_token", "cursor"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{
+                    "id": "123",
+                    "name": "ops",
+                    "description": "infra watchlist",
+                    "private": true,
+                    "member_count": 7,
+                    "follower_count": 3,
+                    "owner_id": "42",
+                    "created_at": "2026-07-12T00:00:00Z"
+                }],
+                "meta": { "result_count": 1, "next_token": "next" }
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let page = adapter
+            .get_owned_lists(
+                "42",
+                &XListOptions {
+                    pagination_token: Some("cursor".into()),
+                    max_results: Some(50),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(page.result_count, 1);
+        assert_eq!(page.next_token.as_deref(), Some("next"));
+        assert_eq!(page.lists[0].id, "123");
+        assert_eq!(page.lists[0].name, "ops");
+        assert!(page.lists[0].private);
+        assert_eq!(page.lists[0].member_count, 7);
+    }
+
+    #[tokio::test]
+    async fn test_create_list_posts_list_body() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/lists"))
+            .and(body_json(serde_json::json!({
+                "name": "ops",
+                "description": "infra watchlist",
+                "private": true
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "data": {
+                    "id": "123",
+                    "name": "ops",
+                    "description": "infra watchlist",
+                    "private": true,
+                    "member_count": 0,
+                    "follower_count": 0
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let list = adapter
+            .create_list(" ops ", Some("infra watchlist"), Some(true))
+            .await
+            .unwrap();
+
+        assert_eq!(list.id, "123");
+        assert_eq!(list.name, "ops");
+        assert!(list.private);
+    }
+
+    #[tokio::test]
+    async fn test_add_list_member_posts_member_body() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/lists/123/members"))
+            .and(body_json(serde_json::json!({ "user_id": "42" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "is_member": true }
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let result = adapter.add_list_member("123", "42").await.unwrap();
+
+        assert_eq!(result.action, "add_list_member");
+        assert_eq!(result.list_id, "123");
+        assert_eq!(result.user_id.as_deref(), Some("42"));
+        assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn test_report_tweet_returns_capability_error() {
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), "http://127.0.0.1")
+            .await
+            .unwrap();
+        let err = adapter.report_tweet("777", Some("spam")).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("not available through the public X API v2"),
+            "got: {err}"
+        );
+    }
+    #[tokio::test]
+    async fn test_get_dm_events_builds_polling_query_and_parses_media() {
+        use wiremock::matchers::{method, path, query_param, query_param_contains};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/dm_events"))
+            .and(query_param("pagination_token", "tok1"))
+            .and(query_param("max_results", "2"))
+            .and(query_param_contains("dm_event.fields", "sender_id"))
+            .and(query_param_contains("expansions", "attachments.media_keys"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{
+                    "id": "e1",
+                    "text": "hello dm",
+                    "event_type": "MessageCreate",
+                    "created_at": "2026-07-12T00:00:00.000Z",
+                    "dm_conversation_id": "c1",
+                    "sender_id": "42",
+                    "participant_ids": ["42", "99"],
+                    "attachments": {"media_keys": ["m1"]}
+                }],
+                "includes": {"media": [{"media_key": "m1", "type": "photo", "url": "https://cdn.example/img.jpg"}]},
+                "meta": {"result_count": 1, "next_token": "tok2"}
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let page = adapter
+            .get_dm_events(&XDmOptions {
+                pagination_token: Some("tok1".into()),
+                max_results: Some(2),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(page.result_count, 1);
+        assert_eq!(page.next_token.as_deref(), Some("tok2"));
+        assert_eq!(page.events[0].sender_id.as_deref(), Some("42"));
+        assert_eq!(page.events[0].participant_ids, vec!["42", "99"]);
+        assert_eq!(page.events[0].attachments[0].media_key, "m1");
+    }
+
+    #[tokio::test]
+    async fn test_get_dm_conversation_events_requires_conversation_id() {
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), "http://127.0.0.1")
+            .await
+            .unwrap();
+        let err = adapter
+            .get_dm_conversation_events(" ", &XDmOptions::default())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("conversation_id"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_send_dm_posts_conversation_message_body() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/dm_conversations/c1/messages"))
+            .and(body_json(serde_json::json!({
+                "text": "ops ping",
+                "attachments": [{"media_id": "mid1"}]
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "data": {
+                    "dm_event_id": "e2",
+                    "dm_conversation_id": "c1",
+                    "text": "ops ping"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let sent = adapter
+            .send_dm("c1", " ops ping ", Some("mid1"))
+            .await
+            .unwrap();
+
+        assert_eq!(sent.dm_event_id.as_deref(), Some("e2"));
+        assert_eq!(sent.dm_conversation_id.as_deref(), Some("c1"));
+        assert_eq!(sent.text.as_deref(), Some("ops ping"));
+    }
+
+    #[tokio::test]
+    async fn test_send_dm_to_user_posts_with_user_path() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/dm_conversations/with/99/messages"))
+            .and(body_json(serde_json::json!({"text": "hello"})))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "data": {"id": "e3", "dm_conversation_id": "c2", "text": "hello"}
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let sent = adapter.send_dm_to_user("99", "hello", None).await.unwrap();
+
+        assert_eq!(sent.dm_event_id.as_deref(), Some("e3"));
+        assert_eq!(sent.participant_id.as_deref(), Some("99"));
+    }
+    #[tokio::test]
+    async fn test_get_tweet_metrics_uses_adapter_base_url() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/tweets/9001"))
+            .and(query_param("tweet.fields", "public_metrics"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "id": "9001",
+                    "public_metrics": {
+                        "like_count": 7,
+                        "retweet_count": 3,
+                        "reply_count": 2,
+                        "quote_count": 1,
+                        "impression_count": 1234,
+                        "bookmark_count": 5
+                    }
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let metrics = adapter.get_tweet_metrics("9001").await.unwrap();
+        assert_eq!(metrics.like_count, 7);
+        assert_eq!(metrics.impression_count, 1234);
+        assert_eq!(metrics.bookmark_count, 5);
+    }
+
+    #[tokio::test]
+    async fn test_get_account_metrics_uses_user_public_metrics() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/42"))
+            .and(query_param("user.fields", "public_metrics"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "id": "42",
+                    "username": "zeus",
+                    "name": "Zeus",
+                    "public_metrics": {
+                        "followers_count": 100,
+                        "following_count": 25,
+                        "tweet_count": 300,
+                        "listed_count": 4
+                    }
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_with_oauth2(), server.uri())
+            .await
+            .unwrap();
+        let metrics = adapter.get_account_metrics("42").await.unwrap();
+        assert_eq!(metrics.user_id, "42");
+        assert_eq!(metrics.username.as_deref(), Some("zeus"));
+        assert_eq!(metrics.followers_count, 100);
+        assert_eq!(metrics.listed_count, 4);
     }
 }

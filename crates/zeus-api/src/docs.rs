@@ -962,6 +962,25 @@ pub async fn docs_openapi(State(state): State<SharedState>) -> Response {
             "economyTransactions",
             "List transactions",
         ),
+        // On-chain wallet (Solana)
+        (
+            "get",
+            "/v1/wallet/onchain",
+            "onchainWalletInfo",
+            "On-chain wallet info (address, SOL balance, token balance, cluster)",
+        ),
+        (
+            "get",
+            "/v1/wallet/onchain/transactions",
+            "onchainTransactions",
+            "Recent on-chain transactions",
+        ),
+        (
+            "post",
+            "/v1/wallet/onchain/transfer",
+            "onchainTransfer",
+            "Execute devnet SPL token transfer (preflight + submit)",
+        ),
         // Uploads
         ("post", "/v1/uploads", "uploadFile", "Upload file"),
         ("get", "/v1/uploads", "listUploads", "List uploads"),
@@ -2167,6 +2186,9 @@ fn tag_from_path(path: &str) -> &str {
     }
     if path.starts_with("/v1/prometheus") {
         return "Prometheus";
+    }
+    if path.starts_with("/v1/wallet/onchain") {
+        return "On-chain Wallet";
     }
     if path.starts_with("/v1/workflows") {
         return "Workflows";

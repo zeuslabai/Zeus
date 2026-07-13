@@ -237,7 +237,8 @@ CLASSIC_ONBOARD=false
 WITH_WEBUI=false
 MCP_ONLY=false
 WEBUI_LISTEN="localhost"
-ZEUS_HOME="${HOME}/.zeus"
+DEFAULT_ZEUS_HOME="${HOME}/.zeus"
+ZEUS_HOME="${ZEUS_HOME:-$DEFAULT_ZEUS_HOME}"
 INSTALL_DIR="/usr/local/bin"
 
 # OS-aware LAN IP detection (FreeBSD has neither `ipconfig getifaddr` nor `hostname -I`)
@@ -300,7 +301,7 @@ while [ $# -gt 0 ]; do
             printf "  ${CS}--no-build${N}          Skip cargo build (use existing binary)\n"
             printf "  ${CS}--clean${N}             Clean build (cargo clean before build)\n"
             printf "  ${CS}--update${N}            Rebuild + install binary + restart (no config changes)\n"
-            printf "  ${CS}--with-identity${N}     With --update: also refresh workspace identity docs (SOUL.md stays onboarding-owned)\n"
+            printf "  ${CS}--with-identity${N}     With --update: also refresh workspace identity templates\n"
             printf "  ${CS}--no-launch${N}         Don't start gateway after install\n"
             printf "  ${CS}--classic${N}           Use classic CLI onboarding (no TUI)\n"
             printf "  ${CS}--with-webui${N}        Build and install WebUI (trunk + WASM)\n"
@@ -326,34 +327,45 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+SANDBOX_NO_LAUNCH=false
+if ! $DO_LAUNCH && [ "$ZEUS_HOME" != "$DEFAULT_ZEUS_HOME" ]; then
+    SANDBOX_NO_LAUNCH=true
+fi
+
 timer_start
 banner
 
 # ── Sudo check ──────────────────────────────────────────────────────────────
-# The installer needs sudo to copy the binary to /usr/local/bin, install
-# system dependencies, and set up OS services (launchd/rc.d).
-printf "${CS}→${N} ${W}This installer needs sudo access to:${N}\n"
-printf "  ${D}• Install the zeus binary to /usr/local/bin${N}\n"
-printf "  ${D}• Install system packages (cmake, protobuf, etc.)${N}\n"
-printf "  ${D}• Set up the gateway service (launchd/rc.d)${N}\n"
-printf "\n"
-if ! sudo -v 2>/dev/null; then
-    fail "sudo access required. Run with a user that has sudo privileges."
+# A custom ZEUS_HOME plus --no-launch is the supported installer repro shape.
+# Keep it hermetic: no sudo preflight, no global binary swap, no service stop.
+if $SANDBOX_NO_LAUNCH; then
+    info "Sandbox no-launch mode: custom ZEUS_HOME=$ZEUS_HOME; skipping sudo preflight and live service management"
+else
+    # The installer needs sudo to copy the binary to /usr/local/bin, install
+    # system dependencies, and set up OS services (launchd/rc.d).
+    printf "${CS}→${N} ${W}This installer needs sudo access to:${N}\n"
+    printf "  ${D}• Install the zeus binary to /usr/local/bin${N}\n"
+    printf "  ${D}• Install system packages (cmake, protobuf, etc.)${N}\n"
+    printf "  ${D}• Set up the gateway service (launchd/rc.d)${N}\n"
+    printf "\n"
+    if ! sudo -v 2>/dev/null; then
+        fail "sudo access required. Run with a user that has sudo privileges."
+    fi
+    # Keep sudo alive for the duration of the install.
+    # Self-bound to the installer PID: the keepalive polls `kill -0 $MAIN_PID` and
+    # exits within one sleep-cycle (≤50s) once install.sh is gone — even if the
+    # parent dies via SIGKILL or an SSH disconnect (rebuild-fleet) skips the trap.
+    # This prevents an orphaned `sudo -n true` loop from lingering and, in the
+    # worst case, interfering with the gateway it was meant to (re)start.
+    MAIN_PID=$$
+    (while kill -0 "$MAIN_PID" 2>/dev/null; do sudo -n true 2>/dev/null; sleep 50; done) &
+    SUDO_KEEPALIVE_PID=$!
+    # Trap the common exit paths so the keepalive is reaped promptly on a clean run.
+    # HUP catches the SSH-disconnect case (rebuild-fleet); EXIT/INT/TERM cover the
+    # normal/cancelled paths. SIGKILL can't be trapped — the self-bind above is the
+    # backstop for that.
+    trap "kill $SUDO_KEEPALIVE_PID 2>/dev/null" EXIT INT TERM HUP
 fi
-# Keep sudo alive for the duration of the install.
-# Self-bound to the installer PID: the keepalive polls `kill -0 $MAIN_PID` and
-# exits within one sleep-cycle (≤50s) once install.sh is gone — even if the
-# parent dies via SIGKILL or an SSH disconnect (rebuild-fleet) skips the trap.
-# This prevents an orphaned `sudo -n true` loop from lingering and, in the
-# worst case, interfering with the gateway it was meant to (re)start.
-MAIN_PID=$$
-(while kill -0 "$MAIN_PID" 2>/dev/null; do sudo -n true 2>/dev/null; sleep 50; done) &
-SUDO_KEEPALIVE_PID=$!
-# Trap the common exit paths so the keepalive is reaped promptly on a clean run.
-# HUP catches the SSH-disconnect case (rebuild-fleet); EXIT/INT/TERM cover the
-# normal/cancelled paths. SIGKILL can't be trapped — the self-bind above is the
-# backstop for that.
-trap "kill $SUDO_KEEPALIVE_PID 2>/dev/null" EXIT INT TERM HUP
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Phase 1: OS Detection
@@ -395,6 +407,10 @@ summary_row "Memory:" "$MEM"
 # Phase 2: Check dependencies + build
 # ═══════════════════════════════════════════════════════════════════════════
 phase "CHECK DEPENDENCIES"
+
+if $SANDBOX_NO_LAUNCH; then
+    info "Sandbox no-launch mode: skipping dependency installers and Rust toolchain mutations"
+else
 
 # Install platform build deps FIRST (needed for curl, cmake, etc. before Rust install)
 case "$OS" in
@@ -553,6 +569,8 @@ case "$OS" in
         ;;
 esac
 
+fi
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Phase 3: Locate/clone source
 # ═══════════════════════════════════════════════════════════════════════════
@@ -684,6 +702,10 @@ if $DO_BUILD; then
     summary_row "Binary:" "$BINARY_SIZE"
     summary_row "Log:" "$BUILD_LOG"
 
+    if $SANDBOX_NO_LAUNCH; then
+        info "Sandbox no-launch mode: skipping install to $INSTALL_DIR/zeus"
+    else
+
     # On the --update path, defer the binary install to SAFE UPDATE (post-stop
     # cp at the update fast path below). cp onto the *live* binary raises
     # ETXTBSY ("Text file busy") on FreeBSD and has the same busy-text exposure
@@ -741,6 +763,8 @@ if $DO_BUILD; then
 
     fi  # end !UPDATE_ONLY build-phase install (ETXTBSY guard)
 
+    fi  # end !SANDBOX_NO_LAUNCH build-phase install
+
     # ── macOS Full Disk Access reminder ──
     if [ "$(uname)" = "Darwin" ]; then
         info "Grant Full Disk Access for autonomous operation:"
@@ -750,6 +774,9 @@ if $DO_BUILD; then
 
     # ── WebUI Build (optional) ──
     if $WITH_WEBUI; then
+        if $SANDBOX_NO_LAUNCH; then
+            info "Sandbox no-launch mode: skipping WebUI build toolchain mutations"
+        else
         info "Building WebUI (trunk + WASM)..."
 
         if ! rustup target list --installed 2>/dev/null | grep -q wasm32-unknown-unknown; then
@@ -840,6 +867,7 @@ if $DO_BUILD; then
             fi
             cd "$REPO_ROOT"
         fi
+        fi
     fi
 
     # Detect stale binaries
@@ -860,6 +888,16 @@ if $UPDATE_ONLY; then
     phase "SAFE UPDATE"
     BINARY="$REPO_ROOT/target/release/zeus"
     [ ! -f "$BINARY" ] && fail "No binary found — run without --update first"
+
+    if $SANDBOX_NO_LAUNCH; then
+        info "Sandbox no-launch mode: build complete; skipping live gateway stop, binary swap, restart, and freshness checks"
+        printf "\n"
+        box_top
+        box_mid "$(printf "%bZeus sandbox update verified.%b  (%s)" "$G" "$N" "$(timer_elapsed)")"
+        box_bot
+        printf "\n"
+        exit 0
+    fi
 
     # Stop the gateway and WAIT for it to actually exit before swapping the
     # binary. A fixed 'sleep 2' loses the race against graceful shutdown
@@ -1210,7 +1248,7 @@ for repo in $MCP_REPOS; do
 done
 
 # ── Interactive: MCP server selection ──
-if [ -d "$MCP_SERVERS_DIR" ] && [ -t 0 ]; then
+if ! $SANDBOX_NO_LAUNCH && [ -d "$MCP_SERVERS_DIR" ] && [ -t 0 ]; then
     printf "\n  ${CS}→${N} ${W}Enable optional MCP servers?${N}\n\n"
     MCP_IDX=0
     MCP_NAMES=""
@@ -1437,7 +1475,6 @@ elif $WITH_WEBUI; then
     # wizard when ~/.zeus has no config.toml. A pre-seeded config with a model set
     # trips needs_onboarding's legacy "model set = done" path and silently SKIPS
     # onboarding (the bug merakizzz hit 2026-06-19). --with-webui only.
-    AGENT_HOSTNAME=$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo "zeus-agent")
     cat > "$ZEUS_HOME/config.toml" <<CFGEOF
 model = "anthropic/claude-sonnet-4-6"
 workspace = "$ZEUS_HOME/workspace"
@@ -1474,7 +1511,6 @@ enable_fts = true
 
 [agent]
 persona = "The Herald"
-name = "$AGENT_HOSTNAME"
 CFGEOF
     chmod 0600 "$ZEUS_HOME/config.toml"
     ok "Created minimal bootstrap config.toml for the WebUI gateway"
@@ -1488,30 +1524,49 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 phase "AGENT IDENTITY & MCP"
 
-AGENT_NAME=$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo "zeus-agent")
-info "Agent: $AGENT_NAME"
+AGENT_NAME=$(awk '
+    /^\[agent\]/ { in_section=1; next }
+    /^\[/ { in_section=0 }
+    in_section && $1 == "name" {
+        line=$0
+        sub(/^[^=]*=[[:space:]]*/, "", line)
+        gsub(/^"|"$/, "", line)
+        print line
+        exit
+    }' "$ZEUS_HOME/config.toml" 2>/dev/null || true)
+if [ -n "$AGENT_NAME" ]; then
+    info "Agent: $AGENT_NAME"
+else
+    info "Agent identity not configured yet; deploy-identity will skip instead of using hostname"
+fi
 
 # Deploy identity
 DEPLOY_ID="$REPO_ROOT/scripts/deploy-identity.sh"
 if [ -f "$DEPLOY_ID" ] && command -v bash >/dev/null 2>&1; then
-    bash "$DEPLOY_ID" --agent "$AGENT_NAME" --home "$ZEUS_HOME" --force \
-        && ok "Identity stamped" \
+    bash "$DEPLOY_ID" --home "$ZEUS_HOME" --force --no-host-fallback \
+        && ok "Identity stamped or intentionally skipped" \
         || warn "deploy-identity.sh failed"
 else
-    if "$INSTALL_DIR/zeus" tool generate_workspace '{"name":"'"$AGENT_NAME"'","force":false}' 2>/dev/null; then
+    if [ -n "$AGENT_NAME" ] && "$INSTALL_DIR/zeus" tool generate_workspace '{"name":"'"$AGENT_NAME"'","force":false}' 2>/dev/null; then
         ok "Workspace generated via zeus binary"
-    else
-        # Last resort: write minimal IDENTITY.md
+    elif [ -n "$AGENT_NAME" ]; then
+        # Last resort: write minimal IDENTITY.md for an explicit/configured name only.
         HN=$(hostname 2>/dev/null || echo "unknown")
         mkdir -p "$ZEUS_HOME/workspace/memory"
         printf "# IDENTITY.md — %s\n- **Name**: %s\n- **Host**: %s\n- **Role**: Zeus fleet agent\n" \
             "$AGENT_NAME" "$AGENT_NAME" "$HN" > "$ZEUS_HOME/workspace/IDENTITY.md"
         ok "Minimal identity written (run 'zeus onboard' for full templates)"
+    else
+        warn "No agent identity configured — skipped minimal identity fallback"
     fi
 fi
 
 # Daemon
-zeus daemon install 2>/dev/null && ok "Daemon service installed" || warn "Daemon install failed"
+if $SANDBOX_NO_LAUNCH; then
+    info "Sandbox no-launch mode: skipping daemon service install"
+else
+    zeus daemon install 2>/dev/null && ok "Daemon service installed" || warn "Daemon install failed"
+fi
 
 fi  # end: if ! $MCP_ONLY (gateway-oriented phases 5-8)
 
@@ -1520,6 +1575,10 @@ if $MCP_ONLY; then
     info "Skipping gateway service, onboarding, and launch (--mcp-only)"
     ok "Binary installed: $INSTALL_DIR/zeus — configuring MCP server only"
 fi
+
+if $SANDBOX_NO_LAUNCH; then
+    info "Sandbox no-launch mode: skipping Claude MCP configuration outside ZEUS_HOME"
+else
 
 # ── MCP Configuration ──────────────────────────────────────────────────────
 # Detect python3
@@ -1728,6 +1787,8 @@ fi
 
 ok "MCP setup complete — Zeus tools available as mcp__zeus__*"
 info "Restart Claude Code to pick up the new MCP server"
+
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 # macOS: Full Disk Access reminder

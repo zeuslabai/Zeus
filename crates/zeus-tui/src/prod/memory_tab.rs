@@ -36,10 +36,39 @@ impl MemorySubTab {
             return format!("{count} {unit}");
         }
 
+        format!("awaiting {}", self.endpoint())
+    }
+
+    pub fn endpoint(self) -> &'static str {
         match self {
-            Self::Workspace => "847 files".to_string(),
-            Self::Sessions => "147 sessions".to_string(),
-            Self::Mnemosyne => "12,847 facts".to_string(),
+            Self::Workspace => "/v1/memory/files",
+            Self::Sessions => "/v1/sessions",
+            Self::Mnemosyne => "/v1/memory/search",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Workspace => Self::Sessions,
+            Self::Sessions => Self::Mnemosyne,
+            Self::Mnemosyne => Self::Workspace,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Workspace => Self::Mnemosyne,
+            Self::Sessions => Self::Workspace,
+            Self::Mnemosyne => Self::Sessions,
+        }
+    }
+
+    pub fn from_key(n: usize) -> Option<Self> {
+        match n {
+            1 => Some(Self::Workspace),
+            2 => Some(Self::Sessions),
+            3 => Some(Self::Mnemosyne),
+            _ => None,
         }
     }
 
@@ -47,193 +76,6 @@ impl MemorySubTab {
         &[Self::Workspace, Self::Sessions, Self::Mnemosyne]
     }
 }
-
-pub struct FileEntry {
-    pub label: &'static str,
-    pub color: Color,
-    pub dirty: bool,
-    pub current: bool,
-}
-
-pub const WORKSPACE_FILES: &[FileEntry] = &[
-    FileEntry {
-        label: "AGENTS.md",
-        color: theme::FIRE_ORANGE,
-        dirty: false,
-        current: false,
-    },
-    FileEntry {
-        label: "SOUL.md",
-        color: theme::FIRE_ORANGE,
-        dirty: true,
-        current: false,
-    },
-    FileEntry {
-        label: "USER.md",
-        color: theme::TEXT,
-        dirty: false,
-        current: false,
-    },
-    FileEntry {
-        label: "HEARTBEAT.md",
-        color: theme::TEXT,
-        dirty: false,
-        current: false,
-    },
-    FileEntry {
-        label: "├ journals/",
-        color: theme::AMBER,
-        dirty: false,
-        current: false,
-    },
-    FileEntry {
-        label: "│ ├ 2026-05-03.md",
-        color: theme::TEXT,
-        dirty: false,
-        current: true,
-    },
-    FileEntry {
-        label: "│ ├ 2026-05-02.md",
-        color: theme::DIM,
-        dirty: false,
-        current: false,
-    },
-    FileEntry {
-        label: "│ ├ 2026-05-01.md",
-        color: theme::DIM,
-        dirty: false,
-        current: false,
-    },
-    FileEntry {
-        label: "│ └ ...",
-        color: theme::MUTED,
-        dirty: false,
-        current: false,
-    },
-    FileEntry {
-        label: "├ projects/",
-        color: theme::AMBER,
-        dirty: false,
-        current: false,
-    },
-    FileEntry {
-        label: "│ ├ zeus-tui-onboarding.md",
-        color: theme::TEXT,
-        dirty: false,
-        current: false,
-    },
-    FileEntry {
-        label: "│ ├ pantheon-impl.md",
-        color: theme::DIM,
-        dirty: false,
-        current: false,
-    },
-    FileEntry {
-        label: "│ └ deploy-fixes.md",
-        color: theme::DIM,
-        dirty: false,
-        current: false,
-    },
-    FileEntry {
-        label: "├ contexts/",
-        color: theme::AMBER,
-        dirty: false,
-        current: false,
-    },
-    FileEntry {
-        label: "│ └ fleet-2026-05.md",
-        color: theme::DIM,
-        dirty: false,
-        current: false,
-    },
-    FileEntry {
-        label: "└ scratch.md",
-        color: theme::DIM,
-        dirty: true,
-        current: false,
-    },
-];
-
-pub struct SessionEntry {
-    pub id: &'static str,
-    pub time: &'static str,
-    pub duration: &'static str,
-    pub tools: u32,
-    pub msgs: u32,
-    pub active: bool,
-    pub topic: &'static str,
-}
-
-pub const SESSIONS: &[SessionEntry] = &[
-    SessionEntry {
-        id: "s_2847",
-        time: "14:30",
-        duration: "12m",
-        tools: 47,
-        msgs: 23,
-        active: true,
-        topic: "TUI prototype design",
-    },
-    SessionEntry {
-        id: "s_2846",
-        time: "14:00",
-        duration: "28m",
-        tools: 89,
-        msgs: 41,
-        active: false,
-        topic: "Onboarding impl PRD review",
-    },
-    SessionEntry {
-        id: "s_2845",
-        time: "13:15",
-        duration: "45m",
-        tools: 142,
-        msgs: 67,
-        active: false,
-        topic: "Comprehensive wizard prototype",
-    },
-    SessionEntry {
-        id: "s_2844",
-        time: "11:30",
-        duration: "1h 12m",
-        tools: 234,
-        msgs: 98,
-        active: false,
-        topic: "Voice / image gen PRDs",
-    },
-    SessionEntry {
-        id: "s_2843",
-        time: "yesterday 18:45",
-        duration: "23m",
-        tools: 56,
-        msgs: 34,
-        active: false,
-        topic: "Fleet shakedown audit",
-    },
-    SessionEntry {
-        id: "s_2842",
-        time: "yesterday 16:20",
-        duration: "55m",
-        tools: 178,
-        msgs: 72,
-        active: false,
-        topic: "Pitch deck v5",
-    },
-];
-
-pub struct SearchResult {
-    pub text: &'static str,
-    pub score: f64,
-    pub age: &'static str,
-    pub source: &'static str,
-}
-
-pub const SEARCH_RESULTS: &[SearchResult] = &[
-    SearchResult { text: "Mike confirmed Track C blockers ship in Phase 0 — [talos] always-write, [images]→[talos.image], heartbeat persistence", score: 0.94, age: "8m ago", source: "session 2847" },
-    SearchResult { text: "ChanConfig forms must be stacked (all visible) not sequential per merakizzz directive 2026-05-03", score: 0.91, age: "30m ago", source: "session 2846" },
-    SearchResult { text: "Z-Image Turbo on DGX requires steps=1 — multi-step inference returns black PNG", score: 0.88, age: "1h ago", source: "session 2845" },
-    SearchResult { text: "Mac Studio M5 Ultra release tracked — 256GB RAM target for AI inference workloads", score: 0.85, age: "yesterday", source: "session 2843" },
-];
 
 #[derive(Default, Clone, Copy)]
 pub struct MemoryLive<'a> {
@@ -332,7 +174,7 @@ fn render_workspace(
         .split(area);
 
     render_workspace_tree(chunks[0], buf, scroll, live);
-    render_journal(chunks[1], buf);
+    render_journal(chunks[1], buf, live);
 }
 
 fn render_workspace_tree(
@@ -353,116 +195,103 @@ fn render_workspace_tree(
     );
     y += 2;
 
-    if let Some(files) = live {
-        for (i, file) in files.iter().enumerate().skip(scroll as usize) {
-            if y >= area.bottom() {
-                break;
-            }
-            let is_dir = file.path.ends_with('/');
-            let current = i == 0;
-            let style = file_style(if is_dir { theme::AMBER } else { theme::TEXT }, current);
-            let marker = if current { " ◀" } else { "" };
-            let row = format!("  ├ {}{}", file.path, marker);
-            paint_current_row(area, buf, y, current);
-            buf.set_string_clamped(area.x + 2, y, row, style);
-            y += 1;
-        }
+    let Some(files) = live else {
+        render_status_line(area, buf, y, "Waiting for /v1/memory/files…");
+        return;
+    };
+
+    if files.is_empty() {
+        render_status_line(area, buf, y, "No workspace files returned by /v1/memory/files");
         return;
     }
 
-    for file in WORKSPACE_FILES.iter().skip(scroll as usize) {
+    for (i, file) in files.iter().enumerate().skip(scroll as usize) {
         if y >= area.bottom() {
             break;
         }
-        let dirty = if file.dirty { " ●" } else { "" };
-        let marker = if file.current { " ◀" } else { "" };
-        let row = format!("  {}{}{}", file.label, dirty, marker);
-        paint_current_row(area, buf, y, file.current);
-        buf.set_string_clamped(area.x + 2, y, row, file_style(file.color, file.current));
+        let is_dir = file.path.ends_with('/');
+        let current = i == 0;
+        let style = file_style(if is_dir { theme::AMBER } else { theme::TEXT }, current);
+        let marker = if current { " ◀" } else { "" };
+        let row = format!("  ├ {}{}", file.path, marker);
+        paint_current_row(area, buf, y, current);
+        buf.set_string_clamped(area.x + 2, y, row, style);
         y += 1;
     }
 }
 
-fn render_journal(area: Rect, buf: &mut ratatui::buffer::Buffer) {
-    if area.width < 8 || area.height == 0 {
+fn render_journal(
+    area: Rect,
+    buf: &mut ratatui::buffer::Buffer,
+    live: Option<&[crate::api::MemoryFileEntry]>,
+) {
+    fill_rect(buf, area, Style::default().bg(theme::BG_PANEL));
+    if area.width < 8 || area.height < 4 {
         return;
     }
-    fill_rect(buf, area, Style::default().bg(theme::BG));
-    let header = Rect::new(area.x, area.y, area.width, area.height.min(3));
-    fill_rect(buf, header, Style::default().bg(theme::BG_PANEL));
-    draw_bottom_border(header, buf);
 
     let mut x = area.x + 2;
     let y = area.y + 1;
     buf.set_string_clamped(
         x,
         y,
-        "JOURNAL",
+        "FILE PREVIEW",
         Style::default()
             .fg(theme::ACCENT_DIM)
             .add_modifier(Modifier::BOLD),
     );
-    x += 10;
-    buf.set_string_clamped(x, y, "2026-05-03.md", Style::default().fg(theme::DIM));
-    let meta = "last modified · 2 minutes ago";
-    let meta_x = area.right().saturating_sub(meta.len() as u16 + 2);
-    if meta_x > x + 16 {
-        buf.set_string_clamped(meta_x, y, meta, Style::default().fg(theme::MUTED));
-    }
+    x += 14;
 
-    let mut cy = area.y + 4;
-    put_line(
-        area,
-        buf,
-        &mut cy,
-        "# Journal · 2026-05-03",
-        theme::FIRE_ORANGE,
-        true,
-    );
-    put_line(
-        area,
-        buf,
-        &mut cy,
-        "Saturday · zeus.local",
-        theme::DIM,
-        false,
-    );
-    cy += 1;
-    put_line(area, buf, &mut cy, "## Sessions", theme::AMBER, true);
-    put_wrapped(area, buf, &mut cy, "Worked through the comprehensive onboarding wizard impl PRD with merakizzz. Walked all 19 steps. Locked the feature surface. Track C (Talos gate, [images] migration, heartbeat persistence) confirmed as pre-launch blockers.", theme::TEXT);
-    cy += 1;
-    put_line(area, buf, &mut cy, "## Decisions", theme::AMBER, true);
-    put_wrapped(
-        area,
-        buf,
-        &mut cy,
-        "- Image gen routes to [talos.image], not [images]",
-        theme::TEXT,
-    );
-    put_wrapped(
-        area,
-        buf,
-        &mut cy,
-        "- ChanConfig forms render stacked, not sequential",
-        theme::TEXT,
-    );
-    put_wrapped(
-        area,
-        buf,
-        &mut cy,
-        "- Memory step pre-selects Ollama if detected at localhost:11434",
-        theme::TEXT,
-    );
-    cy += 1;
-    put_line(area, buf, &mut cy, "## Next", theme::AMBER, true);
-    put_wrapped(area, buf, &mut cy, "- Ship Phase 0 blockers", theme::TEXT);
-    put_wrapped(
-        area,
-        buf,
-        &mut cy,
-        "- Render-gate every prod tab against the prototype",
-        theme::TEXT,
-    );
+    match live {
+        None => {
+            buf.set_string_clamped(
+                x,
+                y,
+                "waiting for /v1/memory/files",
+                Style::default().fg(theme::DIM),
+            );
+            let mut cy = area.y + 4;
+            put_wrapped(
+                area,
+                buf,
+                &mut cy,
+                "File preview is idle until the gateway returns real workspace memory files.",
+                theme::TEXT,
+            );
+        }
+        Some([]) => {
+            buf.set_string_clamped(x, y, "no files", Style::default().fg(theme::DIM));
+            let mut cy = area.y + 4;
+            put_wrapped(
+                area,
+                buf,
+                &mut cy,
+                "No workspace memory files were returned by /v1/memory/files.",
+                theme::TEXT,
+            );
+        }
+        Some(files) => {
+            let file = &files[0];
+            buf.set_string_clamped(x, y, short(&file.path, 36), Style::default().fg(theme::DIM));
+            let meta = format!("{} bytes · {}", file.size, empty_dash(&file.modified));
+            let meta_x = area.right().saturating_sub(meta.len() as u16 + 2);
+            if meta_x > x + 16 {
+                buf.set_string_clamped(meta_x, y, meta, Style::default().fg(theme::MUTED));
+            }
+
+            let mut cy = area.y + 4;
+            put_line(area, buf, &mut cy, "# Live memory file", theme::FIRE_ORANGE, true);
+            put_wrapped(area, buf, &mut cy, &file.path, theme::TEXT);
+            cy += 1;
+            put_wrapped(
+                area,
+                buf,
+                &mut cy,
+                "Content preview intentionally stays blank until a selected-file /v1/memory/file fetch is wired; no prototype journal text is shown.",
+                theme::DIM,
+            );
+        }
+    }
 }
 
 fn render_sessions(
@@ -474,50 +303,34 @@ fn render_sessions(
     fill_rect(buf, area, Style::default().bg(theme::BG));
     let mut y = area.y + 1;
 
-    if let Some(sessions) = live {
-        for (i, session) in sessions.iter().enumerate().skip(scroll as usize) {
-            if y >= area.bottom() {
-                break;
-            }
-            let id: String = session.id.chars().take(8).collect();
-            let stats = format!(
-                "~{} tok · {} msgs",
-                session.est_tokens, session.message_count
-            );
-            render_session_row(
-                area,
-                buf,
-                y,
-                SessionRow {
-                    active: i == 0,
-                    id: &id,
-                    time: &session.created,
-                    topic: &session.last_preview,
-                    stats: &stats,
-                },
-            );
-            y += 2;
-        }
+    let Some(sessions) = live else {
+        render_status_line(area, buf, y, "Waiting for /v1/sessions…");
+        return;
+    };
+
+    if sessions.is_empty() {
+        render_status_line(area, buf, y, "No sessions returned by /v1/sessions");
         return;
     }
 
-    for session in SESSIONS.iter().skip(scroll as usize) {
+    for (i, session) in sessions.iter().enumerate().skip(scroll as usize) {
         if y >= area.bottom() {
             break;
         }
+        let id: String = session.id.chars().take(8).collect();
         let stats = format!(
-            "{} · {} tools · {} msgs",
-            session.duration, session.tools, session.msgs
+            "~{} tok · {} msgs",
+            session.est_tokens, session.message_count
         );
         render_session_row(
             area,
             buf,
             y,
             SessionRow {
-                active: session.active,
-                id: session.id,
-                time: session.time,
-                topic: session.topic,
+                active: i == 0,
+                id: &id,
+                time: &session.created,
+                topic: &session.last_preview,
                 stats: &stats,
             },
         );
@@ -546,7 +359,7 @@ fn render_mnemosyne(
         prompt,
         Style::default().fg(theme::DIM),
     );
-    let embedded = "● ollama embedded";
+    let embedded = "● /v1/memory/search";
     let ex = chunks[0].right().saturating_sub(embedded.len() as u16 + 2);
     buf.set_string_clamped(
         ex,
@@ -555,8 +368,10 @@ fn render_mnemosyne(
         Style::default().fg(theme::CYAN),
     );
 
-    let count = live.map_or("12,847".to_string(), |hits| hits.len().to_string());
-    let title = format!("RECENT FACTS · {count} indexed");
+    let count = live
+        .map(|hits| hits.len().to_string())
+        .unwrap_or_else(|| "awaiting".to_string());
+    let title = format!("RECENT FACTS · {count}");
     let mut y = chunks[1].y + 1;
     buf.set_string_clamped(
         chunks[1].x + 2,
@@ -568,32 +383,50 @@ fn render_mnemosyne(
     );
     y += 2;
 
-    if let Some(hits) = live {
-        for hit in hits.iter().skip(scroll as usize) {
-            if y + 3 >= chunks[1].bottom() {
-                break;
-            }
-            let source = hit
-                .memory_type
-                .as_deref()
-                .or(hit.path.as_deref())
-                .or(hit.session_id.as_deref())
-                .unwrap_or("memory");
-            let meta = format!("{:.2} · {source} · live", hit.score);
-            render_fact_card(chunks[1], buf, y, &meta, &hit.content);
-            y += 5;
-        }
+    let Some(hits) = live else {
+        render_status_line(chunks[1], buf, y, "Waiting for /v1/memory/search…");
+        return;
+    };
+
+    if hits.is_empty() {
+        render_status_line(chunks[1], buf, y, "No memory hits returned by /v1/memory/search");
         return;
     }
 
-    for result in SEARCH_RESULTS.iter().skip(scroll as usize) {
+    for hit in hits.iter().skip(scroll as usize) {
         if y + 3 >= chunks[1].bottom() {
             break;
         }
-        let meta = format!("{:.2} · {} · {}", result.score, result.source, result.age);
-        render_fact_card(chunks[1], buf, y, &meta, result.text);
+        let source = hit
+            .memory_type
+            .as_deref()
+            .or(hit.path.as_deref())
+            .or(hit.session_id.as_deref())
+            .unwrap_or("memory");
+        let meta = format!("{:.2} · {source} · live", hit.score);
+        render_fact_card(chunks[1], buf, y, &meta, &hit.content);
         y += 5;
     }
+}
+
+fn render_status_line(area: Rect, buf: &mut ratatui::buffer::Buffer, y: u16, text: &str) {
+    if y < area.bottom() {
+        buf.set_string_clamped(area.x + 2, y, text, Style::default().fg(theme::DIM));
+    }
+}
+
+fn empty_dash(s: &str) -> &str {
+    if s.trim().is_empty() { "—" } else { s }
+}
+
+fn short(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let keep = max.saturating_sub(1);
+    let mut out = s.chars().take(keep).collect::<String>();
+    out.push('…');
+    out
 }
 
 struct SessionRow<'a> {

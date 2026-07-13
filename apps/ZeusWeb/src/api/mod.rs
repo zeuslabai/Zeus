@@ -1805,6 +1805,16 @@ pub async fn economy_stake(agent_id: &str, amount: u64, purpose: &str) -> Result
     post_json("/v1/economy/stake", &serde_json::json!({ "agent_id": agent_id, "amount": amount, "purpose": purpose })).await
 }
 
+pub async fn economy_unstake(agent_id: &str, stake_id: &str) -> Result<serde_json::Value, String> {
+    post_json("/v1/economy/unstake", &serde_json::json!({ "agent_id": agent_id, "stake_id": stake_id })).await
+}
+
+pub async fn economy_transfer(from: &str, to: &str, amount: u64, note: Option<&str>) -> Result<serde_json::Value, String> {
+    post_json("/v1/economy/transfer", &serde_json::json!({
+        "from": from, "to": to, "amount": amount, "note": note,
+    })).await
+}
+
 pub async fn hire_agent(caller_id: &str, task: &str, skill_name: Option<&str>, max_credits: u64) -> Result<serde_json::Value, String> {
     post_json("/v1/agents/hire", &serde_json::json!({
         "caller_id": caller_id, "task": task, "skill_name": skill_name, "input": {}, "max_credits": max_credits,

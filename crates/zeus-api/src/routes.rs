@@ -956,6 +956,16 @@ fn build_base_router(state: SharedState, rate_limit_config: Option<RateLimitConf
             "/v1/economy/earnings/:agent_id",
             get(handlers::fleet::economy_earnings),
         )
+        // On-chain wallet (parallel to /v1/economy/* — this is the Solana surface)
+        .route("/v1/wallet/onchain", get(handlers::onchain_wallet_info))
+        .route(
+            "/v1/wallet/onchain/transactions",
+            get(handlers::onchain_transactions),
+        )
+        .route(
+            "/v1/wallet/onchain/transfer",
+            post(handlers::onchain_transfer),
+        )
         .route("/v1/teams/form", post(handlers::fleet::team_form))
         .route("/v1/teams/:id/wallet", get(handlers::fleet::team_wallet))
         .route("/v1/teams/:id/split", post(handlers::fleet::team_split))
@@ -1457,7 +1467,8 @@ async fn no_token_middleware(
 
 /// True if the (normalized) path is under the money-handling economy API group.
 fn is_economy_path(path: &str) -> bool {
-    normalize_path(path).starts_with("/v1/economy/")
+    let p = normalize_path(path);
+    p.starts_with("/v1/economy/") || p.starts_with("/v1/wallet/onchain")
 }
 
 /// True if the economy path carries its OWN cryptographic authentication and so

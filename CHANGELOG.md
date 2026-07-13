@@ -4,6 +4,68 @@ All notable changes to Zeus are documented here.
 
 ---
 
+## [Unreleased] - 2026-07-09 to 2026-07-12
+
+Four-day sprint: full X (Twitter) community management suite, wallet UI wiring, soul restoration, hardening batch (#329–#335), and 13 more messaging channels wired end-to-end.
+
+### Added
+
+**X (Twitter) Community Suite — #336, #339 (42 tools total)**
+- **Delete** (#336): `x_delete_post`, `x_batch_delete` (per-item deleted/failed/skipped results, Retry-After backoff), legacy `x_delete` preserved (`7c140d7a`)
+- **Read / listening** (#339): `x_search_recent`, `x_get_mentions`, `x_get_tweet`, `x_get_user_timeline` with `since_id` polling (`ccfce94f`)
+- **Engagement** (#339): `x_like`/`x_unlike`, `x_retweet`/`x_unretweet`, `x_quote`, `x_follow`/`x_unfollow`, `x_bookmark`/`x_unbookmark`, `x_upload_media` (`224f8bdf`)
+- **Moderation** (#339): `x_block`/`x_unblock`, `x_mute`/`x_unmute`, `x_report_tweet`, `x_hide_reply`/`x_unhide_reply` (`47f99635`)
+- **Lists** (#339): `x_create_list`, `x_update_list`, `x_delete_list`, `x_add_list_member`, `x_remove_list_member`, `x_get_list`, `x_get_owned_lists`, `x_get_followed_lists`, `x_get_list_memberships`, `x_get_list_tweets`, `x_follow_list`, `x_unfollow_list` (`6e2f7718`)
+- **DMs** (#339): `x_send_dm`, `x_send_dm_to_user`, `x_get_dm_events`, `x_get_dm_conversation_events` (`4f4c8013`)
+- **Metrics** (#339): `x_account_metrics`, `x_metrics` (`a2c7799f`)
+- Core `message` tool now dispatches to `x_twitter`/`x`/`twitter` channel aliases for post/reply
+- Reads require bearer token / OAuth2 — clear error surfaced when only OAuth1 credentials are configured
+
+**Wallet UI Wiring — #190**
+- Wired wallet send flow: `economy_transfer` + `economy_unstake` API wrappers, Agora page now uses typed API calls (`313779a7`)
+- Added `economy_transfer` + `economy_unstake` methods to the TUI API client, updated Send view (`98a3649a`)
+- Fixed `economy_unstake` missing `agent_id` param (`96d9cc03`)
+
+**13 More Messaging Channels Wired — #316 P3**
+- Teams, WebChat, GoogleChat, Nextcloud (batch 1 — `0774b6c3`)
+- Nostr, LINE, Feishu, Zalo (batch 2a — `fe07ce79`)
+- BlueBubbles, SMS, Twilio WhatsApp, Voice (batch 2b — `cbad5332`)
+- iMessage boot-banner presence, Twitch adapter construction, MQTT dedup fixed (P1 — `e7c6ceb8`)
+- Mattermost + MQTT added to onboarding channel grid + config + persistence (P2③ — `ae0ad1d7`)
+- `send_file`/`send_rich` channel param docs now reflect real dispatch (P2④ — `021295b3`)
+
+**Soul Self-Rewrite Skill — #327**
+- Proposal-only SOUL self-rewrite skill: an agent can draft changes to its own SOUL.md for operator review, never writes unilaterally (`45d2854e`)
+
+**Solana Devnet Plumbing — #306**
+- Airdrop, balance queries, `rpc_url` derivation (`9327086f`)
+
+### Fixed
+
+**Soul Restoration — #338**
+- Restored two intentional SOUL.md writers (reverting #326's over-correction to a single writer): onboarding writes the selected persona's SOUL on setup, and `--with-identity` re-stamps it on deploy — both routed through the shared `write_onboarding_soul`/#202 semantics (heal stub/missing souls, preserve custom ones unless forced) (`63b98242`, `58f1f7af`)
+
+**Onboarding Arrow-Key Routing — #337 / TUI**
+- Fixed arrow keys not routing correctly during instance onboarding (`18aef4c8`)
+
+**Hardening Batch — #329 through #335**
+- `#329` runtime-independent OS-thread hard shutdown deadline (`163e7f0e`)
+- `#330` re-arm heartbeat interval at head of timed branch — kills a `sleep(0)` busy-loop (`0b7b06e2`)
+- `#331` macOS sleep immunity — gateway holds an IOPM `PreventSystemSleep` assertion (`0b452298`)
+- `#332` five-cut logging/lifecycle pass: sink reliability (reopen-on-external-delete, WARN+ fsync, stderr outage fallback), adapter lifecycle uniformity across all connection-owning SDKs, boot fingerprint + clock-sanity WARN, named shutdown-drain tasks, per-subsystem `[logging.targets]` level knobs (`8e79de22`…`cea0695c`)
+- `#333` `update.sh` Phase 7 — supervised restart or loud failure, never a silent `nohup` (`576223cc`)
+- `#334` killed an env-var race class in `zeus-tui` tests (`b31db80f`)
+- `#335` probe Ollama before showing "detected" badges in onboarding (`2e1dfb49`)
+- `#309` guard config writes against debris preservation; detect post-nuke config debris at boot with a loud warn (no auto-repair) (`7375c20e`, `159d78d4`)
+- `#328` forensics: log SIGTERM sender pid/uid via `SA_SIGINFO`; Discord shard-disconnect visibility via `serenity=warn` filter + stage-transition forensics (`1dfe2c1d`, `a95bb2f5`)
+- `#322` watchdog service — FreeBSD respawn, systemd crash-loop protection, health-poll watchdog; supervisor pidfile + single-shot watchdog gate bounce fix (`2d6894f2`, `e3394191`)
+
+### Infrastructure
+- `#66` local cross-compile release pipeline with `--dry-run` mode (`bc1eb056`)
+- Vendored OpenSSL via `zeus-solana` feature flag for release builds
+
+---
+
 ## [S92] - 2026-03-29
 
 Sprint 92 — Agent voice investigation and synthesis. Two independent analyses of why Zeus agents sound robotic were combined into a single actionable architecture document.

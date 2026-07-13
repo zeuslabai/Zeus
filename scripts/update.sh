@@ -81,7 +81,7 @@ while [ $# -gt 0 ]; do
             printf "  --clean           cargo clean before building\n"
             printf "  --no-restart      Install the new binary but leave the gateway stopped\n"
             printf "  --fresh           Clear sessions after the update\n"
-            printf "  --with-identity   Re-stamp workspace identity docs via deploy-identity.sh --force (SOUL.md stays onboarding-owned)\n"
+            printf "  --with-identity   Re-stamp workspace identity templates via deploy-identity.sh --force\n"
             printf "  --zeus-home DIR   Zeus home directory (default: ~/.zeus)\n"
             printf "  -h, --help        Show this help\n"
             exit 0
@@ -93,7 +93,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# --with-identity adds one extra step (workspace identity refresh; SOUL.md stays onboarding-owned).
+# --with-identity adds one extra step (workspace identity refresh).
 $WITH_IDENTITY && total_steps=9
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -281,14 +281,14 @@ NEW_VER="$("$INSTALLED_BINARY" --version 2>/dev/null || echo 'unknown')"
 ok "Installed: $INSTALLED_BINARY ($NEW_VER)"
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Phase 6b: Refresh workspace identity docs (optional, --with-identity)
+# Phase 6b: Refresh workspace identity (optional, --with-identity)
 # ═════════════════════════════════════════════════════════════════════════════
-# Re-stamp AGENTS.md / IDENTITY.md / HEARTBEAT.md / etc. from the (now-updated) repo's
+# Re-stamp AGENTS.md / SOUL.md / HEARTBEAT.md / etc. from the (now-updated) repo's
 # deploy-identity.sh. Runs BEFORE the restart so the gateway comes up with fresh
 # identity. The binary swap alone does NOT refresh workspace templates — mirrors
 # install.sh's --with-identity behaviour.
 if $WITH_IDENTITY; then
-    step "Refresh workspace identity docs"
+    step "Refresh workspace identity"
     DEPLOY_IDENTITY="$REPO_ROOT/scripts/deploy-identity.sh"
     if [ -f "$DEPLOY_IDENTITY" ]; then
         info "Running deploy-identity.sh --force"

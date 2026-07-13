@@ -1208,10 +1208,8 @@ pub fn AgoraPage() -> impl IntoView {
                                                     .map(|r| format!("Staked! Stake ID: {}", r.get("stake_id").and_then(|v| v.as_str()).unwrap_or("ok")))
                                             }
                                             "unstake" => {
-                                                let amt: f64 = stake_amount.get_untracked().parse().unwrap_or(0.0);
                                                 let sid = unstake_id.get_untracked();
-                                                let payload = serde_json::json!({ "agent_id": agent_id, "amount": amt, "stake_id": sid });
-                                                api::post_json::<serde_json::Value, serde_json::Value>("/v1/economy/unstake", &payload).await
+                                                api::economy_unstake(&agent_id, &sid).await
                                                     .map(|r| format!("Released {} ⚡", r.get("amount_released").and_then(|v| v.as_f64()).map(|n| n.to_string()).unwrap_or("ok".to_string())))
                                             }
                                             "earn" => {
@@ -1231,8 +1229,7 @@ pub fn AgoraPage() -> impl IntoView {
                                                 let amt: f64 = transfer_amount.get_untracked().parse().unwrap_or(0.0);
                                                 let to = transfer_to.get_untracked();
                                                 let note = transfer_note.get_untracked();
-                                                let payload = serde_json::json!({ "from": agent_id, "to": to, "amount": amt, "note": note });
-                                                api::post_json::<serde_json::Value, serde_json::Value>("/v1/economy/transfer", &payload).await
+                                                api::economy_transfer(&agent_id, &to, amt as u64, if note.is_empty() { None } else { Some(&note) }).await
                                                     .map(|_| "Transfer complete!".to_string())
                                             }
                                         };

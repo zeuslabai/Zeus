@@ -494,6 +494,25 @@ impl AgentScreen {
         &self.persona().name
     }
 
+    /// SOUL.md persona body for the currently selected persona.
+    pub fn persona_soul_body(&self) -> String {
+        let persona = self.persona();
+        let mut body = persona.name.clone();
+        if !persona.sub.trim().is_empty() {
+            body.push_str(" — ");
+            body.push_str(persona.sub.trim());
+        }
+        if !persona.tone.trim().is_empty() {
+            body.push_str("\n\nTone: ");
+            body.push_str(persona.tone.trim());
+        }
+        if !persona.principles.is_empty() {
+            body.push_str("\n\n");
+            body.push_str(&persona.principles.join("\n"));
+        }
+        body
+    }
+
     /// Effective agent name for the summary (user-entered or suggested).
     pub fn summary_name(&self) -> String {
         self.effective_name()
