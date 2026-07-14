@@ -5,7 +5,7 @@
 //! longer ships a fabricated sample roster/ledger: with no live data every
 //! view renders an honest empty state, and live `/v1/economy/*` data drives
 //! the Balance fleet list + Activity ledger. ZEUS token is on-chain
-//! (zeus-wallet) with no gateway endpoint → honest dash.
+//! (zeus-wallet) now overlays live `/v1/wallet/onchain` data → honest waiting/dash.
 //!
 //! These exercise the WalletTab Widget directly, asserting:
 //!   - header glyph "⊟ WALLET" + the 1–6 sub-view switcher row (JSX VIEWS);
@@ -18,7 +18,10 @@ use ratatui::backend::TestBackend;
 use ratatui::widgets::Widget;
 use ratatui::Terminal;
 
-use zeus_tui::api::{EconomyTxResponse, EconomyWalletResponse};
+use zeus_tui::api::{
+    EconomyTxResponse, EconomyWalletResponse, OnchainTransferPlanResponse,
+    OnchainTransferResponse, OnchainTxResponse, OnchainWalletResponse,
+};
 use zeus_tui::prod::wallet_tab::{wfmt, TxKind, TxStatus, WalletLive, WalletTab, WalletView};
 
 /// Render a standalone (no-live) WalletTab into a 120×44 TestBackend → String.
@@ -104,11 +107,13 @@ fn wallet_live_render_dump_smoke() {
     let live = WalletLive {
         wallets: Some(&wallets),
         transactions: Some(&txs),
+        ..WalletLive::default()
     };
     let balance = render_live(WalletView::Balance, 0, live);
     let live = WalletLive {
         wallets: Some(&wallets),
         transactions: Some(&txs),
+        ..WalletLive::default()
     };
     let economy = render_live(WalletView::Economy, 0, live);
     let dump = format!("== BALANCE ==\n{balance}\n\n== ECONOMY ==\n{economy}\n");
@@ -127,8 +132,8 @@ fn balance_human_wallet_card_labels_present() {
     let s = render_view(WalletView::Balance, 0);
     assert!(s.contains("HUMAN WALLET"), "card title missing:\n{s}");
     assert!(
-        s.contains("ZEUS TOKEN"),
-        "ZEUS TOKEN label missing (on-chain layer)"
+        s.contains("ON-CHAIN ZEUS"),
+        "ON-CHAIN ZEUS label missing (on-chain layer)"
     );
     assert!(
         s.contains("CREDIT"),
@@ -157,7 +162,7 @@ fn balance_empty_renders_no_fabricated_data() {
     );
     // Honest empty fleet state.
     assert!(
-        s.contains("No wallets"),
+        s.contains("No internal wallets"),
         "expected honest empty fleet state:\n{s}"
     );
 }
@@ -179,6 +184,7 @@ fn balance_live_renders_real_wallets() {
     let live = WalletLive {
         wallets: Some(&wallets),
         transactions: None,
+        ..WalletLive::default()
     };
     let s = render_live(WalletView::Balance, 0, live);
     assert!(
@@ -189,7 +195,7 @@ fn balance_live_renders_real_wallets() {
     assert!(s.contains("zeus100"), "live agent_id row missing:\n{s}");
     assert!(s.contains("1,234"), "live CR balance missing:\n{s}");
     assert!(
-        s.contains("▸ zeus106"),
+        s.contains("▶ zeus106"),
         "selected-titan marker missing on idx 0:\n{s}"
     );
     for fake in FABRICATED_TITANS {
@@ -217,16 +223,97 @@ fn balance_live_selection_marker_moves() {
     let live = WalletLive {
         wallets: Some(&wallets),
         transactions: None,
+        ..WalletLive::default()
     };
     let s = render_live(WalletView::Balance, 1, live);
     assert!(
-        s.contains("▸ zeus100"),
+        s.contains("▶ zeus100"),
         "marker should be on titan idx 1:\n{s}"
     );
     assert!(
-        !s.contains("▸ zeus106"),
+        !s.contains("▶ zeus106"),
         "marker should NOT be on idx 0:\n{s}"
     );
+}
+
+#[test]
+fn balance_live_renders_onchain_devnet_overlay() {
+    let wallets = vec![EconomyWalletResponse {
+        agent_id: "zeus-titan".into(),
+        balance: 42,
+        total_earned: 100,
+        total_spent: 58,
+    }];
+    let onchain = OnchainWalletResponse {
+        address: "4gHmZHyndwo3hkxqebpfWghZDaw3j3Nhy8fNc2X1oDck".into(),
+        sol_lamports: 1_250_000_000,
+        sol: 1.25,
+        token_balance: 12_345_000,
+        token_decimals: 6,
+        mint: "ZEUSDEVNETMINT111111111111111111111111111".into(),
+        cluster: "devnet".into(),
+    };
+    let live = WalletLive {
+        wallets: Some(&wallets),
+        onchain_wallet: Some(&onchain),
+        ..WalletLive::default()
+    };
+    let s = render_live(WalletView::Balance, 0, live);
+    assert!(s.contains("12.345 ZEUS"), "ZEUS token balance missing:
+{s}");
+    assert!(s.contains("1.25 SOL"), "SOL balance missing:
+{s}");
+    assert!(s.contains("DEVNET"), "cluster badge missing:
+{s}");
+    assert!(s.contains("4gHm"), "short address prefix missing:
+{s}");
+}
+
+#[test]
+fn balance_without_onchain_data_is_honest_waiting_state() {
+    let s = render_view(WalletView::Balance, 0);
+    assert!(
+        s.contains("Fetching /v1/wallet/onchain"),
+        "wallet should wait for live on-chain endpoint, not fake balances:
+{s}"
+    );
+    assert!(s.contains("— ZEUS"), "token balance should be dashed before live data:
+{s}");
+    assert!(!s.contains("12.345 ZEUS"), "prototype/on-chain fake balance leaked:
+{s}");
+}
+
+#[test]
+fn send_view_renders_onchain_preflight_plan() {
+    let transfer = OnchainTransferResponse {
+        signature: "5NfZeusDevnetSignature111111111111111111111111111111111".into(),
+        sender: "4gHmZHyndwo3hkxqebpfWghZDaw3j3Nhy8fNc2X1oDck".into(),
+        recipient: "9xRecipientDevnet111111111111111111111111111111".into(),
+        amount: 7_500_000,
+        mint: "ZEUSDEVNETMINT111111111111111111111111111".into(),
+        ata_created: true,
+        cluster: "devnet".into(),
+        plan: OnchainTransferPlanResponse {
+            sender_sol_lamports: 2_000_000_000,
+            sender_token_balance: 9_000_000,
+            token_balance_sufficient: true,
+            recipient_ata_exists: false,
+            ata_create_required: true,
+        },
+    };
+    let live = WalletLive {
+        onchain_transfer: Some(&transfer),
+        ..WalletLive::default()
+    };
+    let s = render_live(WalletView::Send, 0, live);
+    assert!(s.contains("PREFLIGHT PLAN"), "preflight card missing:
+{s}");
+    assert!(s.contains("sufficient yes"), "sufficiency flag missing:
+{s}");
+    assert!(s.contains("ATA create required yes"), "ATA create flag missing:
+{s}");
+    assert!(s.contains("7,500,000 raw ZEUS"), "transfer amount missing:
+{s}");
 }
 
 // ── Activity view ───────────────────────────────────────────────────────────
@@ -250,6 +337,30 @@ fn activity_empty_renders_no_fabricated_ledger() {
 }
 
 #[test]
+fn activity_live_renders_onchain_signatures() {
+    let onchain = vec![OnchainTxResponse {
+        signature: "5NfZeusDevnetSignature111111111111111111111111111111111".into(),
+        slot: 42,
+        block_time: Some(1_725_000_000),
+        confirmation_status: Some("confirmed".into()),
+        err: None,
+    }];
+    let live = WalletLive {
+        onchain_transactions: Some(&onchain),
+        ..WalletLive::default()
+    };
+    let s = render_live(WalletView::Activity, 0, live);
+    assert!(s.contains("ON-CHAIN SIGNATURES"), "signature card missing:
+{s}");
+    assert!(s.contains("5NfZ"), "short signature prefix missing:
+{s}");
+    assert!(s.contains("slot 42"), "signature slot missing:
+{s}");
+    assert!(s.contains("confirmed · ok"), "signature status missing:
+{s}");
+}
+
+#[test]
 fn activity_live_renders_real_transactions() {
     let txs = vec![EconomyTxResponse {
         from_agent: Some("zeus106".into()),
@@ -260,6 +371,7 @@ fn activity_live_renders_real_transactions() {
     let live = WalletLive {
         wallets: None,
         transactions: Some(&txs),
+        ..WalletLive::default()
     };
     let s = render_live(WalletView::Activity, 0, live);
     assert!(
@@ -294,6 +406,7 @@ fn economy_view_renders_agora_wallet_card_without_usdc_mock() {
     let live = WalletLive {
         wallets: Some(&wallets),
         transactions: None,
+        ..WalletLive::default()
     };
     let s = render_live(WalletView::Economy, 0, live);
     assert!(s.contains("AGORA WALLET"), "economy card missing:\n{s}");

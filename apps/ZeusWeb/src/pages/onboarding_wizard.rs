@@ -159,18 +159,24 @@ struct StepInfo {
 const STEPS: &[StepInfo] = &[
     StepInfo { id: "awaken",        title: "AWAKENING",          orb_mode: "dormant",   orb_intensity: 0.3 },
     StepInfo { id: "mode",          title: "AWAKENING PROTOCOL", orb_mode: "waking",    orb_intensity: 0.4 },
-    StepInfo { id: "config-preview",title: "CONFIGURATION",      orb_mode: "waking",    orb_intensity: 0.5 },
+    StepInfo { id: "instance",      title: "INSTANCE",           orb_mode: "waking",    orb_intensity: 0.45 },
+    StepInfo { id: "intelligence",  title: "INTELLIGENCE",       orb_mode: "listening", orb_intensity: 0.65 },
+    StepInfo { id: "auth",          title: "AUTHENTICATION",     orb_mode: "listening", orb_intensity: 0.7 },
+    StepInfo { id: "model",         title: "MODEL SELECT",       orb_mode: "thinking",  orb_intensity: 0.75 },
+    StepInfo { id: "fallback",      title: "FALLBACK CHAIN",     orb_mode: "thinking",  orb_intensity: 0.78 },
+    StepInfo { id: "channels",      title: "SENSES",             orb_mode: "active",    orb_intensity: 0.85 },
+    StepInfo { id: "channel-config",title: "CHANNEL CONFIG",     orb_mode: "active",    orb_intensity: 0.87 },
+    StepInfo { id: "gateway",       title: "GATEWAY",            orb_mode: "active",    orb_intensity: 0.88 },
     StepInfo { id: "identity",      title: "IDENTITY",           orb_mode: "waking",    orb_intensity: 0.5 },
-    StepInfo { id: "intelligence", title: "INTELLIGENCE", orb_mode: "listening", orb_intensity: 0.65 },
-    StepInfo { id: "model", title: "MODEL SELECT", orb_mode: "thinking", orb_intensity: 0.75 },
-    StepInfo { id: "channels", title: "SENSES", orb_mode: "active", orb_intensity: 0.85 },
-    StepInfo { id: "security", title: "ARMOR", orb_mode: "active", orb_intensity: 0.9 },
-    StepInfo { id: "features", title: "ABILITIES", orb_mode: "speaking", orb_intensity: 0.95 },
-    StepInfo { id: "services", title: "SERVICES", orb_mode: "speaking", orb_intensity: 0.95 },
-    StepInfo { id: "orchestration", title: "ORCHESTRATION", orb_mode: "thinking", orb_intensity: 0.96 },
-    StepInfo { id: "memory", title: "MEMORY", orb_mode: "thinking", orb_intensity: 0.97 },
-    StepInfo { id: "skills", title: "SKILLS", orb_mode: "speaking", orb_intensity: 0.98 },
-    StepInfo { id: "launch", title: "IGNITION", orb_mode: "surge", orb_intensity: 1.0 },
+    StepInfo { id: "workspace",     title: "WORKSPACE",          orb_mode: "waking",    orb_intensity: 0.52 },
+    StepInfo { id: "security",      title: "ARMOR",              orb_mode: "active",    orb_intensity: 0.9 },
+    StepInfo { id: "features",      title: "ABILITIES",          orb_mode: "speaking",  orb_intensity: 0.95 },
+    StepInfo { id: "voice",         title: "VOICE",              orb_mode: "speaking",  orb_intensity: 0.95 },
+    StepInfo { id: "images",        title: "IMAGES",             orb_mode: "speaking",  orb_intensity: 0.95 },
+    StepInfo { id: "orchestration", title: "ORCHESTRATION",      orb_mode: "thinking",  orb_intensity: 0.96 },
+    StepInfo { id: "memory",        title: "MEMORY",             orb_mode: "thinking",  orb_intensity: 0.97 },
+    StepInfo { id: "skills",        title: "SKILLS",             orb_mode: "speaking",  orb_intensity: 0.98 },
+    StepInfo { id: "launch",        title: "IGNITION",           orb_mode: "surge",     orb_intensity: 1.0 },
 ];
 
 struct Provider {
@@ -196,6 +202,9 @@ const PROVIDERS: &[Provider] = &[
     Provider { id: "qwen", name: "Qwen", desc: "Alibaba — device code OAuth", models: &[], color: "#6c5ce7", hot: false, local: false },
     Provider { id: "minimax", name: "MiniMax", desc: "Portal OAuth — Anthropic Messages API", models: &[], color: "#fdcb6e", hot: false, local: false },
     Provider { id: "xiaomimimo", name: "MiMo", desc: "Xiaomi — MiMo models", models: &[], color: "#ff8800", hot: false, local: false },
+    Provider { id: "openrouter", name: "OpenRouter", desc: "Multi-provider routing — 200+ models", models: &[], color: "#6c5ce7", hot: false, local: false },
+    Provider { id: "xai", name: "xAI", desc: "Grok models — xAI platform", models: &[], color: "#ffd43b", hot: false, local: false },
+    Provider { id: "sakana", name: "Sakana", desc: "Sakana AI — Fugu series models", models: &[], color: "#20c997", hot: false, local: false },
 ];
 
 struct Channel {
@@ -218,6 +227,8 @@ const CHANNELS: &[Channel] = &[
     Channel { id: "whatsapp", name: "WhatsApp", desc: "Baileys bridge or Cloud API", icon: "Wa" },
     Channel { id: "mqtt", name: "MQTT", desc: "Subscribe + publish via rumqttc", icon: "Mq" },
     Channel { id: "mattermost", name: "Mattermost", desc: "Self-hosted Slack alternative, WebSocket API", icon: "Mm" },
+    Channel { id: "instagram", name: "Instagram", desc: "Instagram Graph API — DMs, comments, media", icon: "IG" },
+    Channel { id: "tiktok", name: "TikTok", desc: "Content Posting API — post-only (no receive)", icon: "TT" },
     Channel { id: "pantheon", name: "Pantheon", desc: "Multi-agent war rooms + missions", icon: "P" },
 ];
 
@@ -635,11 +646,10 @@ pub fn OnboardingWizardPage() -> impl IntoView {
         let s = step.get();
         let c = config.get();
         match s {
-            0 => true,
-            1 => true,  // StepOnboardingMode — always can proceed (Skip handled in-component)
-            2 => true,  // StepQuickStartConfig — read-only, always can proceed
-            3 => !c.user_name.trim().is_empty(),
-            4 => {
+            0 => true,   // Awaken
+            1 => true,   // Mode
+            2 => true,   // Instance
+            3 => {       // Intelligence
                 // Require at least one selected provider to have credentials:
                 // - OAuth providers: auth_type set to "oauth_token" (flow completed)
                 // - Local providers (ollama): no key needed
@@ -668,15 +678,21 @@ pub fn OnboardingWizardPage() -> impl IntoView {
                     matches!(ks.get(pid), Some(KeyTestStatus::Valid) | Some(KeyTestStatus::InfoOnly))
                 })
             },
-            5 => !c.default_model.is_empty(),
-            6 => true,
-            7 => true,
-            8 => !c.features.is_empty(),
-            9 => true,
-            10 => true,
-            11 => true,
-            12 => true,
-            13 => true,
+            4 => true,   // Auth
+            5 => !c.default_model.is_empty(),  // Model
+            6 => true,   // Fallback
+            7 => true,   // Channels
+            8 => true,   // Channel config
+            9 => true,   // Gateway
+            10 => !c.user_name.trim().is_empty(),  // Identity
+            11 => true,  // Workspace
+            12 => true,  // Security
+            13 => !c.features.is_empty(),  // Features
+            14 => true,  // Voice
+            15 => true,  // Images
+            16 => true,  // Orchestration
+            17 => true,  // Memory
+            18 => true,  // Skills
             _ => true,
         }
     });
@@ -687,7 +703,7 @@ pub fn OnboardingWizardPage() -> impl IntoView {
             // Top bar (steps 1-6 only)
             {move || {
                 let s = step.get();
-                if s > 0 && s < 13 {
+                if s > 0 && s < 20 {
                     let step_info = &STEPS[s];
                     view! {
                         <div style="padding: 18px 32px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,60,20,0.1); flex-shrink: 0;">
@@ -738,7 +754,7 @@ pub fn OnboardingWizardPage() -> impl IntoView {
             <div style="flex: 1; display: flex; justify-content: center; overflow-y: auto;">
                 <div style=move || {
                     let s = step.get();
-                    if s == 0 || s == 13 {
+                    if s == 0 || s == 19 {
                         "width: 100%; max-width: 800px; padding: 0 32px;"
                     } else {
                         "width: 100%; max-width: 680px; padding: 36px 32px 120px;"
@@ -748,18 +764,24 @@ pub fn OnboardingWizardPage() -> impl IntoView {
                         match step.get() {
                             0  => view! { <StepAwaken step=step /> }.into_any(),
                             1  => view! { <StepOnboardingMode config=config /> }.into_any(),
-                            2  => view! { <StepQuickStartConfig config=config /> }.into_any(),
-                            3  => view! { <StepIdentity config=config /> }.into_any(),
-                            4  => view! { <StepIntelligence config=config providers_data=providers_data key_status=key_status /> }.into_any(),
+                            2  => view! { <StepInstance config=config /> }.into_any(),
+                            3  => view! { <StepIntelligence config=config providers_data=providers_data key_status=key_status /> }.into_any(),
+                            4  => view! { <StepAuth config=config providers_data=providers_data key_status=key_status /> }.into_any(),
                             5  => view! { <StepModel config=config providers_data=providers_data /> }.into_any(),
-                            6  => view! { <StepChannels config=config channels_data=channels_data /> }.into_any(),
-                            7  => view! { <StepSecurity config=config /> }.into_any(),
-                            8  => view! { <StepFeatures config=config /> }.into_any(),
-                            9  => view! { <StepServices config=config /> }.into_any(),
-                            10 => view! { <StepOrchestration config=config /> }.into_any(),
-                            11 => view! { <StepMemory config=config /> }.into_any(),
-                            12 => view! { <StepSkills config=config /> }.into_any(),
-                            13 => view! { <StepLaunch config=config /> }.into_any(),
+                            6  => view! { <StepFallback config=config providers_data=providers_data /> }.into_any(),
+                            7  => view! { <StepChannels config=config channels_data=channels_data /> }.into_any(),
+                            8  => view! { <StepChannelConfig config=config channels_data=channels_data /> }.into_any(),
+                            9  => view! { <StepGateway config=config /> }.into_any(),
+                            10 => view! { <StepIdentity config=config /> }.into_any(),
+                            11 => view! { <StepWorkspace config=config /> }.into_any(),
+                            12 => view! { <StepSecurity config=config /> }.into_any(),
+                            13 => view! { <StepFeatures config=config /> }.into_any(),
+                            14 => view! { <StepVoice config=config /> }.into_any(),
+                            15 => view! { <StepImages config=config /> }.into_any(),
+                            16 => view! { <StepOrchestration config=config /> }.into_any(),
+                            17 => view! { <StepMemory config=config /> }.into_any(),
+                            18 => view! { <StepSkills config=config /> }.into_any(),
+                            19 => view! { <StepLaunch config=config /> }.into_any(),
                             _  => view! { <div /> }.into_any(),
                         }
                     }}
@@ -769,7 +791,7 @@ pub fn OnboardingWizardPage() -> impl IntoView {
             // Navigation footer (steps 1-6 only)
             {move || {
                 let s = step.get();
-                if s > 0 && s < 13 {
+                if s > 0 && s < 20 {
                     view! {
                         <div style="padding: 18px 32px; border-top: 1px solid rgba(255,60,20,0.1); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; background: rgba(5,5,8,0.92); backdrop-filter: blur(16px);">
                             <button
@@ -789,7 +811,7 @@ pub fn OnboardingWizardPage() -> impl IntoView {
                                 "← Back"
                             </button>
                             <div style="font-family: 'Orbitron', monospace; font-size: 9px; letter-spacing: 3px; color: rgba(255,245,240,0.2);">
-                                {move || format!("STEP {} OF 12", step.get())}
+                                {move || format!("STEP {} OF 19", step.get())}
                             </div>
                             <button
                                 style=move || {
@@ -813,7 +835,7 @@ pub fn OnboardingWizardPage() -> impl IntoView {
                                     }
                                 }
                             >
-                                {move || if step.get() == 12 { "Ignite Zeus →" } else { "Continue →" }}
+                                {move || if step.get() == 19 { "Ignite Zeus →" } else { "Continue →" }}
                             </button>
                         </div>
                     }.into_any()
@@ -1168,13 +1190,42 @@ struct PersonalityItem {
 
 #[component]
 fn StepIdentity(config: RwSignal<OnboardConfig>) -> impl IntoView {
-    // Dynamic personalities fetched from API, fallback to hardcoded defaults
+    // Dynamic personalities fetched from API, fallback to hardcoded defaults (all 25 matching TUI)
     let personalities: RwSignal<Vec<PersonalityItem>> = RwSignal::new(vec![
+        // Leadership
         PersonalityItem { id: "coordinator".to_string(), name: "The Coordinator".to_string(), description: "Fleet commander, sprint driver, orchestrator".to_string() },
-        PersonalityItem { id: "professional".to_string(), name: "Professional".to_string(), description: "Formal, precise, efficient".to_string() },
-        PersonalityItem { id: "collaborative".to_string(), name: "Collaborative".to_string(), description: "Friendly partner, proactive".to_string() },
-        PersonalityItem { id: "minimal".to_string(), name: "Minimal".to_string(), description: "Terse, no fluff, results-only".to_string() },
-        PersonalityItem { id: "autonomous".to_string(), name: "Autonomous".to_string(), description: "Acts first, reports after".to_string() },
+        PersonalityItem { id: "strategist".to_string(), name: "The Strategist".to_string(), description: "Long-horizon thinker, pattern-finder, leverage-finder".to_string() },
+        PersonalityItem { id: "mentor".to_string(), name: "The Mentor".to_string(), description: "Teaches through doing, patient explainer, growth-focused".to_string() },
+        // Engineering
+        PersonalityItem { id: "architect".to_string(), name: "The Architect".to_string(), description: "Methodical builder, systems thinker, clarity-first".to_string() },
+        PersonalityItem { id: "backend-dev".to_string(), name: "The Backend Dev".to_string(), description: "API-shaper, schema-owner, the-load-is-the-spec engineer".to_string() },
+        PersonalityItem { id: "builder".to_string(), name: "The Builder".to_string(), description: "Ship fast, iterate, pragmatic, ego-free".to_string() },
+        PersonalityItem { id: "executor".to_string(), name: "The Executor".to_string(), description: "Action-oriented, results-driven, delivery-focused".to_string() },
+        PersonalityItem { id: "operator".to_string(), name: "The Operator".to_string(), description: "Reliability-obsessed, automation-first, SRE mindset".to_string() },
+        PersonalityItem { id: "optimizer".to_string(), name: "The Optimizer".to_string(), description: "Performance-obsessed, measure-first, bottleneck hunter".to_string() },
+        PersonalityItem { id: "specialist".to_string(), name: "The Specialist".to_string(), description: "Deep-domain expert, precision over breadth, knows the edge cases".to_string() },
+        PersonalityItem { id: "substrate-walker".to_string(), name: "The Substrate Walker".to_string(), description: "Low-level systems expert, kernel-to-userspace fluent".to_string() },
+        // Creative
+        PersonalityItem { id: "herald".to_string(), name: "The Herald".to_string(), description: "Storyteller, converts tech to human language, audience-first writer".to_string() },
+        PersonalityItem { id: "innovator".to_string(), name: "The Innovator".to_string(), description: "Bold, experimental, breakthrough-seeking, grounded in shipping".to_string() },
+        PersonalityItem { id: "spark".to_string(), name: "The Spark".to_string(), description: "Inventive, enthusiastic, opinionated about design, prototype-first".to_string() },
+        // Product & Data
+        PersonalityItem { id: "analyst".to_string(), name: "The Analyst".to_string(), description: "Data-driven, structured, hypothesis-first".to_string() },
+        PersonalityItem { id: "partner".to_string(), name: "The Partner".to_string(), description: "Collaborative, friendly, proactive teammate".to_string() },
+        PersonalityItem { id: "oracle".to_string(), name: "The Oracle".to_string(), description: "Data-to-decisions, distribution thinker, evaluation-rigorous".to_string() },
+        // Design & DevOps
+        PersonalityItem { id: "visionary".to_string(), name: "The Visionary".to_string(), description: "Experience designer, user-insight-driven, every-pixel-has-purpose".to_string() },
+        PersonalityItem { id: "plumber".to_string(), name: "The Plumber".to_string(), description: "Pipeline-keeper, automation-native, ship-velocity multiplier".to_string() },
+        // Security
+        PersonalityItem { id: "guardian".to_string(), name: "The Guardian".to_string(), description: "Protective, vigilant, safety-first systems defender".to_string() },
+        PersonalityItem { id: "sentinel".to_string(), name: "The Sentinel".to_string(), description: "Security-first, thorough, skeptical of shortcuts".to_string() },
+        // Research & Marketing
+        PersonalityItem { id: "scholar".to_string(), name: "The Scholar".to_string(), description: "Deep research, citation-heavy, source-of-truth seeker".to_string() },
+        PersonalityItem { id: "amplifier".to_string(), name: "The Amplifier".to_string(), description: "Growth strategist, data-driven creative, audience-fluent".to_string() },
+        // Mobile & Trading
+        PersonalityItem { id: "crafter".to_string(), name: "The Crafter".to_string(), description: "Native-feel obsessive, detail-driven, platform-fluent".to_string() },
+        PersonalityItem { id: "trader".to_string(), name: "The Trader".to_string(), description: "Systematic, risk-first, ruthlessly backtested".to_string() },
+        PersonalityItem { id: "market-analyst".to_string(), name: "The Market Analyst".to_string(), description: "Pattern-reader, synthesis-driven, contrarian-aware".to_string() },
     ]);
 
     // Fetch personalities from API
@@ -2172,7 +2223,22 @@ fn StepModel(config: RwSignal<OnboardConfig>, providers_data: RwSignal<Vec<DynPr
                                     on:input=move |e| {
                                         let val = leptos::prelude::event_target_value(&e);
                                         manual_model.set(val.clone());
-                                        config.update(|c| c.default_model = val);
+                                        // Validate model name format: must contain '/' (provider/model)
+                                        // Ollama models are prefixed with "ollama/" automatically
+                                        let validated = if val.contains('/') || val.is_empty() {
+                                            val
+                                        } else if val.starts_with("ollama/") {
+                                            val
+                                        } else {
+                                            // Auto-prefix with selected provider if single provider selected
+                                            let cfg = config.get();
+                                            if cfg.providers.len() == 1 {
+                                                format!("{}/{}", cfg.providers[0], val)
+                                            } else {
+                                                val // Let user fix it manually
+                                            }
+                                        };
+                                        config.update(|c| c.default_model = validated);
                                     }
                                     style="width: 100%; max-width: 400px; padding: 12px 16px; border-radius: 8px;\
                                         background: rgba(0,0,0,0.3); border: 1px solid rgba(255,60,20,0.15);\
@@ -2451,6 +2517,18 @@ fn StepChannels(config: RwSignal<OnboardConfig>, channels_data: RwSignal<Vec<Dyn
                                     ("username", "Bot Username", false),
                                     ("channels", "Channels (comma-separated)", false),
                                     ("client_id", "Client ID (optional, for Helix API)", false),
+                                ],
+                                "instagram" => vec![
+                                    ("access_token", "Access Token (EA...)", true),
+                                    ("account_id", "Account ID", false),
+                                    ("page_id", "Page ID (optional)", false),
+                                    ("app_id", "App ID (optional)", false),
+                                    ("app_secret", "App Secret (optional)", true),
+                                    ("poll_interval_secs", "Poll Interval Seconds (default: 120)", false),
+                                    ("auto_reply", "Auto Reply? (true/false)", false),
+                                ],
+                                "tiktok" => vec![
+                                    ("access_token", "Access Token (act...)", true),
                                 ],
                                 "imessage" => vec![
                                     ("_note", "macOS only — no credentials required. Zeus uses AppleScript bridge.", false),
@@ -2827,226 +2905,6 @@ fn StepFeatures(config: RwSignal<OnboardConfig>) -> impl IntoView {
     }
 }
 
-// ─── STEP 7: SERVICES ───────────────────────────────────
-
-#[component]
-fn StepServices(config: RwSignal<OnboardConfig>) -> impl IntoView {
-    view! {
-        <div class="animate-fade-in">
-            <div style="margin-bottom: 24px;">
-                <div class="font-orbitron text-[22px] font-semibold text-z-text">
-                    <TypeWriter text="Connect services" speed_ms=40 />
-                </div>
-                <p class="text-sm text-white/60 leading-relaxed">
-                    "Optional: connect image generation, voice, and video services. All skippable — configure later in Settings."
-                </p>
-            </div>
-
-            // Image Generation
-            <div class="mb-5">
-                <div class="font-orbitron text-[10px] tracking-[3px] text-z-accent">
-                    "IMAGE GENERATION"
-                </div>
-                <div class="flex flex-col gap-1.5">
-                    {["fooocus", "automatic1111", "comfyui", "openai", "openai_compatible"].iter().map(|pid| {
-                        let (name, desc, def_url, needs_key) = match *pid {
-                            "fooocus"            => ("Fooocus",           "Local Stable Diffusion UI (recommended)",  "http://localhost:8888", false),
-                            "automatic1111"      => ("Automatic1111",     "Local SD WebUI — A1111 compatible",        "http://localhost:7860", false),
-                            "comfyui"            => ("ComfyUI",           "Node-based local Stable Diffusion",        "http://localhost:8188", false),
-                            "openai"             => ("OpenAI DALL-E",     "DALL-E 3 via OpenAI API",                  "",                      true),
-                            "openai_compatible"  => ("OpenAI-compatible", "Any OpenAI-compatible image endpoint",     "http://localhost:8080", false),
-                            _                    => ("Unknown",           "",                                         "",                      false),
-                        };
-                        let pid_s = pid.to_string();
-                        let pid_c = pid_s.clone();
-                        let pid_d = pid_s.clone();
-                        let pid_r = pid_s.clone();
-                        let def_url_s = def_url.to_string();
-                        let def_url_c = def_url_s.clone();
-                        view! {
-                            <div>
-                                <div
-                                    style=move || {
-                                        let active = config.get().image_gen_provider == pid_c;
-                                        format!("padding: 14px 18px; border-radius: 10px; cursor: pointer; transition: all 0.3s; background: rgba(255,255,255,0.03); border: 1px solid {};",
-                                            if active { "rgba(255,60,20,0.3)" } else { "rgba(255,60,20,0.1)" })
-                                    }
-                                    on:click={
-                                        let ps = pid_s.clone();
-                                        let du = def_url_s.clone();
-                                        move |_| config.update(|c| {
-                                            if c.image_gen_provider == ps {
-                                                c.image_gen_provider = String::new();
-                                                c.image_gen_url = String::new();
-                                            } else {
-                                                c.image_gen_provider = ps.clone();
-                                                if c.image_gen_url.is_empty() {
-                                                    c.image_gen_url = du.clone();
-                                                }
-                                            }
-                                        })
-                                    }
-                                >
-                                    <div style="display: flex; align-items: center; justify-content: space-between;">
-                                        <div>
-                                            <div style=move || format!("font-size: 14px; font-weight: 700; color: {};",
-                                                if config.get().image_gen_provider == pid_d { "rgba(255,245,240,0.95)" } else { "rgba(255,245,240,0.7)" })>
-                                                {name}
-                                            </div>
-                                            <div style="font-size: 12px; color: rgba(255,245,240,0.5); margin-top: 2px;">{desc}</div>
-                                        </div>
-                                        <div style=move || format!(
-                                            "width: 18px; height: 18px; border-radius: 50%; border: 2px solid {}; background: {}; flex-shrink: 0; transition: all 0.3s;",
-                                            if config.get().image_gen_provider == pid_r { "rgba(255,60,20,1)" } else { "rgba(255,60,20,0.2)" },
-                                            if config.get().image_gen_provider == pid_r { "rgba(255,60,20,1)" } else { "transparent" }
-                                        ) />
-                                    </div>
-                                </div>
-                                {
-                                    let pe = pid_s.clone();
-                                    let pu = pid_s.clone();
-                                    let pk = pid_s.clone();
-                                    let du2 = def_url_c.clone();
-                                    move || {
-                                        if config.get().image_gen_provider == pe {
-                                            view! {
-                                                <div on:click=|ev: web_sys::MouseEvent| ev.stop_propagation() style="padding: 10px 18px 4px; display: flex; flex-direction: column; gap: 10px;">
-                                                    {if !du2.is_empty() {
-                                                        let pu2 = pu.clone();
-                                                        let du3 = du2.clone();
-                                                        view! {
-                                                            <div>
-                                                                <div style="font-size: 11px; color: rgba(255,245,240,0.5); margin-bottom: 4px; font-weight: 600;">"URL"</div>
-                                                                <input
-                                                                    type="text"
-                                                                    placeholder={du3}
-                                                                    prop:value=move || if config.get().image_gen_provider == pu2 { config.get().image_gen_url } else { String::new() }
-                                                                    on:input=move |e| { let v = event_target_value(&e); config.update(|c| c.image_gen_url = v); }
-                                                                    class="w-full box-border bg-white/4 border border-z-border rounded-lg px-3.5 py-2.5 text-sm text-z-text font-rajdhani outline-none focus:border-z-accent"
-                                                                />
-                                                            </div>
-                                                        }.into_any()
-                                                    } else {
-                                                        view! { <div /> }.into_any()
-                                                    }}
-                                                    {if needs_key {
-                                                        let pk2 = pk.clone();
-                                                        view! {
-                                                            <div>
-                                                                <div style="font-size: 11px; color: rgba(255,245,240,0.5); margin-bottom: 4px; font-weight: 600;">"API KEY"</div>
-                                                                <input
-                                                                    type="password"
-                                                                    placeholder="sk-..."
-                                                                    prop:value=move || if config.get().image_gen_provider == pk2 { config.get().image_gen_api_key.clone() } else { String::new() }
-                                                                    on:input=move |e| { let v = event_target_value(&e); config.update(|c| c.image_gen_api_key = v); }
-                                                                    class="w-full box-border bg-white/4 border border-z-border rounded-lg px-3.5 py-2.5 text-sm text-z-text font-rajdhani outline-none focus:border-z-accent"
-                                                                />
-                                                            </div>
-                                                        }.into_any()
-                                                    } else {
-                                                        view! { <div /> }.into_any()
-                                                    }}
-                                                </div>
-                                            }.into_any()
-                                        } else {
-                                            view! { <div /> }.into_any()
-                                        }
-                                    }
-                                }
-                            </div>
-                        }
-                    }).collect::<Vec<_>>()}
-                </div>
-            </div>
-
-            // Voice STT / TTS
-            <div class="mb-5">
-                <div class="font-orbitron text-[10px] tracking-[3px] text-z-accent">
-                    "VOICE — STT / TTS"
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,60,20,0.1);">
-                    <div>
-                        <div class="flex justify-between items-baseline">
-                            <div class="text-[13px] font-bold text-white/80">"Piper TTS URL"</div>
-                            <div class="text-[11px] text-white/35">"Text-to-speech engine"</div>
-                        </div>
-                        <input
-                            type="text"
-                            placeholder="http://localhost:8104"
-                            prop:value=move || config.get().piper_url
-                            on:input=move |e| { let v = event_target_value(&e); config.update(|c| c.piper_url = v); }
-                            class="w-full box-border bg-white/4 border border-z-border rounded-lg px-3.5 py-2.5 text-sm text-z-text font-rajdhani outline-none focus:border-z-accent"
-                        />
-                    </div>
-                    <div>
-                        <div class="flex justify-between items-baseline">
-                            <div class="text-[13px] font-bold text-white/80">"Whisper STT URL"</div>
-                            <div class="text-[11px] text-white/35">"Speech-to-text engine"</div>
-                        </div>
-                        <input
-                            type="text"
-                            placeholder="http://localhost:9000"
-                            prop:value=move || config.get().whisper_url
-                            on:input=move |e| { let v = event_target_value(&e); config.update(|c| c.whisper_url = v); }
-                            class="w-full box-border bg-white/4 border border-z-border rounded-lg px-3.5 py-2.5 text-sm text-z-text font-rajdhani outline-none focus:border-z-accent"
-                        />
-                    </div>
-                    <div>
-                        <div class="flex justify-between items-baseline">
-                            <div class="text-[13px] font-bold text-white/80">"ElevenLabs API Key"</div>
-                            <div class="text-[11px] text-white/35">"Premium cloud TTS (optional — overrides Piper)"</div>
-                        </div>
-                        <input
-                            type="password"
-                            placeholder="sk_..."
-                            prop:value=move || config.get().elevenlabs_api_key
-                            on:input=move |e| { let v = event_target_value(&e); config.update(|c| c.elevenlabs_api_key = v); }
-                            class="w-full box-border bg-white/4 border border-z-border rounded-lg px-3.5 py-2.5 text-sm text-z-text font-rajdhani outline-none focus:border-z-accent"
-                        />
-                    </div>
-                </div>
-            </div>
-
-            // Video Generation
-            <div class="mb-4">
-                <div class="font-orbitron text-[10px] tracking-[3px] text-z-accent">
-                    "VIDEO GENERATION"
-                </div>
-                <div style="padding: 16px 18px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,60,20,0.1);">
-                    <div class="flex justify-between items-baseline">
-                        <div class="text-[13px] font-bold text-white/80">"ComfyUI / Video Gen URL"</div>
-                        <div class="text-[11px] text-white/35">"Wan2.1, CogVideo, AnimateDiff..."</div>
-                    </div>
-                    <input
-                        type="text"
-                        placeholder="http://localhost:8188"
-                        prop:value=move || config.get().video_url
-                        on:input=move |e| { let v = event_target_value(&e); config.update(|c| c.video_url = v); }
-                        class="w-full box-border bg-white/4 border border-z-border rounded-lg px-3.5 py-2.5 text-sm text-z-text font-rajdhani outline-none focus:border-z-accent"
-                    />
-                </div>
-            </div>
-
-            // Summary badge
-            <div style="padding: 12px 18px; background: rgba(255,255,255,0.03); border-radius: 12px; border: 1px solid rgba(255,60,20,0.1);">
-                <span style="font-family: 'Orbitron', monospace; font-size: 10px; color: rgba(255,245,240,0.5); letter-spacing: 2px; font-weight: 700;">
-                    {move || {
-                        let c = config.get();
-                        let mut parts: Vec<String> = Vec::new();
-                        if !c.image_gen_provider.is_empty() { parts.push(format!("IMG: {}", c.image_gen_provider.to_uppercase())); }
-                        // TTS: prefer ElevenLabs if key set, else Piper (matches TUI auto-select)
-                        if !c.elevenlabs_api_key.is_empty() { parts.push("TTS: ELEVENLABS".to_string()); }
-                        else if !c.piper_url.is_empty() { parts.push("TTS: PIPER".to_string()); }
-                        if !c.whisper_url.is_empty() { parts.push("STT: WHISPER".to_string()); }
-                        if !c.video_url.is_empty() { parts.push("VIDEO: COMFYUI".to_string()); }
-                        if parts.is_empty() { "NO SERVICES CONFIGURED — SKIPPABLE".to_string() }
-                        else { parts.join(" · ") }
-                    }}
-                </span>
-            </div>
-        </div>
-    }
-}
 
 // ─── STEP 8: ORCHESTRATION ───────────────────────────────
 
@@ -3617,7 +3475,415 @@ fn StepSkills(config: RwSignal<OnboardConfig>) -> impl IntoView {
     }
 }
 
-// ─── STEP 11: LAUNCH ────────────────────────────────────
+
+// ─── STEP 2: INSTANCE SELECTOR ───────────────────────────
+// TUI parity: choose default instance or named instance.
+#[component]
+fn StepInstance(config: RwSignal<OnboardConfig>) -> impl IntoView {
+    let use_named = RwSignal::new(false);
+    let instance_name = RwSignal::new(String::new());
+
+    view! {
+        <div style="display: flex; flex-direction: column; gap: 24px;">
+            <div style="text-align: center; margin-bottom: 8px;">
+                <h2 style="font-family: 'Orbitron', monospace; font-size: 14px; letter-spacing: 4px; color: rgba(255,245,240,0.9); font-weight: 900; margin-bottom: 8px;">"INSTANCE TARGET"</h2>
+                <p style="font-size: 12px; color: rgba(255,245,240,0.55); font-family: 'Orbitron', monospace; letter-spacing: 0.5px; line-height: 1.6;">"Choose where this Zeus instance lives."</p>
+            </div>
+            // Default instance
+            <div
+                style=move || format!("padding: 16px; border-radius: 12px; cursor: pointer; transition: all 0.3s; {}", if !use_named.get() { "background: rgba(255,60,20,0.12); border: 1px solid rgba(255,60,20,0.4);" } else { "background: rgba(255,245,240,0.03); border: 1px solid rgba(255,245,240,0.08);" })
+                on:click=move |_| { use_named.set(false); }
+            >
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <div style=move || format!("width: 16px; height: 16px; border-radius: 50%; border: 2px solid {}; {}", if !use_named.get() { "rgba(255,60,20,0.8)" } else { "rgba(255,245,240,0.2)" }, if !use_named.get() { "background: rgba(255,60,20,0.6);" } else { "" }) />
+                    <div>
+                        <div style="font-family: 'Orbitron', monospace; font-size: 11px; letter-spacing: 2px; color: rgba(255,245,240,0.9); font-weight: 700;">"DEFAULT INSTANCE"</div>
+                        <div style="font-size: 11px; color: rgba(255,245,240,0.55); margin-top: 4px;">"~/.zeus — standard single-instance setup"</div>
+                    </div>
+                </div>
+            </div>
+            // Named instance
+            <div
+                style=move || format!("padding: 16px; border-radius: 12px; cursor: pointer; transition: all 0.3s; {}", if use_named.get() { "background: rgba(255,60,20,0.12); border: 1px solid rgba(255,60,20,0.4);" } else { "background: rgba(255,245,240,0.03); border: 1px solid rgba(255,245,240,0.08);" })
+                on:click=move |_| { use_named.set(true); }
+            >
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <div style=move || format!("width: 16px; height: 16px; border-radius: 50%; border: 2px solid {}; {}", if use_named.get() { "rgba(255,60,20,0.8)" } else { "rgba(255,245,240,0.2)" }, if use_named.get() { "background: rgba(255,60,20,0.6);" } else { "" }) />
+                    <div>
+                        <div style="font-family: 'Orbitron', monospace; font-size: 11px; letter-spacing: 2px; color: rgba(255,245,240,0.9); font-weight: 700;">"NAMED INSTANCE"</div>
+                        <div style="font-size: 11px; color: rgba(255,245,240,0.55); margin-top: 4px;">"~/.zeus/instances/&lt;name&gt; — multi-instance setup"</div>
+                    </div>
+                </div>
+            </div>
+            // Instance name input (shown when named selected)
+            {move || if use_named.get() {
+                view! {
+                    <div style="margin-left: 28px;">
+                        <label style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px; color: rgba(255,245,240,0.7); display: block; margin-bottom: 8px;">"INSTANCE NAME"</label>
+                        <input
+                            type="text"
+                            placeholder="my-zeus"
+                            prop:value=move || instance_name.get()
+                            on:input=move |ev| {
+                                let val = event_target_value(&ev);
+                                instance_name.set(val);
+                            }
+                            style="width: 100%; padding: 12px 16px; background: rgba(255,245,240,0.05); border: 1px solid rgba(255,245,240,0.15); border-radius: 8px; color: rgba(255,245,240,0.9); font-family: 'JetBrains Mono', monospace; font-size: 13px; outline: none;"
+                        />
+                        <div style="font-size: 10px; color: rgba(255,245,240,0.4); margin-top: 6px; font-family: 'Orbitron', monospace;">
+                            {move || { let n = instance_name.get(); format!("Launch path: ~/.zeus/instances/{}", if n.is_empty() { "<name>".to_string() } else { n }) }}
+                        </div>
+                    </div>
+                }.into_any()
+            } else { view! { <div /> }.into_any() }}
+        </div>
+    }
+}
+
+// ─── STEP 4: AUTHENTICATION ─────────────────────────────
+// Summary step: shows credential status for selected providers.
+// Actual credential entry happens in StepIntelligence (combined provider+auth).
+#[component]
+fn StepAuth(config: RwSignal<OnboardConfig>, providers_data: RwSignal<Vec<DynProvider>>, key_status: RwSignal<std::collections::HashMap<String, KeyTestStatus>>) -> impl IntoView {
+    view! {
+        <div style="display: flex; flex-direction: column; gap: 24px;">
+            <div style="text-align: center; margin-bottom: 8px;">
+                <h2 style="font-family: 'Orbitron', monospace; font-size: 14px; letter-spacing: 4px; color: rgba(255,245,240,0.9); font-weight: 900; margin-bottom: 8px;">"AUTHENTICATION"</h2>
+                <p style="font-size: 12px; color: rgba(255,245,240,0.55); font-family: 'Orbitron', monospace; letter-spacing: 0.5px; line-height: 1.6;">"Credential status for your selected providers."</p>
+            </div>
+            {move || {
+                let c = config.get();
+                let providers = providers_data.get();
+                let ks = key_status.get();
+                if c.providers.is_empty() {
+                    view! {
+                        <div style="text-align: center; padding: 32px; color: rgba(255,245,240,0.55); font-family: 'Orbitron', monospace; font-size: 11px;">
+                            "No providers selected. Go back and select at least one provider."
+                        </div>
+                    }.into_any()
+                } else {
+                    view! {
+                        <div style="display: flex; flex-direction: column; gap: 12px;">
+                            {c.providers.iter().map(|pid| {
+                                let prov = providers.iter().find(|p| p.id == *pid);
+                                let name = prov.map(|p| p.name.clone()).unwrap_or_else(|| pid.clone());
+                                let color = prov.map(|p| p.color.clone()).unwrap_or_else(|| "#d4a574".to_string());
+                                let is_ollama = pid == "ollama";
+                                let has_oauth = c.auth_types.get(pid).map(|t| t.starts_with("oauth")).unwrap_or(false);
+                                let has_key = c.api_keys.get(pid).map(|k| !k.trim().is_empty()).unwrap_or(false);
+                                let status = ks.get(pid).cloned();
+                                let status_text = if is_ollama { "● LOCAL".to_string() }
+                                    else if has_oauth { "● OAUTH".to_string() }
+                                    else if matches!(status, Some(KeyTestStatus::Valid)) { "✓ VALID".to_string() }
+                                    else if matches!(status, Some(KeyTestStatus::Invalid(_))) { "✗ INVALID".to_string() }
+                                    else if has_key { "● KEY SET".to_string() }
+                                    else { "○ NO KEY".to_string() };
+                                let status_color = if is_ollama || has_oauth || matches!(status, Some(KeyTestStatus::Valid)) { "rgba(100,200,150,0.8)" }
+                                    else if matches!(status, Some(KeyTestStatus::Invalid(_))) { "rgba(255,120,80,0.8)" }
+                                    else { "rgba(255,245,240,0.4)" };
+                                view! {
+                                    <div style="padding: 12px 16px; border-radius: 10px; background: rgba(255,245,240,0.03); border: 1px solid rgba(255,245,240,0.08);">
+                                        <div style="display: flex; align-items: center; gap: 12px;">
+                                            <div style={format!("width: 8px; height: 8px; border-radius: 50%; background: {};", color)} />
+                                            <div style="font-family: 'Orbitron', monospace; font-size: 11px; letter-spacing: 2px; color: rgba(255,245,240,0.9); font-weight: 700;">{name}</div>
+                                            <div style={format!("font-size: 10px; color: {}; font-family: 'Orbitron', monospace; margin-left: auto;", status_color)}>{status_text}</div>
+                                        </div>
+                                    </div>
+                                }
+                            }).collect::<Vec<_>>()}
+                        </div>
+                    }.into_any()
+                }
+            }}
+        </div>
+    }
+}
+
+// ─── STEP 6: FALLBACK CHAIN ─────────────────────────────
+// TUI parity: select 0-3 fallback providers in priority order.
+#[component]
+fn StepFallback(config: RwSignal<OnboardConfig>, providers_data: RwSignal<Vec<DynProvider>>) -> impl IntoView {
+    view! {
+        <div style="display: flex; flex-direction: column; gap: 24px;">
+            <div style="text-align: center; margin-bottom: 8px;">
+                <h2 style="font-family: 'Orbitron', monospace; font-size: 14px; letter-spacing: 4px; color: rgba(255,245,240,0.9); font-weight: 900; margin-bottom: 8px;">"FALLBACK CHAIN"</h2>
+                <p style="font-size: 12px; color: rgba(255,245,240,0.55); font-family: 'Orbitron', monospace; letter-spacing: 0.5px; line-height: 1.6;">"If your primary provider fails, the agent loop tries each fallback in order. Pick 0-3 backups."</p>
+            </div>
+            <div style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px; color: rgba(255,60,20,0.7); margin-bottom: 4px;">"AVAILABLE"</div>
+            {move || {
+                let c = config.get();
+                let providers = providers_data.get();
+                let primary = c.providers.first().cloned().unwrap_or_default();
+                providers.iter().filter(|p| p.id != primary && !p.local).map(|p| {
+                    let pid = p.id.clone();
+                    let pid_c = pid.clone();
+                    let name = p.name.clone();
+                    let color = p.color.clone();
+                    let desc = p.desc.clone();
+                    let in_chain = c.fallback_models.contains(&pid);
+                    view! {
+                        <div
+                            style=format!("padding: 12px 16px; border-radius: 10px; cursor: pointer; transition: all 0.3s; {}", if in_chain { "background: rgba(255,60,20,0.12); border: 1px solid rgba(255,60,20,0.4);" } else { "background: rgba(255,245,240,0.03); border: 1px solid rgba(255,245,240,0.08);" })
+                            on:click=move |_| {
+                                config.update(|c| {
+                                    if let Some(pos) = c.fallback_models.iter().position(|x| x == &pid_c) {
+                                        c.fallback_models.remove(pos);
+                                    } else if c.fallback_models.len() < 3 {
+                                        c.fallback_models.push(pid_c.clone());
+                                    }
+                                });
+                            }
+                        >
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <div style={format!("width: 8px; height: 8px; border-radius: 50%; background: {};", color)} />
+                                <div style="font-family: 'Orbitron', monospace; font-size: 11px; letter-spacing: 2px; color: rgba(255,245,240,0.9); font-weight: 700;">{name}</div>
+                                <div style="font-size: 10px; color: rgba(255,245,240,0.55);">{desc}</div>
+                                {if in_chain { view! { <span style="font-size: 10px; color: rgba(255,60,20,0.8); font-family: 'Orbitron', monospace; margin-left: auto;">"✓ SELECTED"</span> }.into_any() } else { view! { <div /> }.into_any() }}
+                            </div>
+                        </div>
+                    }
+                }).collect::<Vec<_>>()
+            }}
+            {move || {
+                let chain = config.get().fallback_models;
+                if !chain.is_empty() {
+                    view! {
+                        <div style="margin-top: 16px; padding: 12px; border-radius: 8px; background: rgba(255,60,20,0.06); border: 1px solid rgba(255,60,20,0.15);">
+                            <div style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px; color: rgba(255,60,20,0.7); margin-bottom: 8px;">"FALLBACK ORDER"</div>
+                            {chain.iter().enumerate().map(|(i, pid)| {
+                                view! { <div style="font-size: 11px; color: rgba(255,245,240,0.7); font-family: 'JetBrains Mono', monospace; padding: 4px 0;">{format!("{}. {}", i + 1, pid)}</div> }
+                            }).collect::<Vec<_>>()}
+                        </div>
+                    }.into_any()
+                } else {
+                    view! { <div /> }.into_any()
+                }
+            }}
+        </div>
+    }
+}
+
+// ─── STEP 8: CHANNEL CONFIG ─────────────────────────────
+// Summary step: shows configured channels and their credential status.
+// Actual channel selection + creds happen in StepChannels.
+#[component]
+fn StepChannelConfig(config: RwSignal<OnboardConfig>, channels_data: RwSignal<Vec<DynChannel>>) -> impl IntoView {
+    view! {
+        <div style="display: flex; flex-direction: column; gap: 24px;">
+            <div style="text-align: center; margin-bottom: 8px;">
+                <h2 style="font-family: 'Orbitron', monospace; font-size: 14px; letter-spacing: 4px; color: rgba(255,245,240,0.9); font-weight: 900; margin-bottom: 8px;">"CHANNEL CONFIG"</h2>
+                <p style="font-size: 12px; color: rgba(255,245,240,0.55); font-family: 'Orbitron', monospace; letter-spacing: 0.5px; line-height: 1.6;">"Review your configured channels."</p>
+            </div>
+            {move || {
+                let c = config.get();
+                let channels = channels_data.get();
+                if c.channels.is_empty() {
+                    view! {
+                        <div style="text-align: center; padding: 32px; color: rgba(255,245,240,0.55); font-family: 'Orbitron', monospace; font-size: 11px;">
+                            "No channels selected. You can configure channels later in Settings."
+                        </div>
+                    }.into_any()
+                } else {
+                    view! {
+                        <div style="display: flex; flex-direction: column; gap: 12px;">
+                            {c.channels.iter().map(|cid| {
+                                let ch = channels.iter().find(|ch| ch.id == *cid);
+                                let name = ch.map(|ch| ch.name.clone()).unwrap_or_else(|| cid.clone());
+                                let icon = ch.map(|ch| ch.icon.clone()).unwrap_or_else(|| "●".to_string());
+                                let has_creds = c.channel_creds.get(cid).map(|m| !m.is_empty()).unwrap_or(false);
+                                view! {
+                                    <div style="padding: 12px 16px; border-radius: 10px; background: rgba(255,245,240,0.03); border: 1px solid rgba(255,245,240,0.08);">
+                                        <div style="display: flex; align-items: center; gap: 12px;">
+                                            <div style="font-size: 14px;">{icon}</div>
+                                            <div style="font-family: 'Orbitron', monospace; font-size: 11px; letter-spacing: 2px; color: rgba(255,245,240,0.9); font-weight: 700;">{name}</div>
+                                            <div style={format!("font-size: 10px; color: {}; font-family: 'Orbitron', monospace; margin-left: auto;", if has_creds { "rgba(100,200,150,0.8)" } else { "rgba(255,245,240,0.4)" })}>
+                                                {if has_creds { "● CONFIGURED" } else { "○ NO CREDS" }}
+                                            </div>
+                                        </div>
+                                    </div>
+                                }
+                            }).collect::<Vec<_>>()}
+                        </div>
+                    }.into_any()
+                }
+            }}
+        </div>
+    }
+}
+
+// ─── STEP 9: GATEWAY ─────────────────────────────────────
+// TUI parity: configure gateway host/port.
+#[component]
+fn StepGateway(config: RwSignal<OnboardConfig>) -> impl IntoView {
+    view! {
+        <div style="display: flex; flex-direction: column; gap: 24px;">
+            <div style="text-align: center; margin-bottom: 8px;">
+                <h2 style="font-family: 'Orbitron', monospace; font-size: 14px; letter-spacing: 4px; color: rgba(255,245,240,0.9); font-weight: 900; margin-bottom: 8px;">"GATEWAY"</h2>
+                <p style="font-size: 12px; color: rgba(255,245,240,0.55); font-family: 'Orbitron', monospace; letter-spacing: 0.5px; line-height: 1.6;">"Configure the Zeus gateway connection."</p>
+            </div>
+            <div>
+                <label style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px; color: rgba(255,245,240,0.7); display: block; margin-bottom: 8px;">"HOST"</label>
+                <input
+                    type="text"
+                    placeholder="127.0.0.1"
+                    prop:value=move || config.get().qs_bind.clone()
+                    on:input=move |ev| { config.update(|c| c.qs_bind = event_target_value(&ev)); }
+                    style="width: 100%; padding: 12px 16px; background: rgba(255,245,240,0.05); border: 1px solid rgba(255,245,240,0.15); border-radius: 8px; color: rgba(255,245,240,0.9); font-family: 'JetBrains Mono', monospace; font-size: 13px; outline: none;"
+                />
+                <div style="font-size: 10px; color: rgba(255,245,240,0.4); margin-top: 6px; font-family: 'Orbitron', monospace;">"Use 0.0.0.0 to expose on LAN"</div>
+            </div>
+            <div>
+                <label style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px; color: rgba(255,245,240,0.7); display: block; margin-bottom: 8px;">"PORT"</label>
+                <input
+                    type="text"
+                    placeholder="8080"
+                    prop:value=move || config.get().qs_port.clone()
+                    on:input=move |ev| { config.update(|c| c.qs_port = event_target_value(&ev)); }
+                    style="width: 100%; padding: 12px 16px; background: rgba(255,245,240,0.05); border: 1px solid rgba(255,245,240,0.15); border-radius: 8px; color: rgba(255,245,240,0.9); font-family: 'JetBrains Mono', monospace; font-size: 13px; outline: none;"
+                />
+            </div>
+        </div>
+    }
+}
+
+// ─── STEP 11: WORKSPACE ──────────────────────────────────
+// TUI parity: configure workspace/sessions/mnemosyne paths.
+#[component]
+fn StepWorkspace(config: RwSignal<OnboardConfig>) -> impl IntoView {
+    view! {
+        <div style="display: flex; flex-direction: column; gap: 24px;">
+            <div style="text-align: center; margin-bottom: 8px;">
+                <h2 style="font-family: 'Orbitron', monospace; font-size: 14px; letter-spacing: 4px; color: rgba(255,245,240,0.9); font-weight: 900; margin-bottom: 8px;">"WORKSPACE"</h2>
+                <p style="font-size: 12px; color: rgba(255,245,240,0.55); font-family: 'Orbitron', monospace; letter-spacing: 0.5px; line-height: 1.6;">"Configure workspace and session storage paths."</p>
+            </div>
+            <div>
+                <label style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px; color: rgba(255,245,240,0.7); display: block; margin-bottom: 8px;">"WORKSPACE PATH"</label>
+                <input
+                    type="text"
+                    placeholder="~/.zeus/workspace"
+                    prop:value=move || config.get().qs_workspace.clone()
+                    on:input=move |ev| { config.update(|c| c.qs_workspace = event_target_value(&ev)); }
+                    style="width: 100%; padding: 12px 16px; background: rgba(255,245,240,0.05); border: 1px solid rgba(255,245,240,0.15); border-radius: 8px; color: rgba(255,245,240,0.9); font-family: 'JetBrains Mono', monospace; font-size: 13px; outline: none;"
+                />
+            </div>
+            <div>
+                <label style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px; color: rgba(255,245,240,0.7); display: block; margin-bottom: 8px;">"SESSIONS PATH"</label>
+                <input
+                    type="text"
+                    placeholder="~/.zeus/sessions"
+                    prop:value=move || config.get().qs_sessions.clone()
+                    on:input=move |ev| { config.update(|c| c.qs_sessions = event_target_value(&ev)); }
+                    style="width: 100%; padding: 12px 16px; background: rgba(255,245,240,0.05); border: 1px solid rgba(255,245,240,0.15); border-radius: 8px; color: rgba(255,245,240,0.9); font-family: 'JetBrains Mono', monospace; font-size: 13px; outline: none;"
+                />
+            </div>
+            <div>
+                <label style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px; color: rgba(255,245,240,0.7); display: block; margin-bottom: 8px;">"MAX ITERATIONS"</label>
+                <input
+                    type="text"
+                    placeholder="20"
+                    prop:value=move || config.get().qs_max_iterations.clone()
+                    on:input=move |ev| { config.update(|c| c.qs_max_iterations = event_target_value(&ev)); }
+                    style="width: 100%; padding: 12px 16px; background: rgba(255,245,240,0.05); border: 1px solid rgba(255,245,240,0.15); border-radius: 8px; color: rgba(255,245,240,0.9); font-family: 'JetBrains Mono', monospace; font-size: 13px; outline: none;"
+                />
+            </div>
+        </div>
+    }
+}
+
+// ─── STEP 14: VOICE ─────────────────────────────────────
+// TUI parity: dedicated voice synthesis configuration.
+#[component]
+fn StepVoice(config: RwSignal<OnboardConfig>) -> impl IntoView {
+    view! {
+        <div style="display: flex; flex-direction: column; gap: 24px;">
+            <div style="text-align: center; margin-bottom: 8px;">
+                <h2 style="font-family: 'Orbitron', monospace; font-size: 14px; letter-spacing: 4px; color: rgba(255,245,240,0.9); font-weight: 900; margin-bottom: 8px;">"VOICE"</h2>
+                <p style="font-size: 12px; color: rgba(255,245,240,0.55); font-family: 'Orbitron', monospace; letter-spacing: 0.5px; line-height: 1.6;">"Configure voice synthesis. Optional — skip and configure later in Settings."</p>
+            </div>
+            <div>
+                <label style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px; color: rgba(255,245,240,0.7); display: block; margin-bottom: 8px;">"WHISPER URL (STT)"</label>
+                <input type="text" placeholder="http://localhost:9000"
+                    prop:value=move || config.get().whisper_url.clone()
+                    on:input=move |ev| { config.update(|c| c.whisper_url = event_target_value(&ev)); }
+                    style="width: 100%; padding: 12px 16px; background: rgba(255,245,240,0.05); border: 1px solid rgba(255,245,240,0.15); border-radius: 8px; color: rgba(255,245,240,0.9); font-family: 'JetBrains Mono', monospace; font-size: 13px; outline: none;"
+                />
+            </div>
+            <div>
+                <label style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px; color: rgba(255,245,240,0.7); display: block; margin-bottom: 8px;">"PIPER URL (TTS)"</label>
+                <input type="text" placeholder="http://localhost:5000"
+                    prop:value=move || config.get().piper_url.clone()
+                    on:input=move |ev| { config.update(|c| c.piper_url = event_target_value(&ev)); }
+                    style="width: 100%; padding: 12px 16px; background: rgba(255,245,240,0.05); border: 1px solid rgba(255,245,240,0.15); border-radius: 8px; color: rgba(255,245,240,0.9); font-family: 'JetBrains Mono', monospace; font-size: 13px; outline: none;"
+                />
+            </div>
+            <div>
+                <label style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px; color: rgba(255,245,240,0.7); display: block; margin-bottom: 8px;">"ELEVENLABS API KEY"</label>
+                <input type="password" placeholder="sk-..."
+                    prop:value=move || config.get().elevenlabs_api_key.clone()
+                    on:input=move |ev| { config.update(|c| c.elevenlabs_api_key = event_target_value(&ev)); }
+                    style="width: 100%; padding: 12px 16px; background: rgba(255,245,240,0.05); border: 1px solid rgba(255,245,240,0.15); border-radius: 8px; color: rgba(255,245,240,0.9); font-family: 'JetBrains Mono', monospace; font-size: 13px; outline: none;"
+                />
+            </div>
+        </div>
+    }
+}
+
+// ─── STEP 15: IMAGES ────────────────────────────────────
+// TUI parity: dedicated image generation configuration.
+#[component]
+fn StepImages(config: RwSignal<OnboardConfig>) -> impl IntoView {
+    view! {
+        <div style="display: flex; flex-direction: column; gap: 24px;">
+            <div style="text-align: center; margin-bottom: 8px;">
+                <h2 style="font-family: 'Orbitron', monospace; font-size: 14px; letter-spacing: 4px; color: rgba(255,245,240,0.9); font-weight: 900; margin-bottom: 8px;">"IMAGES"</h2>
+                <p style="font-size: 12px; color: rgba(255,245,240,0.55); font-family: 'Orbitron', monospace; letter-spacing: 0.5px; line-height: 1.6;">"Configure image generation. Optional — skip and configure later in Settings."</p>
+            </div>
+            <div>
+                <label style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px; color: rgba(255,245,240,0.7); display: block; margin-bottom: 8px;">"IMAGE GENERATION PROVIDER"</label>
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                    {["fooocus", "automatic1111", "comfyui", "openai", "openai_compatible"].iter().map(|pid| {
+                        let name = match *pid {
+                            "fooocus" => "Fooocus", "automatic1111" => "Automatic1111", "comfyui" => "ComfyUI",
+                            "openai" => "OpenAI DALL-E", "openai_compatible" => "OpenAI Compatible", _ => pid,
+                        };
+                        let pid_s = pid.to_string();
+                        let pid_c = pid_s.clone();
+                        view! {
+                            <div
+                                style=move || {
+                                    let active = config.get().image_gen_provider == pid_c;
+                                    format!("padding: 10px 14px; border-radius: 8px; cursor: pointer; transition: all 0.3s; {}", if active { "background: rgba(255,60,20,0.12); border: 1px solid rgba(255,60,20,0.4);" } else { "background: rgba(255,245,240,0.03); border: 1px solid rgba(255,245,240,0.08);" })
+                                }
+                                on:click=move |_| { config.update(|c| c.image_gen_provider = pid_s.clone()); }
+                            >
+                                <div style="font-family: 'Orbitron', monospace; font-size: 11px; letter-spacing: 2px; color: rgba(255,245,240,0.9);">{name}</div>
+                            </div>
+                        }
+                    }).collect::<Vec<_>>()}
+                </div>
+            </div>
+            <div>
+                <label style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px; color: rgba(255,245,240,0.7); display: block; margin-bottom: 8px;">"IMAGE GEN URL"</label>
+                <input type="text" placeholder="http://localhost:7860"
+                    prop:value=move || config.get().image_gen_url.clone()
+                    on:input=move |ev| { config.update(|c| c.image_gen_url = event_target_value(&ev)); }
+                    style="width: 100%; padding: 12px 16px; background: rgba(255,245,240,0.05); border: 1px solid rgba(255,245,240,0.15); border-radius: 8px; color: rgba(255,245,240,0.9); font-family: 'JetBrains Mono', monospace; font-size: 13px; outline: none;"
+                />
+            </div>
+            <div>
+                <label style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px; color: rgba(255,245,240,0.7); display: block; margin-bottom: 8px;">"IMAGE GEN API KEY"</label>
+                <input type="password" placeholder="sk-..."
+                    prop:value=move || config.get().image_gen_api_key.clone()
+                    on:input=move |ev| { config.update(|c| c.image_gen_api_key = event_target_value(&ev)); }
+                    style="width: 100%; padding: 12px 16px; background: rgba(255,245,240,0.05); border: 1px solid rgba(255,245,240,0.15); border-radius: 8px; color: rgba(255,245,240,0.9); font-family: 'JetBrains Mono', monospace; font-size: 13px; outline: none;"
+                />
+            </div>
+        </div>
+    }
+}
+
+
+// ─── STEP 19: LAUNCH ────────────────────────────────────
 
 #[component]
 fn StepLaunch(config: RwSignal<OnboardConfig>) -> impl IntoView {

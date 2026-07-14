@@ -103,6 +103,7 @@ pub mod zalo;
 
 // Social media adapters
 pub mod instagram;
+pub mod tiktok;
 pub mod x;
 
 // Core re-exports
@@ -174,6 +175,10 @@ pub use zalo::{ZaloAdapter, ZaloConfig};
 pub use instagram::{
     AccountInsights, CarouselItem, CreatePostOptions, InstagramAdapter, InstagramComment,
     InstagramConfig, InstagramPost, InstagramProfile, PostMetrics, PostType, UserTag,
+};
+pub use tiktok::{
+    TikTokAdapter, TikTokConfig, TikTokPrivacyLevel, TikTokPublishStatus, TikTokUploadInit,
+    TikTokUploadOptions,
 };
 pub use x::{
     CreateTweetOptions, MediaType as XMediaType, ThreadOptions, Tweet, TweetMedia, TweetMetrics,

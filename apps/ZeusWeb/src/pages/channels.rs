@@ -22,6 +22,8 @@ const CHANNEL_TYPES: &[ChannelType] = &[
     ChannelType { id: "whatsapp",  label: "WHATSAPP",  desc: "Cloud API" },
     ChannelType { id: "signal",    label: "SIGNAL",    desc: "signal-cli" },
     ChannelType { id: "matrix",    label: "MATRIX",    desc: "Native SDK" },
+    ChannelType { id: "instagram", label: "INSTAGRAM", desc: "Graph API" },
+    ChannelType { id: "tiktok",    label: "TIKTOK",    desc: "Post-only" },
 ];
 
 #[component]

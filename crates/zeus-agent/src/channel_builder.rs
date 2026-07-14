@@ -532,6 +532,40 @@ pub async fn build_channel_manager_from_config(
             }
         }
 
+        // Instagram adapter
+        if let Some(ref ig) = cc.instagram {
+            let instagram_config = zeus_channels::InstagramConfig {
+                access_token: ig.access_token.clone(),
+                account_id: ig.account_id.clone(),
+                page_id: ig.page_id.clone(),
+                app_id: ig.app_id.clone(),
+                app_secret: ig.app_secret.clone(),
+                poll_interval_secs: ig.poll_interval_secs,
+                auto_reply: ig.auto_reply,
+            };
+            match zeus_channels::InstagramAdapter::new(instagram_config).await {
+                Ok(adapter) => {
+                    info!("Instagram channel adapter created");
+                    manager.add_adapter(Box::new(adapter));
+                }
+                Err(e) => warn!("Failed to create Instagram adapter: {}", e),
+            }
+        }
+
+        // TikTok adapter
+        if let Some(ref tk) = cc.tiktok {
+            let tiktok_config = zeus_channels::TikTokConfig {
+                access_token: tk.access_token.clone(),
+            };
+            match zeus_channels::TikTokAdapter::new(tiktok_config).await {
+                Ok(adapter) => {
+                    info!("TikTok channel adapter created");
+                    manager.add_adapter(Box::new(adapter));
+                }
+                Err(e) => warn!("Failed to create TikTok adapter: {}", e),
+            }
+        }
+
         // Microsoft Teams adapter (#316 P3: config existed in zeus-channels
         // but was never plumbed through zeus-core nor constructed here)
         if let Some(ref tm) = cc.teams {

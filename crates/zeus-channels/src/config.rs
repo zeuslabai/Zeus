@@ -12,6 +12,8 @@ use crate::{
     feishu::FeishuConfig,
     googlechat::GoogleChatConfig,
     imessage::IMessageConfig,
+    instagram::InstagramConfig,
+    tiktok::TikTokConfig,
     irc::IrcConfig,
     line::LineConfig,
     mattermost::MattermostConfig,
@@ -199,6 +201,14 @@ pub struct ChannelsConfig {
     /// Zalo configuration
     #[serde(default)]
     pub zalo: Option<ZaloConfig>,
+
+    /// Instagram configuration
+    #[serde(default)]
+    pub instagram: Option<InstagramConfig>,
+
+    /// TikTok configuration
+    #[serde(default)]
+    pub tiktok: Option<TikTokConfig>,
 
     // ============ IoT / Machine Channels ============
     /// MQTT configuration (IoT/home automation)

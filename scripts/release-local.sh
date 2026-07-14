@@ -13,6 +13,11 @@
 #   scripts/release-local.sh --version 0.1.2 --publish    # create GH release
 #   scripts/release-local.sh --version 0.1.2 --targets linux-arm64,linux-amd64
 #
+# Version stamping: if --version differs from the workspace Cargo.toml version,
+# the script stamps Cargo.toml (+ syncs Cargo.lock) so binaries report the same
+# version as the release tag. The stamp is left uncommitted for review;
+# --publish refuses to run until it is committed.
+#
 # Requirements:
 #   - Rust toolchain (rustup)
 #   - cargo-zigbuild + zig (auto-installed if missing on macOS/Linux)
@@ -81,6 +86,13 @@ target_to_triple() {
     esac
 }
 
+# Validate every requested target up front. build_target calls this inside
+# $(...) where 'die' only kills the subshell — a bad --targets name would
+# otherwise sail through the whole run and exit 0 with zero artifacts.
+for _t in "${SELECTED_TARGETS[@]}"; do
+    target_to_triple "$_t" >/dev/null
+done
+
 # ── Preflight ─────────────────────────────────────────────────────────────────
 log "Zeus release pipeline v${VERSION}"
 log "Repo: $REPO_DIR"
@@ -97,6 +109,46 @@ fi
 
 CURRENT_SHA="$(git rev-parse --short HEAD)"
 log "Building from: $CURRENT_SHA"
+
+# ── Version stamp ─────────────────────────────────────────────────────────────
+# --version is the release's single source of truth and must match what the
+# binaries will report: the workspace Cargo.toml [workspace.package] version,
+# which every crate inherits (version.workspace = true). If they differ, stamp
+# the workspace version and sync Cargo.lock so the tag, artifact names, and
+# `zeus --version` all agree. The stamp is left UNCOMMITTED for review;
+# --publish refuses to run until it is committed (see Publish section).
+workspace_version() {
+    awk -F'"' '
+        /^\[workspace\.package\]/ { in_wp = 1; next }
+        /^\[/                     { in_wp = 0 }
+        in_wp && /^version[[:space:]]*=/ { print $2; exit }
+    ' Cargo.toml
+}
+
+CARGO_VERSION="$(workspace_version)"
+[[ -n "$CARGO_VERSION" ]] || die "Could not read [workspace.package] version from Cargo.toml"
+if [[ "$CARGO_VERSION" == "$VERSION" ]]; then
+    ok "Version $VERSION matches workspace Cargo.toml"
+else
+    log "Stamping version: Cargo.toml $CARGO_VERSION → $VERSION"
+    # Portable in-place sed (BSD + GNU via -i.bak), scoped to the
+    # [workspace.package] section so only the workspace version line changes.
+    _cv_re="${CARGO_VERSION//./\\.}"
+    sed -i.zeus-release.bak \
+        "/^\[workspace\.package\]/,/^\[/ s/^version[[:space:]]*=[[:space:]]*\"${_cv_re}\"/version = \"${VERSION}\"/" \
+        Cargo.toml
+    rm -f Cargo.toml.zeus-release.bak
+    [[ "$(workspace_version)" == "$VERSION" ]] \
+        || die "Version stamp failed — Cargo.toml still reads '$(workspace_version)'"
+    # Sync Cargo.lock so --locked builds (install.sh, seat gates) keep working:
+    # --workspace touches only the workspace members' own lock entries.
+    log "Syncing Cargo.lock (cargo update --workspace)..."
+    cargo update --workspace --offline >/dev/null 2>&1 \
+        || cargo update --workspace >/dev/null 2>&1 \
+        || die "cargo update --workspace failed — Cargo.lock not synced with $VERSION"
+    ok "Stamped $VERSION into Cargo.toml + Cargo.lock (uncommitted — review before publishing)"
+    warn "Commit before publishing: git add Cargo.toml Cargo.lock && git commit -m \"release: v${VERSION}\""
+fi
 
 # ── Toolchain setup ──────────────────────────────────────────────────────────
 ensure_target() {
@@ -292,11 +344,26 @@ if $PUBLISH; then
         die "gh CLI not found — install: https://cli.github.com/"
     fi
 
+    # Refuse to publish an uncommitted version stamp: the release tag must
+    # point at a commit whose Cargo.toml already carries this version, or the
+    # tagged source won't reproduce the shipped binaries.
+    if [[ -n "$(git status --porcelain -- Cargo.toml Cargo.lock)" ]]; then
+        die "Cargo.toml/Cargo.lock have uncommitted changes (version stamp?) — commit them before --publish"
+    fi
+
+    # Refuse to publish a partial matrix: a release with silently-missing
+    # platforms is worse than no release. Re-run failed targets (or drop them
+    # with --targets) until the build set is complete.
+    if [[ ${#FAILED[@]} -gt 0 ]]; then
+        die "Refusing to publish: ${#FAILED[@]} target(s) failed (${FAILED[*]})"
+    fi
+
     echo ""
     log "Creating GitHub release: v${VERSION}"
 
-    # Generate release notes
-    local notes_file="$DIST_DIR/release-notes-${VERSION}.md"
+    # Generate release notes ('local' is only legal inside functions — this
+    # block is top-level, and 'local' here killed every --publish run)
+    notes_file="$DIST_DIR/release-notes-${VERSION}.md"
     cat > "$notes_file" <<NOTES
 ## Zeus ${VERSION}
 
@@ -368,4 +435,13 @@ elif $DRY_RUN; then
 fi
 
 echo ""
+# Honest exit status: a run that built nothing (or partially failed) must not
+# report success — CI, operators, and wrapper scripts key off the exit code.
+if [[ ${#RESULTS[@]} -eq 0 ]]; then
+    die "No targets built successfully — see $BUILD_LOG"
+fi
+if [[ ${#FAILED[@]} -gt 0 ]]; then
+    warn "Completed with ${#FAILED[@]} failed target(s): ${FAILED[*]}"
+    exit 1
+fi
 ok "Done."

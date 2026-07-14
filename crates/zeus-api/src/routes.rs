@@ -635,6 +635,7 @@ fn build_base_router(state: SharedState, rate_limit_config: Option<RateLimitConf
         .route("/v1/gateway/status", get(handlers::gateway_handlers::gateway_status))
         .route("/v1/onboarding/setup", post(handlers::onboarding_setup))
         .route("/v1/onboarding/config", get(handlers::onboarding_config))
+        .route("/v1/onboarding/personalities", get(handlers::onboarding_personalities))
         .route("/v1/onboarding/skills", get(handlers::onboarding_skills))
         // Approvals
         .route("/v1/approvals", get(handlers::list_approvals))

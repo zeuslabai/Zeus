@@ -4,6 +4,75 @@ All notable changes to Zeus are documented here.
 
 ---
 
+## [Unreleased] - 2026-07-13
+
+Soul-pipeline hardening, on-chain wallet surfaces (API + TUI), WebUI onboarding parity (both phases complete), XAI capability isolation, and a hermetic installer fix.
+
+### Fixed
+
+**Full persona SOUL.md rendering — #358, #363**
+- `render_soul_md` now detects a full persona body by content shape — `## ` sections or more than 3 non-empty lines — and renders it verbatim under a `# SOUL.md — <name>` header, regardless of what the source starts with; the generic "Core Truths" fallback template only fires for genuinely short/blank input, no longer truncating a real persona down to a boilerplate wrapper (`b125644e`)
+- TUI agent screen parses personas through the shared `zeus_core::persona::Persona` parser instead of a hand-rolled frontmatter scraper, so the full `soul_body` — not just name/tagline/tone — flows straight from the persona file into what's rendered (`b125644e`)
+- `personalities/leadership/the-coordinator.md` rewritten to match the operator's template verbatim: identity paragraph, "Leading your titans," and "Voice & channel discipline" sections, replacing the abridged version that was shipping before (`b125644e`)
+- `soul_pipeline` test suite now seeds its persona library correctly in sandboxed test homes — closes #363, a deterministic red test dating to the #346-era persona-lib seeding gap; suite is green (3/3) for the first time (`b125644e`)
+- Practical effect: onboarding and `deploy-identity.sh --with-identity` both now write and re-stamp the *actual* selected persona's soul, not a generic template — deployed rigs pick this up on their next binary update + re-onboard (or identity re-stamp)
+
+### Added
+
+**On-Chain Wallet Stack — #350 (API), #352 (TUI overlay)**
+- `GET /v1/wallet/onchain` — address, SOL balance, token balance, cluster (`3dda0700`)
+- `GET /v1/wallet/onchain/transactions` — recent tx signatures via `getSignaturesForAddress` (`3dda0700`)
+- `POST /v1/wallet/onchain/transfer` — devnet-guarded SPL transfer with `build_transfer_plan` preflight, fee estimate + balance check, insufficient balance returns 402 (`3dda0700`)
+- Zero key material in any response — public addresses + tx sigs only; devnet-only hard-fail guard if RPC URL isn't devnet; same auth gate as `/v1/economy/*` (`3dda0700`)
+- TUI wallet view overlays live on-chain data alongside the existing off-chain economy balance (`11f54e6a`)
+
+**Native Wallet Screens — #353 (macOS, iOS, Android)**
+- Native wallet screens shipped across all three mobile/desktop app repos (separate from `main`): macOS (`33d1b3b`), iOS (`231ff21`), Android (`0accf0e`)
+- Same security posture as the API/TUI surfaces — honest 402/403 rendering, no client-side key material
+- Completes every on-chain wallet surface except WebUI, tracked as #351
+
+**WebUI Onboarding Parity Phase 1 — #356**
+- Added OpenRouter, xAI, Sakana providers to WebUI wizard, matching TUI's 13-provider set (`349eda7a`)
+- Reordered wizard from 14 → 20 steps to match TUI flow: instance selector, auth credential summary, fallback model chain, channel config summary, gateway host/port, workspace path, voice provider, image gen provider (`349eda7a`)
+- `can_next` validation updated for all 20 steps; step counter, top bar, and launch button text updated to match (`349eda7a`)
+
+**WebUI Onboarding Parity Phase 2 — #356**
+- New `GET /v1/onboarding/personalities` endpoint: reads the full persona registry off `~/.zeus/personalities/`, returning `{id, name, tagline, description, category}` for every persona, falling back to a small hardcoded set only if the directory is empty or unreadable (`cf28e2e0`)
+- Persona picker step now renders all 25 personas dynamically from that endpoint instead of a hardcoded shortlist — new personas need zero WebUI code changes to appear in the wizard (`cf28e2e0`)
+- Skills step now sources the live installed skill catalog via the existing `/v1/onboarding/skills` endpoint instead of a stub list (`cf28e2e0`)
+- Model-name field now auto-prefixes by provider on selection, matching TUI behavior, instead of requiring the raw provider-qualified string (`cf28e2e0`)
+- 220 lines of orphaned `StepServices` code removed — dead since an earlier step-reorder left it unreachable (`cf28e2e0`)
+- Landed via `b3b84e7a` (doc-comment cleanup + handler relocation on top of `cf28e2e0`)
+
+### Fixed
+
+**Soul Pipeline — #338, #346, #347**
+- Restored two intentional `SOUL.md` writers that #326 had over-corrected into a single-writer model: onboarding writes the selected persona's SOUL on setup, and `--with-identity` re-stamps it on deploy — both route through `write_onboarding_soul`'s heal-stub/preserve-custom semantics (`63b98242`, #338)
+- Onboarding tilde paths (`~/...`) now expand correctly before filesystem writes, fixing SOUL.md landing in the literal `~` directory instead of the user's home (`d42c4f03`, #347)
+- Install identity fallback guarded against a bad path when no persona is selected (`057fa700`, #346)
+
+**Installer — #349**
+- Sandbox no-launch mode kept fully hermetic — no stray process launches during dry-run/sandbox installs (`e265ac29`)
+
+**LLM Capability Routing**
+- xAI Grok capabilities isolated from the shared capability table so Grok-specific limits/features no longer leak into other providers' capability checks (`3e359262`)
+- Sakana auth-probe URL normalized — provider-local normalizer guarantees exactly one `/v1` segment; regression test asserts Bearer auth + no `/v1/v1` (`e5eb9671`, #355)
+
+**Instagram + TikTok TUI surfaces — #361**
+- Onboarding `ChanConfig` screen gained Instagram (7 fields: `access_token`, `account_id`, `page_id`, `app_id`, `app_secret`, `poll_interval_secs`, `auto_reply` toggle via Space) and TikTok (single access-token field) entries, secrets masked same as existing channels (`341fb65f`)
+- Production Channels tab renders live Instagram + TikTok rows; TikTok correctly shown post-only with no fabricated inbound message stats (`341fb65f`)
+
+**Instagram + TikTok WebUI surfaces — #362**
+- Onboarding channel step gained the same Instagram (7 fields: `access_token`, `account_id`, `page_id`, `app_id`, `app_secret`, `poll_interval_secs`, `auto_reply`) and TikTok (`access_token` only, post-only) entries as the TUI, secrets masked with the existing pattern (`3bd31a6e`)
+- Channels page's add-modal lists both as selectable types; the dynamic `/v1/channels` render handles them with no template-specific code (`3bd31a6e`)
+- Additive-only diff (+16 lines) — zero changes to existing channel entries
+
+**Instagram + TikTok: feature-complete across all surfaces**
+- With #362 landed, Instagram and TikTok are now live and config-wired end-to-end: backend (#360), TUI (#361), and WebUI (#362) all ship the same field sets and behavior
+- Code-complete is not the same as production-usable: TikTok apps post `SELF_ONLY` (private) until the TikTok app audit passes, and Instagram publish/comments/DMs require Meta App Review — both are operator-side platform paperwork, not code gaps
+
+---
+
 ## [Unreleased] - 2026-07-09 to 2026-07-12
 
 Four-day sprint: full X (Twitter) community management suite, wallet UI wiring, soul restoration, hardening batch (#329–#335), and 13 more messaging channels wired end-to-end.

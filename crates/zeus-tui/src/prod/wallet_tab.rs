@@ -4,10 +4,10 @@
 //! (WalletTab, JSX 1138–1374), with live gateway wiring where endpoints exist.
 //!
 //! Data model: CR credits are live from the `zeus-economy` SQLite ledger
-//! (`/v1/economy/wallets` + `/v1/economy/transactions`). ZEUS token balances
-//! and wallet addresses live in `zeus-wallet`/x402 and currently have no TUI
-//! gateway endpoint, so the tab renders honest dashes / disabled affordances
-//! instead of prototype mock balances or fabricated titan rosters.
+//! (`/v1/economy/wallets` + `/v1/economy/transactions`). On-chain SOL, ZEUS
+//! token balance, public address, devnet cluster, recent signatures, and transfer
+//! preflight plans are overlaid from `/v1/wallet/onchain/*` (#352). Missing live
+//! data renders honest waiting/empty states, never prototype balances.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -198,6 +198,13 @@ pub struct WalletLive<'a> {
     pub wallets: Option<&'a [crate::api::EconomyWalletResponse]>,
     /// Live ledger transactions from `GET /v1/economy/transactions`.
     pub transactions: Option<&'a [crate::api::EconomyTxResponse]>,
+    /// Live on-chain wallet summary from `GET /v1/wallet/onchain`.
+    pub onchain_wallet: Option<&'a crate::api::OnchainWalletResponse>,
+    /// Live on-chain signature list from `GET /v1/wallet/onchain/transactions`.
+    pub onchain_transactions: Option<&'a [crate::api::OnchainTxResponse]>,
+    /// Last on-chain transfer response, including the `build_transfer_plan`
+    /// preflight returned by `POST /v1/wallet/onchain/transfer`.
+    pub onchain_transfer: Option<&'a crate::api::OnchainTransferResponse>,
 }
 
 /// The wallet tab widget.
@@ -286,6 +293,18 @@ impl WalletTab<'_> {
         self.live.and_then(|l| l.transactions).unwrap_or(&[])
     }
 
+    fn onchain_wallet(&self) -> Option<&crate::api::OnchainWalletResponse> {
+        self.live.and_then(|l| l.onchain_wallet)
+    }
+
+    fn onchain_txs(&self) -> Option<&[crate::api::OnchainTxResponse]> {
+        self.live.and_then(|l| l.onchain_transactions)
+    }
+
+    fn onchain_transfer(&self) -> Option<&crate::api::OnchainTransferResponse> {
+        self.live.and_then(|l| l.onchain_transfer)
+    }
+
     fn selected_wallet(&self) -> Option<&crate::api::EconomyWalletResponse> {
         let wallets = self.wallets();
         wallets.get(self.titan_sel.min(wallets.len().saturating_sub(1)))
@@ -320,6 +339,7 @@ impl WalletTab<'_> {
         let x = area.x + 2;
         let mut y = area.y;
         let wallets = self.wallets();
+        let onchain = self.onchain_wallet();
         let human_credit = wallets.first().map(|w| w.balance);
         let total_credit: u64 = wallets.iter().map(|w| w.balance).sum();
         let total_earned: u64 = wallets.iter().map(|w| w.total_earned).sum();
@@ -328,111 +348,53 @@ impl WalletTab<'_> {
         card_title(buf, x, y, area.width, "HUMAN WALLET", theme::ACCENT);
         y += 1;
         buf.set_string_clamped(x, y, "│", Style::default().fg(theme::ACCENT_DIM));
-        buf.set_string_clamped(x + 3, y, "ZEUS TOKEN", dim_bold());
-        buf.set_string_clamped(x + 30, y, "CREDIT", dim_bold());
+        buf.set_string_clamped(x + 3, y, "ON-CHAIN ZEUS", dim_bold());
+        buf.set_string_clamped(x + 33, y, "ECONOMY CREDIT", dim_bold());
         y += 1;
         buf.set_string_clamped(x, y, "│", Style::default().fg(theme::ACCENT_DIM));
-        buf.set_string_clamped(
-            x + 3,
-            y,
-            "— ZEUS",
-            Style::default()
-                .fg(theme::WHITE)
-                .add_modifier(Modifier::BOLD),
-        );
+        let token = onchain
+            .map(|w| format!("{} ZEUS", token_amount_fmt(w.token_balance, w.token_decimals)))
+            .unwrap_or_else(|| "— ZEUS".to_string());
+        buf.set_string_clamped(x + 3, y, token, Style::default().fg(theme::WHITE).add_modifier(Modifier::BOLD));
         let credit = human_credit.map(wfmt).unwrap_or_else(|| "—".to_string());
-        buf.set_string_clamped(
-            x + 30,
-            y,
-            format!("{credit} CR"),
-            Style::default()
-                .fg(theme::AMBER)
-                .add_modifier(Modifier::BOLD),
-        );
+        buf.set_string_clamped(x + 33, y, format!("{credit} CR"), Style::default().fg(theme::AMBER).add_modifier(Modifier::BOLD));
         y += 1;
         buf.set_string_clamped(x, y, "│", Style::default().fg(theme::ACCENT_DIM));
-        buf.set_string_clamped(
-            x + 3,
-            y,
-            "zeus-wallet address",
-            Style::default().fg(theme::DIM),
-        );
-        buf.set_string_clamped(x + 25, y, "—", Style::default().fg(theme::MUTED));
-        buf.set_string_clamped(
-            x + 30,
-            y,
-            "x402 endpoint not exposed",
-            Style::default().fg(theme::DIM),
-        );
+        match onchain {
+            Some(wallet) => {
+                buf.set_string_clamped(x + 3, y, format!("{} SOL", sol_fmt(wallet.sol_lamports)), Style::default().fg(theme::GREEN));
+                buf.set_string_clamped(x + 18, y, cluster_badge(&wallet.cluster), Style::default().fg(cluster_color(&wallet.cluster)).add_modifier(Modifier::BOLD));
+                buf.set_string_clamped(x + 30, y, format!("addr {}", short_addr(&wallet.address)), Style::default().fg(theme::TEXT));
+            }
+            None => {
+                buf.set_string_clamped(x + 3, y, "Fetching /v1/wallet/onchain…", Style::default().fg(theme::DIM));
+            }
+        }
         y += 1;
         bottom_rule(buf, x, y, area.width, theme::ACCENT_DIM);
         y += 2;
 
         buf.set_string_clamped(x, y, "FLEET TITAN WALLETS", dim_bold());
-        buf.set_string_clamped(
-            x + 24,
-            y,
-            format!("{} agents · {} CR", wallets.len(), wfmt(total_credit)),
-            Style::default().fg(theme::ACCENT_DIM),
-        );
+        buf.set_string_clamped(x + 24, y, format!("{} agents · {} CR", wallets.len(), wfmt(total_credit)), Style::default().fg(theme::ACCENT_DIM));
         y += 1;
-        buf.set_string_clamped(
-            x,
-            y,
-            format!(
-                "earned {} CR · spent {} CR",
-                wfmt(total_earned),
-                wfmt(total_spent)
-            ),
-            Style::default().fg(theme::DIM),
-        );
+        buf.set_string_clamped(x, y, format!("earned {} CR · spent {} CR", wfmt(total_earned), wfmt(total_spent)), Style::default().fg(theme::DIM));
         y += 1;
 
         if wallets.is_empty() {
-            buf.set_string_clamped(
-                x,
-                y,
-                "No wallets — fetching /v1/economy/wallets…",
-                Style::default().fg(theme::DIM),
-            );
+            buf.set_string_clamped(x, y, "No internal wallets — fetching /v1/economy/wallets…", Style::default().fg(theme::DIM));
             return;
         }
 
-        for (i, wallet) in wallets.iter().enumerate() {
-            if y >= area.bottom() {
-                break;
-            }
+        for (i, wallet) in wallets.iter().enumerate().take(8) {
+            if y >= area.bottom() { break; }
             let selected = i == self.titan_sel.min(wallets.len().saturating_sub(1));
-            let marker = if selected { "▸" } else { " " };
-            let row_style = if selected {
-                Style::default()
-                    .fg(theme::WHITE)
-                    .bg(theme::BG_HIGHLIGHT)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::TEXT)
-            };
+            let marker = if selected { "▶" } else { " " };
+            let row_style = if selected { Style::default().fg(theme::WHITE).bg(theme::BG_HIGHLIGHT).add_modifier(Modifier::BOLD) } else { Style::default().fg(theme::TEXT) };
             buf.set_string_clamped(x, y, marker, Style::default().fg(theme::ACCENT));
             buf.set_string_clamped(x + 2, y, short(&wallet.agent_id, 22), row_style);
-            buf.set_string_clamped(x + 27, y, "ZEUS —", Style::default().fg(theme::DIM));
-            buf.set_string_clamped(
-                x + 37,
-                y,
-                format!("{} CR", wfmt(wallet.balance)),
-                Style::default()
-                    .fg(theme::AMBER)
-                    .add_modifier(Modifier::BOLD),
-            );
-            buf.set_string_clamped(
-                x + 55,
-                y,
-                format!(
-                    "earn {} · spend {}",
-                    wfmt(wallet.total_earned),
-                    wfmt(wallet.total_spent)
-                ),
-                Style::default().fg(theme::DIM),
-            );
+            buf.set_string_clamped(x + 27, y, "on-chain —", Style::default().fg(theme::DIM));
+            buf.set_string_clamped(x + 42, y, format!("{} CR", wfmt(wallet.balance)), Style::default().fg(theme::AMBER).add_modifier(Modifier::BOLD));
+            buf.set_string_clamped(x + 60, y, format!("earn {} · spend {}", wfmt(wallet.total_earned), wfmt(wallet.total_spent)), Style::default().fg(theme::DIM));
             y += 1;
         }
     }
@@ -444,91 +406,62 @@ impl WalletTab<'_> {
     fn render_send(&self, area: Rect, buf: &mut Buffer) {
         let x = area.x + 2;
         let mut y = area.y;
-        let selected = self
-            .selected_wallet()
-            .map(|w| w.agent_id.as_str())
-            .unwrap_or("select live wallet");
+        let onchain = self.onchain_wallet();
+        let transfer = self.onchain_transfer();
+        let selected = self.selected_wallet().map(|w| w.agent_id.as_str()).unwrap_or("select internal wallet");
 
-        card_title(buf, x, y, area.width / 2, "SEND TOKENS", theme::ACCENT);
+        card_title(buf, x, y, area.width / 2, "SEND ZEUS — DEVNET", theme::ACCENT);
         y += 1;
+        buf.set_string_clamped(x, y, "│", Style::default().fg(theme::ACCENT_DIM));
+        buf.set_string_clamped(x + 3, y, "SOURCE", dim_bold());
+        y += 1;
+        buf.set_string_clamped(x, y, "│", Style::default().fg(theme::ACCENT_DIM));
+        match onchain {
+            Some(wallet) => buf.set_string_clamped(x + 3, y, format!("{} · {}", short_addr(&wallet.address), cluster_badge(&wallet.cluster)), Style::default().fg(theme::TEXT)),
+            None => buf.set_string_clamped(x + 3, y, "Waiting for /v1/wallet/onchain…", Style::default().fg(theme::DIM)),
+        };
+        y += 2;
         buf.set_string_clamped(x, y, "│", Style::default().fg(theme::ACCENT_DIM));
         buf.set_string_clamped(x + 3, y, "RECIPIENT", dim_bold());
         y += 1;
         buf.set_string_clamped(x, y, "│", Style::default().fg(theme::ACCENT_DIM));
-        buf.set_string_clamped(
-            x + 3,
-            y,
-            format!("▸ @{selected}"),
-            Style::default().fg(theme::TEXT),
-        );
+        let recipient = transfer.map(|t| short_addr(&t.recipient)).unwrap_or_else(|| format!("@{selected} / base58 pending"));
+        buf.set_string_clamped(x + 3, y, recipient, Style::default().fg(theme::TEXT));
         y += 2;
         buf.set_string_clamped(x, y, "│", Style::default().fg(theme::ACCENT_DIM));
         buf.set_string_clamped(x + 3, y, "AMOUNT", dim_bold());
         y += 1;
         buf.set_string_clamped(x, y, "│", Style::default().fg(theme::ACCENT_DIM));
-        buf.set_string_clamped(
-            x + 3,
-            y,
-            "— ZEUS",
-            Style::default()
-                .fg(theme::WHITE)
-                .add_modifier(Modifier::BOLD),
-        );
-        buf.set_string_clamped(x + 14, y, "[MAX disabled]", Style::default().fg(theme::DIM));
+        let amount = transfer.map(|t| format!("{} raw ZEUS", wfmt(t.amount))).unwrap_or_else(|| "— ZEUS".to_string());
+        buf.set_string_clamped(x + 3, y, amount, Style::default().fg(theme::WHITE).add_modifier(Modifier::BOLD));
         y += 2;
         buf.set_string_clamped(x, y, "│", Style::default().fg(theme::ACCENT_DIM));
-        buf.set_string_clamped(x + 3, y, "MEMO", dim_bold());
-        y += 1;
-        buf.set_string_clamped(x, y, "│", Style::default().fg(theme::ACCENT_DIM));
-        buf.set_string_clamped(
-            x + 3,
-            y,
-            "endpoint live — interactive input pending",
-            Style::default().fg(theme::DIM),
-        );
-        y += 2;
-        buf.set_string_clamped(x, y, "│", Style::default().fg(theme::ACCENT_DIM));
-        buf.set_string_clamped(x + 3, y, "fee — · x402", Style::default().fg(theme::DIM));
-        buf.set_string_clamped(
-            x + 21,
-            y,
-            " ▸ SIGN [disabled] ",
-            Style::default().fg(theme::MUTED).bg(theme::BG_HIGHLIGHT),
-        );
+        buf.set_string_clamped(x + 3, y, "POST /v1/wallet/onchain/transfer returns build_transfer_plan before submit", Style::default().fg(theme::DIM));
         y += 1;
         bottom_rule(buf, x, y, area.width / 2, theme::ACCENT_DIM);
 
-        let px = x + 50;
+        let px = x + 52;
         let mut py = area.y;
-        card_title(
-            buf,
-            px,
-            py,
-            area.width.saturating_sub(52),
-            "x402 PAY-FLOW",
-            theme::AMBER,
-        );
+        card_title(buf, px, py, area.width.saturating_sub(52), "PREFLIGHT PLAN", theme::AMBER);
         py += 1;
-        for (i, step) in [
-            "compose intent",
-            "sign with zeus-wallet",
-            "settle x402 payment",
-            "ledger mirror",
-        ]
-        .iter()
-        .enumerate()
-        {
-            if py >= area.bottom() {
-                break;
+        match transfer {
+            Some(tx) => {
+                let rows = [
+                    format!("token balance {}", wfmt(tx.plan.sender_token_balance)),
+                    format!("needed {} · sufficient {}", wfmt(tx.amount), yes_no(tx.plan.token_balance_sufficient)),
+                    format!("recipient ATA {}", if tx.plan.recipient_ata_exists { "exists" } else { "missing" }),
+                    format!("ATA create required {}", yes_no(tx.plan.ata_create_required)),
+                    format!("fee wallet {} SOL", sol_fmt(tx.plan.sender_sol_lamports)),
+                    format!("signature {}", short_addr(&tx.signature)),
+                ];
+                for row in rows { if py >= area.bottom() { break; } buf.set_string_clamped(px, py, "│", Style::default().fg(theme::AMBER)); buf.set_string_clamped(px + 3, py, row, Style::default().fg(theme::TEXT)); py += 1; }
             }
-            let style = if i == 0 {
-                Style::default().fg(theme::AMBER)
-            } else {
-                Style::default().fg(theme::DIM)
-            };
-            buf.set_string_clamped(px, py, "│", Style::default().fg(theme::AMBER));
-            buf.set_string_clamped(px + 3, py, format!("{}. {step}", i + 1), style);
-            py += 1;
+            None if onchain.is_some() => {
+                for row in ["No transfer response yet.", "Enter recipient/amount in the follow-up send UI to build plan.", "Gateway guard: devnet-only; mainnet returns 403."] { if py >= area.bottom() { break; } buf.set_string_clamped(px, py, "│", Style::default().fg(theme::AMBER)); buf.set_string_clamped(px + 3, py, row, Style::default().fg(theme::DIM)); py += 1; }
+            }
+            None => {
+                for row in ["Waiting for on-chain wallet data…", "No preflight plan requested yet."] { if py >= area.bottom() { break; } buf.set_string_clamped(px, py, "│", Style::default().fg(theme::AMBER)); buf.set_string_clamped(px + 3, py, row, Style::default().fg(theme::DIM)); py += 1; }
+            }
         }
         bottom_rule(buf, px, py, area.width.saturating_sub(52), theme::AMBER);
     }
@@ -619,11 +552,12 @@ impl WalletTab<'_> {
         );
     }
 
-    /// Activity view — live ledger transactions.
+    /// Activity view — live ledger transactions plus recent on-chain signatures.
     fn render_activity(&self, area: Rect, buf: &mut Buffer) {
         let x = area.x + 2;
         let mut y = area.y;
         let txs = self.txs();
+        let onchain_txs = self.onchain_txs();
 
         card_title(buf, x, y, area.width, "ACTIVITY", theme::ACCENT);
         y += 1;
@@ -642,48 +576,105 @@ impl WalletTab<'_> {
                 "No transactions — fetching /v1/economy/transactions…",
                 Style::default().fg(theme::DIM),
             );
-            return;
+            y += 2;
+        } else {
+            for tx in txs {
+                if y >= area.bottom() {
+                    break;
+                }
+                let kind = tx_kind(tx.kind_label().as_str());
+                let who = tx_party(tx);
+                let sign = if kind.is_inflow() { "+" } else { "−" };
+                let amt_color = if kind.is_inflow() {
+                    theme::GREEN
+                } else {
+                    theme::AMBER
+                };
+                buf.set_string_clamped(
+                    x,
+                    y,
+                    format!("{} {}", kind.glyph(), kind.label()),
+                    Style::default()
+                        .fg(kind.color())
+                        .add_modifier(Modifier::BOLD),
+                );
+                buf.set_string_clamped(x + 9, y, short(&who, 22), Style::default().fg(theme::TEXT));
+                buf.set_string_clamped(
+                    x + 33,
+                    y,
+                    format!("{sign}{} CR", wfmt(tx.amount)),
+                    Style::default().fg(amt_color).add_modifier(Modifier::BOLD),
+                );
+                buf.set_string_clamped(x + 49, y, "● ok", Style::default().fg(theme::GREEN));
+                let reason = tx.reason_label();
+                if !reason.is_empty() {
+                    buf.set_string_clamped(
+                        x + 55,
+                        y,
+                        short(&reason, 28),
+                        Style::default().fg(theme::DIM),
+                    );
+                }
+                y += 1;
+            }
+            y += 1;
         }
 
-        for tx in txs {
-            if y >= area.bottom() {
-                break;
-            }
-            let kind = tx_kind(tx.kind_label().as_str());
-            let who = tx_party(tx);
-            let sign = if kind.is_inflow() { "+" } else { "−" };
-            let amt_color = if kind.is_inflow() {
-                theme::GREEN
-            } else {
-                theme::AMBER
-            };
-            buf.set_string_clamped(x, y, kind.glyph(), Style::default().fg(kind.color()));
-            buf.set_string_clamped(
-                x + 2,
-                y,
-                format!("{:<5}", kind.label()),
-                Style::default()
-                    .fg(kind.color())
-                    .add_modifier(Modifier::BOLD),
-            );
-            buf.set_string_clamped(x + 9, y, short(&who, 22), Style::default().fg(theme::TEXT));
-            buf.set_string_clamped(
-                x + 33,
-                y,
-                format!("{sign}{} CR", wfmt(tx.amount)),
-                Style::default().fg(amt_color).add_modifier(Modifier::BOLD),
-            );
-            buf.set_string_clamped(x + 49, y, "● ok", Style::default().fg(theme::GREEN));
-            let reason = tx.reason_label();
-            if !reason.is_empty() {
+        if y >= area.bottom() {
+            return;
+        }
+        card_title(buf, x, y, area.width, "ON-CHAIN SIGNATURES", theme::GREEN);
+        y += 1;
+        match onchain_txs {
+            None => {
                 buf.set_string_clamped(
-                    x + 55,
+                    x,
                     y,
-                    short(&reason, 28),
+                    "Waiting for /v1/wallet/onchain/transactions…",
                     Style::default().fg(theme::DIM),
                 );
             }
-            y += 1;
+            Some([]) => {
+                buf.set_string_clamped(
+                    x,
+                    y,
+                    "No on-chain signatures yet.",
+                    Style::default().fg(theme::DIM),
+                );
+            }
+            Some(rows) => {
+                for tx in rows.iter().take(5) {
+                    if y >= area.bottom() {
+                        break;
+                    }
+                    let status = tx.confirmation_status.as_deref().unwrap_or("confirmed");
+                    let err = if tx.err.is_some() { "err" } else { "ok" };
+                    buf.set_string_clamped(x, y, "│", Style::default().fg(theme::GREEN));
+                    buf.set_string_clamped(
+                        x + 3,
+                        y,
+                        format!("sig {}", short_addr(&tx.signature)),
+                        Style::default().fg(theme::TEXT),
+                    );
+                    buf.set_string_clamped(
+                        x + 23,
+                        y,
+                        format!("slot {}", tx.slot),
+                        Style::default().fg(theme::DIM),
+                    );
+                    buf.set_string_clamped(
+                        x + 40,
+                        y,
+                        format!("{status} · {err}"),
+                        Style::default().fg(if tx.err.is_some() {
+                            theme::RED
+                        } else {
+                            theme::GREEN
+                        }),
+                    );
+                    y += 1;
+                }
+            }
         }
     }
 
@@ -834,6 +825,68 @@ impl WalletTab<'_> {
     }
 }
 
+
+fn short_addr(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= 12 {
+        return s.to_string();
+    }
+    format!("{}…{}", chars[..4].iter().collect::<String>(), chars[chars.len() - 4..].iter().collect::<String>())
+}
+
+fn sol_fmt(lamports: u64) -> String {
+    let whole = lamports / 1_000_000_000;
+    let frac = (lamports % 1_000_000_000) / 1_000_000;
+    if frac == 0 {
+        format!("{whole}")
+    } else {
+        format!("{whole}.{frac:03}").trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
+fn token_amount_fmt(raw: u64, decimals: u8) -> String {
+    if decimals == 0 {
+        return wfmt(raw);
+    }
+    let scale = 10_u64.saturating_pow(decimals as u32);
+    if scale == 0 {
+        return wfmt(raw);
+    }
+    let whole = raw / scale;
+    let frac = raw % scale;
+    if frac == 0 {
+        return wfmt(whole);
+    }
+    let mut frac_s = format!("{frac:0width$}", width = decimals as usize);
+    while frac_s.ends_with('0') {
+        frac_s.pop();
+    }
+    format!("{}.{frac_s}", wfmt(whole))
+}
+
+fn cluster_badge(cluster: &str) -> String {
+    match cluster {
+        "devnet" => "DEVNET".to_string(),
+        "testnet" => "TESTNET".to_string(),
+        "mainnet" => "MAINNET".to_string(),
+        other if !other.is_empty() => other.to_ascii_uppercase(),
+        _ => "CLUSTER —".to_string(),
+    }
+}
+
+fn cluster_color(cluster: &str) -> ratatui::style::Color {
+    match cluster {
+        "devnet" => theme::GREEN,
+        "testnet" => theme::AMBER,
+        "mainnet" => theme::RED,
+        _ => theme::DIM,
+    }
+}
+
+fn yes_no(v: bool) -> &'static str {
+    if v { "yes" } else { "no" }
+}
+
 fn fill_bg(area: Rect, buf: &mut Buffer) {
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
@@ -953,6 +1006,7 @@ mod tests {
         let live = WalletLive {
             wallets: Some(&wallets),
             transactions: None,
+            ..WalletLive::default()
         };
         let area = Rect::new(0, 0, 100, 30);
         let mut buf = Buffer::empty(area);

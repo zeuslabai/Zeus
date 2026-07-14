@@ -485,6 +485,14 @@ pub async fn run_with_force_and_gateway(
                     && let Ok(mut a) = app.lock() {
                         a.prod_economy_txs = Some(txs);
                     }
+                if let Ok(wallet) = client.wallet_onchain().await
+                    && let Ok(mut a) = app.lock() {
+                        a.prod_onchain_wallet = Some(wallet);
+                    }
+                if let Ok(txs) = client.wallet_onchain_transactions().await
+                    && let Ok(mut a) = app.lock() {
+                        a.prod_onchain_txs = Some(txs);
+                    }
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
             }
         });

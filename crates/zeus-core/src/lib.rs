@@ -4114,6 +4114,77 @@ fn default_x_client_secret() -> String {
     std::env::var("X_CLIENT_SECRET").unwrap_or_default()
 }
 
+/// Instagram channel configuration
+///
+/// Used for Instagram Graph API integration under `[channels.instagram]`.
+/// Env var fallbacks: `INSTAGRAM_ACCESS_TOKEN`, `INSTAGRAM_ACCOUNT_ID`,
+/// `INSTAGRAM_PAGE_ID`, `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InstagramConfig {
+    /// Meta Graph API access token (long-lived)
+    #[serde(default = "default_instagram_access_token")]
+    pub access_token: String,
+    /// Instagram Business/Creator Account ID
+    #[serde(default = "default_instagram_account_id")]
+    pub account_id: String,
+    /// Facebook Page ID (required for some operations)
+    #[serde(default = "default_instagram_page_id", skip_serializing_if = "Option::is_none")]
+    pub page_id: Option<String>,
+    /// App ID (for token refresh)
+    #[serde(default = "default_instagram_app_id", skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+    /// App secret (for token refresh)
+    #[serde(default = "default_instagram_app_secret", skip_serializing_if = "Option::is_none")]
+    pub app_secret: Option<String>,
+    /// Polling interval for comments in seconds (default: 120)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll_interval_secs: Option<u64>,
+    /// Auto-reply to comments (default: false)
+    #[serde(default)]
+    pub auto_reply: bool,
+}
+
+fn default_instagram_access_token() -> String {
+    std::env::var("INSTAGRAM_ACCESS_TOKEN").unwrap_or_default()
+}
+
+fn default_instagram_account_id() -> String {
+    std::env::var("INSTAGRAM_ACCOUNT_ID").unwrap_or_default()
+}
+
+fn default_instagram_page_id() -> Option<String> {
+    std::env::var("INSTAGRAM_PAGE_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
+fn default_instagram_app_id() -> Option<String> {
+    std::env::var("INSTAGRAM_APP_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
+fn default_instagram_app_secret() -> Option<String> {
+    std::env::var("INSTAGRAM_APP_SECRET")
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
+/// TikTok channel configuration
+///
+/// Used for TikTok Content Posting API integration under `[channels.tiktok]`.
+/// Env var fallback: `TIKTOK_ACCESS_TOKEN`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TikTokConfig {
+    /// OAuth2 user access token with `video.publish` scope.
+    #[serde(default = "default_tiktok_access_token")]
+    pub access_token: String,
+}
+
+fn default_tiktok_access_token() -> String {
+    std::env::var("TIKTOK_ACCESS_TOKEN").unwrap_or_default()
+}
+
 /// Twitch channel configuration
 ///
 /// Used for Twitch chat integration under `[channels.twitch]`.
@@ -4620,6 +4691,12 @@ pub struct ChannelsConfig {
     /// X (Twitter) configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x_twitter: Option<XTwitterChannelConfig>,
+    /// Instagram configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instagram: Option<InstagramConfig>,
+    /// TikTok configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiktok: Option<TikTokConfig>,
     /// Microsoft Teams configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub teams: Option<TeamsChannelConfig>,
@@ -9018,6 +9095,8 @@ verbosity = "barfly"
             irc: None,
             twitch: None,
             x_twitter: None,
+            instagram: None,
+            tiktok: None,
             teams: None,
             webchat: None,
             googlechat: None,
@@ -9064,6 +9143,8 @@ verbosity = "barfly"
             irc: None,
             twitch: None,
             x_twitter: None,
+            instagram: None,
+            tiktok: None,
             teams: None,
             webchat: None,
             googlechat: None,
@@ -9103,6 +9184,8 @@ verbosity = "barfly"
             irc: None,
             twitch: None,
             x_twitter: None,
+            instagram: None,
+            tiktok: None,
             teams: None,
             webchat: None,
             googlechat: None,

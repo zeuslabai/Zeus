@@ -253,6 +253,24 @@ const CHANNELS: &[Channel] = &[
         desc: "iMessage via BlueBubbles server",
         sdk: "BlueBubbles REST",
     },
+    Channel {
+        id: "instagram",
+        name: "Instagram",
+        glyph: "IG",
+        color: theme::FIRE_ORANGE,
+        group: "Cloud APIs",
+        desc: "Comments, media publishing, auto-replies",
+        sdk: "Instagram Graph API",
+    },
+    Channel {
+        id: "tiktok",
+        name: "TikTok",
+        glyph: "TT",
+        color: theme::PURPLE,
+        group: "Cloud APIs",
+        desc: "Post-only video publishing",
+        sdk: "Content Posting API",
+    },
 ];
 
 const GROUPS: &[&str] = &["Cloud APIs", "Phone-paired"];

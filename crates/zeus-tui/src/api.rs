@@ -414,6 +414,77 @@ pub struct EconomyWalletResponse {
     pub total_spent: u64,
 }
 
+/// Public on-chain wallet summary from `GET /v1/wallet/onchain` (#352).
+/// Zero key material: address + balances + public mint/cluster only.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct OnchainWalletResponse {
+    #[serde(default)]
+    pub address: String,
+    #[serde(default)]
+    pub sol_lamports: u64,
+    #[serde(default)]
+    pub sol: f64,
+    #[serde(default)]
+    pub token_balance: u64,
+    #[serde(default)]
+    pub token_decimals: u8,
+    #[serde(default)]
+    pub mint: String,
+    #[serde(default)]
+    pub cluster: String,
+}
+
+/// One recent Solana signature row from `GET /v1/wallet/onchain/transactions`.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct OnchainTxResponse {
+    #[serde(default)]
+    pub signature: String,
+    #[serde(default)]
+    pub slot: u64,
+    #[serde(default)]
+    pub block_time: Option<i64>,
+    #[serde(default)]
+    pub confirmation_status: Option<String>,
+    #[serde(default)]
+    pub err: Option<serde_json::Value>,
+}
+
+/// `build_transfer_plan` preflight metadata echoed by `/v1/wallet/onchain/transfer`.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct OnchainTransferPlanResponse {
+    #[serde(default)]
+    pub sender_sol_lamports: u64,
+    #[serde(default)]
+    pub sender_token_balance: u64,
+    #[serde(default)]
+    pub token_balance_sufficient: bool,
+    #[serde(default)]
+    pub recipient_ata_exists: bool,
+    #[serde(default)]
+    pub ata_create_required: bool,
+}
+
+/// Devnet on-chain transfer response from `POST /v1/wallet/onchain/transfer`.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct OnchainTransferResponse {
+    #[serde(default)]
+    pub signature: String,
+    #[serde(default)]
+    pub sender: String,
+    #[serde(default)]
+    pub recipient: String,
+    #[serde(default)]
+    pub amount: u64,
+    #[serde(default)]
+    pub mint: String,
+    #[serde(default)]
+    pub ata_created: bool,
+    #[serde(default)]
+    pub cluster: String,
+    #[serde(default)]
+    pub plan: OnchainTransferPlanResponse,
+}
+
 /// One ledger transaction from `GET /v1/economy/transactions` (#185
 /// Advanced→Economy RECENT TRANSACTIONS section). The ledger's `Transaction`
 /// exposes kind/reason/from_agent/to_agent/amount/note/created_at; the section
@@ -834,6 +905,34 @@ impl ApiClient {
         struct Resp { #[serde(default)] transactions: Vec<EconomyTxResponse> }
         let resp: Resp = self.get("/v1/economy/transactions?limit=20").await?;
         Ok(resp.transactions)
+    }
+
+
+    /// Public on-chain wallet info (`GET /v1/wallet/onchain`). #352.
+    pub async fn wallet_onchain(&self) -> Result<OnchainWalletResponse, String> {
+        self.get("/v1/wallet/onchain").await
+    }
+
+    /// Recent on-chain signatures (`GET /v1/wallet/onchain/transactions`). #352.
+    pub async fn wallet_onchain_transactions(&self) -> Result<Vec<OnchainTxResponse>, String> {
+        #[derive(Deserialize)]
+        struct Resp { #[serde(default)] transactions: Vec<OnchainTxResponse> }
+        let resp: Resp = self.get("/v1/wallet/onchain/transactions?limit=20").await?;
+        Ok(resp.transactions)
+    }
+
+    /// Submit a devnet token transfer and receive the gateway preflight plan. #352.
+    pub async fn wallet_onchain_transfer(
+        &self,
+        recipient: &str,
+        amount: u64,
+    ) -> Result<OnchainTransferResponse, String> {
+        #[derive(Serialize)]
+        struct Req<'a> {
+            recipient: &'a str,
+            amount: u64,
+        }
+        self.post("/v1/wallet/onchain/transfer", &Req { recipient, amount }).await
     }
 
     /// Transfer credits between agents (`POST /v1/economy/transfer`). #190 P2.

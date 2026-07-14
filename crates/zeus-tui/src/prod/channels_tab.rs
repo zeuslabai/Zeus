@@ -60,12 +60,15 @@ struct ChannelCard {
     msgs_24h: String,
     sdk: String,
     enabled: String,
+    post_only: bool,
 }
 
 impl ChannelCard {
     fn from_response(ch: &ChannelResponse) -> Self {
         let channel_key = first_non_empty(&[&ch.channel_type, &ch.id, &ch.name]);
-        let name = first_non_empty(&[&ch.name, &title_case(&ch.channel_type), &ch.id]);
+        let channel_key_lower = channel_key.trim().to_ascii_lowercase();
+        let post_only = channel_key_lower == "tiktok";
+        let name = first_non_empty(&[&ch.name, &pretty_channel_name(&channel_key), &ch.id]);
         let status = match ch.enabled {
             Some(false) => ChannelStatus::Disconnected,
             _ => ChannelStatus::from_gateway(&ch.status),
@@ -94,6 +97,7 @@ impl ChannelCard {
                 .map(|enabled| if enabled { "true" } else { "false" })
                 .unwrap_or(UNKNOWN)
                 .to_string(),
+            post_only,
         }
     }
 }
@@ -289,10 +293,15 @@ fn draw_channel_card(buf: &mut Buffer, area: Rect, y: u16, ch: &ChannelCard, sel
             format!("binding {}", ch.binding),
             Style::default().fg(theme::TEXT).bg(bg),
         );
+        let detail = if ch.post_only {
+            "mode post-only".to_string()
+        } else {
+            format!("recent {}", ch.recent)
+        };
         buf.set_string_clamped(
             binding_x,
             y + 1,
-            format!("recent {}", ch.recent),
+            detail,
             Style::default().fg(theme::DIM).bg(bg),
         );
     }
@@ -305,18 +314,21 @@ fn draw_channel_card(buf: &mut Buffer, area: Rect, y: u16, ch: &ChannelCard, sel
             format!("enabled {}", ch.enabled),
             Style::default().fg(theme::DIM).bg(bg),
         );
-        buf.set_string_clamped(
-            stats_x,
-            y + 2,
-            format!("{} MSGS / 24H", ch.msgs_24h),
-            Style::default().fg(theme::FIRE_ORANGE).bg(bg),
-        );
+        if !ch.post_only {
+            buf.set_string_clamped(
+                stats_x,
+                y + 2,
+                format!("{} MSGS / 24H", ch.msgs_24h),
+                Style::default().fg(theme::FIRE_ORANGE).bg(bg),
+            );
+        }
     }
 
+    let sdk_label = if ch.post_only { "sdk post-only" } else { "sdk" };
     buf.set_string_clamped(
         x + 9,
         y + 2,
-        format!("sdk {}", ch.sdk),
+        format!("{sdk_label} {}", ch.sdk),
         Style::default().fg(theme::DIM).bg(bg),
     );
 
@@ -368,6 +380,8 @@ fn glyph_for(channel: &str) -> String {
         "telegram" => "TG".to_string(),
         "slack" => "SL".to_string(),
         "email" => "EM".to_string(),
+        "instagram" => "IG".to_string(),
+        "tiktok" => "TT".to_string(),
         "imessage" | "iMessage" => "iM".to_string(),
         "matrix" => "MX".to_string(),
         "whatsapp" => "WA".to_string(),
@@ -388,11 +402,21 @@ fn color_for(channel: &str) -> Color {
         "telegram" => theme::BLUE,
         "slack" => theme::GREEN,
         "email" => theme::AMBER,
+        "instagram" => theme::FIRE_ORANGE,
+        "tiktok" => theme::PURPLE,
         "imessage" | "whatsapp" => theme::GREEN,
         "matrix" => theme::CYAN,
         "signal" => theme::BLUE,
         "webhook" => theme::FIRE_ORANGE,
         _ => theme::DIM,
+    }
+}
+
+fn pretty_channel_name(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "instagram" => "Instagram".to_string(),
+        "tiktok" => "TikTok".to_string(),
+        other => title_case(other),
     }
 }
 

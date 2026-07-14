@@ -54,6 +54,28 @@ pub fn normalize_ollama_host(input: &str) -> String {
     with_scheme.trim_end_matches('/').to_string()
 }
 
+fn trimmed_env_var(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|u| u.trim().trim_end_matches('/').to_string())
+        .filter(|u| !u.is_empty())
+}
+
+fn openai_compatible_models_url(base: &str) -> String {
+    let base = base.trim().trim_end_matches('/');
+    if base.ends_with("/v1") {
+        format!("{base}/models")
+    } else {
+        format!("{base}/v1/models")
+    }
+}
+
+fn sakana_models_url() -> String {
+    let base = trimmed_env_var("SAKANA_BASE_URL")
+        .unwrap_or_else(|| "https://api.sakana.ai/v1".to_string());
+    openai_compatible_models_url(&base)
+}
+
 /// Fetch models from a provider's API. Returns model IDs on success, or an
 /// error string (surfaced on the Auth screen) on failure.
 ///
@@ -64,6 +86,7 @@ pub fn normalize_ollama_host(input: &str) -> String {
 /// - `groq` — `GET /openai/v1/models`, bearer.
 /// - `google` — `GET /v1beta/models?key=`; strip `models/` prefix, filter gemini.
 /// - `openrouter` — `GET /api/v1/models`, bearer; take top 20.
+/// - `sakana` — OpenAI-compatible `GET /v1/models`, bearer; normalize `/v1` base.
 /// - `_` — static fallback from `PROVIDERS`.
 pub async fn fetch_models(provider_id: &str, api_key: &str) -> Result<Vec<String>, String> {
     let client = reqwest::Client::new();
@@ -434,17 +457,13 @@ pub async fn fetch_models(provider_id: &str, api_key: &str) -> Result<Vec<String
         }
         "sakana" => {
             // Sakana AI (Fugu) — OpenAI-compatible (`stream_openai`, lib.rs:1672).
-            // Base from zeus-llm `base_url()` (lib.rs:827/920/1083/1562):
-            // `https://api.sakana.ai/v1` → `/models`, Bearer key, `data[].id`.
-            // `SAKANA_BASE_URL` honored (bare host, no trailing `/v1`) for parity
-            // with the xai/mimo resolver idiom; default host appends `/v1/models`.
-            let base = std::env::var("SAKANA_BASE_URL")
-                .ok()
-                .filter(|u| !u.trim().is_empty())
-                .map(|u| u.trim_end_matches('/').to_string())
-                .unwrap_or_else(|| "https://api.sakana.ai".to_string());
+            // Keep this arm provider-local: Sakana accepts Bearer auth against
+            // `https://api.sakana.ai/v1/models`. The override may be supplied
+            // either as a host (`http://localhost:NNN`) or as an OpenAI-style
+            // base (`http://localhost:NNN/v1`); normalize so onboarding never
+            // probes `/v1/v1/models` and rejects an otherwise valid fish_* key.
             let resp = client
-                .get(format!("{base}/v1/models"))
+                .get(sakana_models_url())
                 .bearer_auth(api_key)
                 .send()
                 .await
@@ -671,6 +690,36 @@ mod tests {
             .find(|p| p.id == "minimax")
             .expect("minimax must be a registered provider");
         assert_eq!(minimax.flagship, "MiniMax-M3");
+    }
+
+    #[tokio::test]
+    async fn sakana_fish_key_uses_bearer_models_probe_and_parses_models() {
+        let (base, request) = spawn_models_server(r#"{"data":[{"id":"fugu-ultra"}]}"#).await;
+        // Regression #355: users/operators often carry the OpenAI-compatible
+        // base with `/v1` already included. The Sakana arm must not append a
+        // second `/v1`, and must send fish_* keys as Bearer credentials.
+        let _env_guard = EnvVarGuard::set("SAKANA_BASE_URL", &format!("{base}/v1/"));
+        let models = fetch_models("sakana", "fish_test_123")
+            .await
+            .expect("mocked Sakana models probe succeeds");
+        drop(_env_guard);
+
+        assert_eq!(models, vec!["fugu-ultra".to_string()]);
+        let request = request.await.expect("server captures request");
+        assert!(
+            request.starts_with("GET /v1/models "),
+            "Sakana probe must normalize to one /v1 segment; request was: {request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer fish_test_123"),
+            "Sakana probe must use Bearer auth for fish_* keys; request was: {request}"
+        );
+        assert!(
+            !request.contains("/v1/v1/models"),
+            "Sakana probe must not duplicate /v1; request was: {request}"
+        );
     }
 
     #[tokio::test]

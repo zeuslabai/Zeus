@@ -83,7 +83,7 @@ pub fn capabilities(provider: &Provider) -> ProviderCapabilities {
             supports_thinking: true,
             supports_streaming: true,
             supports_parallel_tools: true,
-            supports_audit_logging: true,  // Claude handles mid-conversation system messages well
+            supports_audit_logging: true, // Claude handles mid-conversation system messages well
             supports_mid_loop_interrupt: true,
             bot_sender_min_iterations: 3,
             skip_temperature: false,
@@ -146,7 +146,7 @@ pub fn capabilities(provider: &Provider) -> ProviderCapabilities {
         Provider::Ollama => ProviderCapabilities {
             api_format: ApiFormat::OpenAI, // routed through OpenAI-compat
             auth_methods: &[AuthType::None],
-            supports_tools: true, // model-dependent, augmented at runtime
+            supports_tools: true,  // model-dependent, augmented at runtime
             supports_vision: true, // model-dependent
             supports_thinking: false,
             supports_streaming: true,
@@ -157,7 +157,7 @@ pub fn capabilities(provider: &Provider) -> ProviderCapabilities {
             skip_temperature: false,
             skip_v1_prefix: false,
             skip_parallel_tool_calls: true, // most Ollama models don't support it
-            context_window: 32_768, // overridden per-model via /api/show
+            context_window: 32_768,         // overridden per-model via /api/show
             max_output_tokens: 4096,
         },
         Provider::Moonshot => ProviderCapabilities {
@@ -347,8 +347,30 @@ pub fn capabilities(provider: &Provider) -> ProviderCapabilities {
             context_window: 200_000,
             max_output_tokens: 4096,
         },
-        // Providers that route through OpenAI-compat
-        Provider::XAI | Provider::Cerebras | Provider::DeepSeek | Provider::XiaomiMimo => ProviderCapabilities {
+        // xAI Grok models route through OpenAI-compat, but their current
+        // documented chat contexts are larger than the generic OpenAI-compat
+        // arm: grok-4.3 / grok-4.20 are 1M, grok-4.5 is 500k. Keep XAI
+        // isolated so provider-specific parity fixes do not mutate Mimo,
+        // Cerebras, or DeepSeek.
+        Provider::XAI => ProviderCapabilities {
+            api_format: ApiFormat::OpenAI,
+            auth_methods: &[AuthType::ApiKey],
+            supports_tools: true,
+            supports_vision: true,
+            supports_thinking: false,
+            supports_streaming: true,
+            supports_parallel_tools: true,
+            supports_audit_logging: false,
+            supports_mid_loop_interrupt: false,
+            bot_sender_min_iterations: 5,
+            skip_temperature: false,
+            skip_v1_prefix: false,
+            skip_parallel_tool_calls: false,
+            context_window: 1_000_000,
+            max_output_tokens: 4096,
+        },
+        // Providers that route through OpenAI-compat.
+        Provider::Cerebras | Provider::DeepSeek | Provider::XiaomiMimo => ProviderCapabilities {
             api_format: ApiFormat::OpenAI,
             auth_methods: &[AuthType::ApiKey],
             supports_tools: true,
@@ -624,11 +646,20 @@ mod tests {
         // history-trimmer calibrates off context_window), and skip_temperature
         // stops the `400 invalid arguments`.
         let caps = capabilities(&Provider::Sakana);
-        assert_eq!(caps.context_window, 1_000_000, "Fugu has a 1M context window");
+        assert_eq!(
+            caps.context_window, 1_000_000,
+            "Fugu has a 1M context window"
+        );
         assert_eq!(caps.max_output_tokens, 128_000, "Fugu supports 128k output");
         assert!(caps.skip_temperature, "Fugu rejects the temperature param");
-        assert!(caps.supports_thinking, "Fugu is an orchestration/reasoning model");
-        assert!(caps.supports_vision, "Fugu vision confirmed (text+image->text)");
+        assert!(
+            caps.supports_thinking,
+            "Fugu is an orchestration/reasoning model"
+        );
+        assert!(
+            caps.supports_vision,
+            "Fugu vision confirmed (text+image->text)"
+        );
         assert_eq!(caps.api_format, ApiFormat::OpenAI);
     }
 
@@ -639,6 +670,28 @@ mod tests {
         assert_eq!(capabilities(&Provider::OpenAI).max_output_tokens, 4096);
         assert_eq!(capabilities(&Provider::Anthropic).max_output_tokens, 4096);
         assert_eq!(capabilities(&Provider::XAI).max_output_tokens, 4096);
+    }
+
+    #[test]
+    fn test_xai_capabilities_are_isolated_for_grok() {
+        let caps = capabilities(&Provider::XAI);
+        assert_eq!(caps.api_format, ApiFormat::OpenAI);
+        assert!(caps.supports_streaming, "xAI supports streaming responses");
+        assert!(caps.supports_tools, "xAI supports tool calling");
+        assert!(
+            caps.supports_parallel_tools,
+            "xAI supports parallel tool calls"
+        );
+        assert!(caps.supports_vision, "xAI supports multimodal Grok models");
+        assert_eq!(caps.context_window, 1_000_000);
+        assert_eq!(caps.max_output_tokens, 4096);
+    }
+
+    #[test]
+    fn test_generic_openai_compat_provider_contexts_unchanged() {
+        assert_eq!(capabilities(&Provider::Cerebras).context_window, 128_000);
+        assert_eq!(capabilities(&Provider::DeepSeek).context_window, 128_000);
+        assert_eq!(capabilities(&Provider::XiaomiMimo).context_window, 128_000);
     }
 
     #[test]
@@ -665,17 +718,32 @@ mod tests {
     fn test_all_providers_have_capabilities() {
         // Verify every provider variant returns without panic
         let providers = [
-            Provider::Anthropic, Provider::OpenAI, Provider::Google,
-            Provider::GoogleGeminiCli, Provider::Ollama, Provider::Moonshot,
-            Provider::Zai, Provider::Qwen, Provider::Minimax,
-            Provider::OpenRouter, Provider::Groq, Provider::Mistral,
-            Provider::Together, Provider::Fireworks, Provider::Azure,
-            Provider::Bedrock, Provider::XAI, Provider::Cerebras,
+            Provider::Anthropic,
+            Provider::OpenAI,
+            Provider::Google,
+            Provider::GoogleGeminiCli,
+            Provider::Ollama,
+            Provider::Moonshot,
+            Provider::Zai,
+            Provider::Qwen,
+            Provider::Minimax,
+            Provider::OpenRouter,
+            Provider::Groq,
+            Provider::Mistral,
+            Provider::Together,
+            Provider::Fireworks,
+            Provider::Azure,
+            Provider::Bedrock,
+            Provider::XAI,
+            Provider::Cerebras,
             Provider::DeepSeek,
         ];
         for p in &providers {
             let caps = capabilities(p);
-            assert!(caps.supports_streaming, "All providers should support streaming");
+            assert!(
+                caps.supports_streaming,
+                "All providers should support streaming"
+            );
         }
     }
 
@@ -696,7 +764,10 @@ mod tests {
     fn test_vision_provider_vision_model() {
         // Zai provider supports vision, and qwen3.5-plus also supports vision
         let result = supports_image_input(&Provider::Zai, "qwen3.5-plus");
-        assert!(result.is_ok(), "qwen3.5-plus should be accepted for image input");
+        assert!(
+            result.is_ok(),
+            "qwen3.5-plus should be accepted for image input"
+        );
         assert!(result.unwrap(), "qwen3.5-plus should return true");
     }
 
@@ -717,15 +788,24 @@ mod tests {
         // Model not in catalog on a catalog-based provider (Zai) —
         // non-GLM models trust provider-level flag
         let result = supports_image_input(&Provider::Zai, "some-future-model");
-        assert!(result.is_ok(), "unknown non-GLM model on Zai should defer to provider flag");
-        assert!(result.unwrap(), "Zai provider supports vision, so unknown non-GLM model should be allowed");
+        assert!(
+            result.is_ok(),
+            "unknown non-GLM model on Zai should defer to provider flag"
+        );
+        assert!(
+            result.unwrap(),
+            "Zai provider supports vision, so unknown non-GLM model should be allowed"
+        );
     }
 
     #[test]
     fn test_glm_variant_rejected() {
         // glm-5.1 is not in the catalog but should be caught by prefix match
         let result = supports_image_input(&Provider::Zai, "glm-5.1");
-        assert!(result.is_err(), "glm-5.1 should be rejected for image input");
+        assert!(
+            result.is_err(),
+            "glm-5.1 should be rejected for image input"
+        );
         let err_msg = result.unwrap_err();
         assert!(
             err_msg.contains("does not support image input"),
@@ -742,7 +822,10 @@ mod tests {
         // Anthropic is a vision-capable provider with no catalog entries
         // (not in qwen_bundled_catalog), so trust provider-level flag
         let result = supports_image_input(&Provider::Anthropic, "claude-sonnet-4");
-        assert!(result.is_ok(), "Anthropic models not in catalog should trust provider flag");
+        assert!(
+            result.is_ok(),
+            "Anthropic models not in catalog should trust provider flag"
+        );
         assert!(result.unwrap(), "Anthropic supports vision");
     }
 
@@ -751,6 +834,9 @@ mod tests {
         // Ollama has its own per-model detection; unknown models are allowed
         let result = supports_image_input(&Provider::Ollama, "llava:13b");
         assert!(result.is_ok(), "Ollama should defer to provider-level flag");
-        assert!(result.unwrap(), "Ollama should return true for unknown models");
+        assert!(
+            result.unwrap(),
+            "Ollama should return true for unknown models"
+        );
     }
 }

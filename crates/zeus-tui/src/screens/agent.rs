@@ -51,6 +51,7 @@ struct Persona {
     color: Color,
     sub: String,
     tone: String,
+    soul_body: Option<String>,
     principles: Vec<String>,
 }
 
@@ -133,13 +134,15 @@ fn read_personas_dir(dir: &std::path::Path) -> std::io::Result<Vec<Persona>> {
             let file_path = file.path();
             if file_path.extension().map(|e| e == "md").unwrap_or(false) {
                 if let Ok(content) = std::fs::read_to_string(&file_path) {
-                    let Some(name) = parse_frontmatter_field(&content, "name") else {
+                    let Some(core_persona) = zeus_core::persona::Persona::parse(&content) else {
                         continue;
                     };
-                    let sub = parse_frontmatter_field(&content, "tagline").unwrap_or_default();
+                    let name = core_persona.name.clone();
+                    let sub = core_persona.tagline.clone().unwrap_or_default();
                     let tone = parse_frontmatter_field(&content, "tone")
                         .filter(|t| !t.is_empty())
                         .unwrap_or_else(|| default_tone_for(&name));
+                    let soul_body = Some(core_persona.render_soul());
                     let id = file_path
                         .file_stem()
                         .map(|s| s.to_string_lossy().to_string())
@@ -159,6 +162,7 @@ fn read_personas_dir(dir: &std::path::Path) -> std::io::Result<Vec<Persona>> {
                             color: theme::CYAN, // re-assigned round-robin below
                             sub,
                             tone,
+                            soul_body,
                             principles: Vec::new(),
                         },
                     ));
@@ -256,6 +260,7 @@ fn default_personas() -> Vec<Persona> {
             color: theme::FIRE_ORANGE,
             sub: "Orchestrates the fleet".into(),
             tone: "professional, direct, decisive".into(),
+            soul_body: None,
             principles: vec![
                 "- Make decisions quickly when blocked.".into(),
                 "- Delegate clearly. Track outcomes.".into(),
@@ -269,6 +274,7 @@ fn default_personas() -> Vec<Persona> {
             color: theme::CYAN,
             sub: "Writes and reviews code".into(),
             tone: "precise, technical, terse".into(),
+            soul_body: None,
             principles: vec![
                 "- Read existing code before writing new.".into(),
                 "- Tests pass before commit.".into(),
@@ -282,6 +288,7 @@ fn default_personas() -> Vec<Persona> {
             color: theme::PURPLE,
             sub: "Marketing and content".into(),
             tone: "warm, expressive, narrative".into(),
+            soul_body: None,
             principles: vec![
                 "- Voice over voicelessness.".into(),
                 "- Specific over generic.".into(),
@@ -295,6 +302,7 @@ fn default_personas() -> Vec<Persona> {
             color: theme::GREEN,
             sub: "Monitors and maintains".into(),
             tone: "calm, observational, methodical".into(),
+            soul_body: None,
             principles: vec![
                 "- Observe before acting.".into(),
                 "- Automate the repeatable.".into(),
@@ -308,6 +316,7 @@ fn default_personas() -> Vec<Persona> {
             color: theme::AMBER,
             sub: "Research and synthesis".into(),
             tone: "curious, rigorous, thorough".into(),
+            soul_body: None,
             principles: vec![
                 "- Cite sources. Show the work.".into(),
                 "- Separate signal from noise.".into(),
@@ -321,6 +330,7 @@ fn default_personas() -> Vec<Persona> {
             color: theme::DIM,
             sub: "Define your own".into(),
             tone: String::new(),
+            soul_body: None,
             principles: Vec::new(),
         },
     ]
@@ -480,6 +490,7 @@ impl AgentScreen {
             color: theme::CYAN,
             sub: "Loaded from existing config".to_string(),
             tone: default_tone_for(trimmed),
+            soul_body: None,
             principles: Vec::new(),
         });
         self.persona_idx = self.personas.len() - 1;
@@ -497,6 +508,10 @@ impl AgentScreen {
     /// SOUL.md persona body for the currently selected persona.
     pub fn persona_soul_body(&self) -> String {
         let persona = self.persona();
+        if let Some(soul_body) = persona.soul_body.as_deref().filter(|body| !body.trim().is_empty()) {
+            return soul_body.to_string();
+        }
+
         let mut body = persona.name.clone();
         if !persona.sub.trim().is_empty() {
             body.push_str(" — ");
@@ -1082,6 +1097,7 @@ mod tests {
                 color: theme::CYAN,
                 sub: "test".into(),
                 tone: "t".into(),
+                soul_body: None,
                 principles: vec![],
             })
             .collect();
@@ -1271,6 +1287,61 @@ mod tests {
             r.contains("Orchestrates the fle…"),
             "card subtitle must clip with ellipsis at narrow width; got:\n{r}"
         );
+    }
+
+    fn load_test_personas() -> Vec<Persona> {
+        let dir = tempfile::tempdir().unwrap();
+        let leadership = dir.path().join("leadership");
+        let research = dir.path().join("research");
+        std::fs::create_dir_all(&leadership).unwrap();
+        std::fs::create_dir_all(&research).unwrap();
+        std::fs::write(
+            leadership.join("the-coordinator.md"),
+            include_str!("../../../../personalities/leadership/the-coordinator.md"),
+        )
+        .unwrap();
+        std::fs::write(
+            research.join("the-scholar.md"),
+            include_str!("../../../../personalities/research/the-scholar.md"),
+        )
+        .unwrap();
+        read_personas_dir(dir.path()).unwrap()
+    }
+
+    #[test]
+    fn disk_persona_soul_body_preserves_coordinator_template_sections() {
+        let mut s = defaults_screen();
+        s.personas = load_test_personas();
+        s.persona_idx = s
+            .personas
+            .iter()
+            .position(|p| p.name == "The Coordinator")
+            .expect("coordinator persona loaded");
+
+        let soul = s.persona_soul_body();
+        assert!(soul.starts_with("# SOUL.md — The Coordinator"), "got:\n{soul}");
+        assert!(soul.contains("You are the coordinator —"), "got:\n{soul}");
+        assert!(soul.contains("Leading your titans"), "got:\n{soul}");
+        assert!(soul.contains("Voice & channel discipline"), "got:\n{soul}");
+    }
+
+    #[test]
+    fn disk_persona_soul_body_preserves_scholar_full_body() {
+        let mut s = defaults_screen();
+        s.personas = load_test_personas();
+        s.persona_idx = s
+            .personas
+            .iter()
+            .position(|p| p.name == "The Scholar")
+            .expect("scholar persona loaded");
+
+        let soul = s.persona_soul_body();
+        assert!(soul.starts_with("# SOUL.md — The Scholar"), "got:\n{soul}");
+        assert!(
+            soul.contains("Primary sources over the telephone game"),
+            "got:\n{soul}"
+        );
+        assert!(soul.contains("Hold competing views honestly"), "got:\n{soul}");
     }
 
     #[test]

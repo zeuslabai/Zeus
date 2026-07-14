@@ -353,6 +353,34 @@ fn channels() -> &'static [ChannelDef] {
             ],
         },
         ChannelDef {
+            id: "instagram",
+            name: "Instagram",
+            glyph: "IG",
+            sdk: "Instagram Graph API",
+            color: || theme::FIRE_ORANGE,
+            pair: PairKind::None,
+            fields: &[
+                ChannelFieldDef { key: "access_token", label: "Access Token", placeholder: "EA...", secret: true, required: true, default: None },
+                ChannelFieldDef { key: "account_id", label: "Account ID", placeholder: "1784...", secret: false, required: true, default: None },
+                ChannelFieldDef { key: "page_id", label: "Page ID", placeholder: "1234567890", secret: false, required: false, default: None },
+                ChannelFieldDef { key: "app_id", label: "App ID", placeholder: "1234567890", secret: false, required: false, default: None },
+                ChannelFieldDef { key: "app_secret", label: "App Secret", placeholder: "...", secret: true, required: false, default: None },
+                ChannelFieldDef { key: "poll_interval_secs", label: "Poll Interval Seconds", placeholder: "120", secret: false, required: false, default: Some("120") },
+                ChannelFieldDef { key: "auto_reply", label: "Auto Reply", placeholder: "false", secret: false, required: false, default: Some("false") },
+            ],
+        },
+        ChannelDef {
+            id: "tiktok",
+            name: "TikTok",
+            glyph: "TT",
+            sdk: "Content Posting API (post-only)",
+            color: || theme::PURPLE,
+            pair: PairKind::None,
+            fields: &[
+                ChannelFieldDef { key: "access_token", label: "Access Token", placeholder: "act...", secret: true, required: true, default: None },
+            ],
+        },
+        ChannelDef {
             id: "x_twitter",
             name: "X / Twitter",
             glyph: "X",
@@ -416,6 +444,10 @@ pub fn is_bot_capable(channel_id: &str) -> bool {
     matches!(channel_id, "discord" | "telegram" | "irc" | "matrix" | "slack")
 }
 
+fn is_bool_toggle_key(full_key: &str) -> bool {
+    matches!(full_key, "instagram.auto_reply")
+}
+
 impl Default for ChanConfigScreen {
     fn default() -> Self {
         Self::new()
@@ -454,6 +486,18 @@ impl ChanConfigScreen {
         let next = BOT_POLICIES[(idx + 1) % BOT_POLICIES.len()];
         self.bot_policies
             .insert(channel_id.to_string(), next.to_string());
+    }
+
+    /// Toggle the currently focused boolean field. Returns true when the focus
+    /// was a boolean row so callers should not treat Space as text input.
+    pub fn toggle_focused_bool(&mut self) -> bool {
+        if !is_bool_toggle_key(&self.focused_field) {
+            return false;
+        }
+        let next = !self.bool_value(&self.focused_field);
+        self.config_values
+            .insert(self.focused_field.clone(), next.to_string());
+        true
     }
 
     /// Build the flat list of focusable items for the currently toggled channels.
@@ -533,7 +577,10 @@ impl ChanConfigScreen {
 
     /// Handle a printable character input for the currently focused field.
     pub fn input_char(&mut self, c: char) {
-        if self.focused_field.starts_with("test:") || self.focused_field.is_empty() {
+        if self.focused_field.starts_with("test:")
+            || self.focused_field.is_empty()
+            || is_bool_toggle_key(&self.focused_field)
+        {
             return; // not an input field
         }
         if let Some(val) = self.config_values.get_mut(&self.focused_field) {
@@ -565,6 +612,13 @@ impl ChanConfigScreen {
         } else {
             raw.to_string()
         }
+    }
+
+    fn bool_value(&self, full_key: &str) -> bool {
+        self.config_values
+            .get(full_key)
+            .map(|s| matches!(s.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes"))
+            .unwrap_or(false)
     }
 }
 
@@ -755,6 +809,26 @@ impl ChanConfigScreen {
                 let required_marker = if f.required { " *" } else { "" };
                 let label_text = format!("{}{}", f.label, required_marker);
                 buf.set_string(inner.x + 4, cy, &label_text, label_style);
+
+                if is_bool_toggle_key(&full_key) {
+                    let val_x = inner.x + 4 + 24;
+                    if val_x < inner.x + inner.width {
+                        let value_text = if self.bool_value(&full_key) { "on" } else { "off" };
+                        let suffix = if is_focused { "  (Space toggle)" } else { "" };
+                        let clamped = clamp_ellipsis(
+                            &format!("{value_text}{suffix}"),
+                            (inner.x + inner.width).saturating_sub(val_x) as usize,
+                        );
+                        buf.set_string(
+                            val_x,
+                            cy,
+                            &clamped,
+                            Style::default().fg(if is_focused { theme::FIRE_ORANGE } else { theme::TEXT }),
+                        );
+                    }
+                    cy += 1;
+                    continue;
+                }
 
                 // Value / placeholder, offset into a fixed gutter for alignment.
                 let value = self.display_value(&full_key, f.secret);

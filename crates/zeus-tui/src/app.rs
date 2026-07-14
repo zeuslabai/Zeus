@@ -315,6 +315,9 @@ pub struct App {
     pub prod_deploy_stats: Option<crate::api::DeployStatsResponse>,
     pub prod_economy_wallets: Option<Vec<crate::api::EconomyWalletResponse>>,
     pub prod_economy_txs: Option<Vec<crate::api::EconomyTxResponse>>,
+    pub prod_onchain_wallet: Option<crate::api::OnchainWalletResponse>,
+    pub prod_onchain_txs: Option<Vec<crate::api::OnchainTxResponse>>,
+    pub prod_onchain_transfer: Option<crate::api::OnchainTransferResponse>,
     /// Live pending approvals from `GET /v1/approvals` (#235 Approvals tab).
     pub prod_approvals: Option<Vec<crate::api::ApprovalResponse>>,
     /// Live Pantheon missions from `GET /v1/pantheon/missions` (#235 Pantheon tab).
@@ -465,6 +468,9 @@ impl App {
             prod_deploy_stats: None,
             prod_economy_wallets: None,
             prod_economy_txs: None,
+            prod_onchain_wallet: None,
+            prod_onchain_txs: None,
+            prod_onchain_transfer: None,
             prod_approvals: None,
             prod_pantheon_missions: None,
             prod_status: None,
@@ -1252,8 +1258,8 @@ impl App {
         {
             use std::collections::HashMap;
             use zeus_core::{
-                DiscordChannelConfig, IrcChannelConfig, MatrixChannelConfig, SlackChannelConfig,
-                TelegramChannelConfig, XTwitterChannelConfig,
+                DiscordChannelConfig, InstagramConfig, IrcChannelConfig, MatrixChannelConfig,
+                SlackChannelConfig, TelegramChannelConfig, TikTokConfig, XTwitterChannelConfig,
             };
 
             let cv = &self.chanconfig_screen.config_values;
@@ -1388,6 +1394,38 @@ impl App {
                     username: if user.is_empty() { None } else { Some(user) },
                     password: if pass.is_empty() { None } else { Some(pass) },
                     policy: None,
+                });
+            }
+
+            if toggled.iter().any(|c| c == "instagram") {
+                let opt = |k: &str| {
+                    let value = val(k);
+                    if value.trim().is_empty() { None } else { Some(value) }
+                };
+                let poll_interval_secs = val("instagram.poll_interval_secs")
+                    .trim()
+                    .parse::<u64>()
+                    .ok();
+                let auto_reply = matches!(
+                    val("instagram.auto_reply").trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "on" | "yes"
+                );
+                let ch = cfg.channels.get_or_insert_with(Default::default);
+                ch.instagram = Some(InstagramConfig {
+                    access_token: val("instagram.access_token"),
+                    account_id: val("instagram.account_id"),
+                    page_id: opt("instagram.page_id"),
+                    app_id: opt("instagram.app_id"),
+                    app_secret: opt("instagram.app_secret"),
+                    poll_interval_secs,
+                    auto_reply,
+                });
+            }
+
+            if toggled.iter().any(|c| c == "tiktok") {
+                let ch = cfg.channels.get_or_insert_with(Default::default);
+                ch.tiktok = Some(TikTokConfig {
+                    access_token: val("tiktok.access_token"),
                 });
             }
 
@@ -2448,6 +2486,8 @@ impl App {
                         .map(str::to_string)
                     {
                         self.chanconfig_screen.cycle_bot_policy(&ch_id);
+                    } else if self.chanconfig_screen.toggle_focused_bool() {
+                        // Boolean field toggled by Space (#345); do not insert text.
                     } else {
                         self.chanconfig_screen.input_char(' ');
                     }
@@ -2969,6 +3009,9 @@ fn frame_prod(f: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect) {
         let live = prod::WalletLive {
             wallets: app.prod_economy_wallets.as_deref(),
             transactions: app.prod_economy_txs.as_deref(),
+            onchain_wallet: app.prod_onchain_wallet.as_ref(),
+            onchain_transactions: app.prod_onchain_txs.as_deref(),
+            onchain_transfer: app.prod_onchain_transfer.as_ref(),
         };
         let wallet =
             prod::WalletTab::with_live(app.prod_wallet_view, app.prod_wallet_titan_sel, live);
@@ -4975,6 +5018,8 @@ onboarding_complete = false
             "twilio_whatsapp",
             "voice",
             "bluebubbles",
+            "instagram",
+            "tiktok",
         ]
         .into_iter()
         .collect();

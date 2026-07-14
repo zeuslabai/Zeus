@@ -51,7 +51,14 @@ fn deploy_identity_heals_stub_soul_but_preserves_custom_for_config_agent() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
     let workspace = home.join("workspace");
+    let personas = home.join("personalities/leadership");
     fs::create_dir_all(&workspace).unwrap();
+    fs::create_dir_all(&personas).unwrap();
+    fs::copy(
+        repo_root().join("personalities/leadership/the-coordinator.md"),
+        personas.join("the-coordinator.md"),
+    )
+    .unwrap();
     fs::write(
         home.join("config.toml"),
         r#"[agent]
@@ -71,8 +78,12 @@ persona = "The Coordinator"
     run_deploy_identity(home);
     let healed = fs::read_to_string(&soul).unwrap();
     assert!(
-        healed.contains("The Coordinator"),
+        healed.contains("You are the coordinator —"),
         "stub/sludge SOUL.md should be replaced by configured persona; got:\n{healed}"
+    );
+    assert!(
+        healed.contains("Leading your titans"),
+        "configured coordinator template sections should be preserved; got:\n{healed}"
     );
     assert!(
         !healed.contains("an autonomous Zeus agent"),
@@ -87,7 +98,7 @@ persona = "The Coordinator"
         "custom SOUL.md must be preserved even during --force identity refresh; got:\n{preserved}"
     );
     assert!(
-        !preserved.contains("The Coordinator"),
+        !preserved.contains("You are the coordinator —"),
         "custom SOUL.md must not be replaced by configured persona; got:\n{preserved}"
     );
 }

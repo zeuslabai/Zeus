@@ -1,9 +1,11 @@
 //! Onboarding backend support handlers — S76 Track C
 //!
 //! Endpoints:
-//!   POST /v1/onboarding/setup   — full onboarding payload (model, provider keys,
-//!                                  security level, feature toggles, skills, persona)
-//!   GET  /v1/onboarding/config  — return current onboarding-relevant config fields
+//!   POST /v1/onboarding/setup        — full onboarding payload (model, provider keys,
+//!                                       security level, feature toggles, skills, persona)
+//!   GET  /v1/onboarding/config       — return current onboarding-relevant config fields
+//!   GET  /v1/onboarding/personalities — list all personalities from ~/.zeus/personalities/
+//!   GET  /v1/onboarding/skills       — list all skills with default-on flags
 
 use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
@@ -559,6 +561,43 @@ pub async fn onboarding_config(
         "providers_configured": providers_with_keys,
         "ollama_url": cfg.ollama.url,
     }))
+}
+
+// ============================================================================
+// GET /v1/onboarding/personalities
+// ============================================================================
+
+/// List all personalities from ~/.zeus/personalities/.
+///
+/// Returns an array of `{id, name, tagline, description, category}` objects.
+/// Falls back to a minimal hardcoded set if the personalities directory is missing.
+pub async fn onboarding_personalities() -> Json<Value> {
+    let dir = zeus_core::default_config_dir().join("personalities");
+    let fallback: Vec<Value> = vec![
+        json!({"id": "coordinator", "name": "The Coordinator", "tagline": "Fleet commander, sprint driver, orchestrator", "description": "", "category": "Leadership"}),
+        json!({"id": "professional", "name": "Professional", "tagline": "Formal, precise, efficient", "description": "", "category": "General"}),
+        json!({"id": "collaborative", "name": "Collaborative", "tagline": "Friendly partner, proactive", "description": "", "category": "General"}),
+        json!({"id": "minimal", "name": "Minimal", "tagline": "Terse, no fluff, results-only", "description": "", "category": "General"}),
+        json!({"id": "autonomous", "name": "Autonomous", "tagline": "Acts first, reports after", "description": "", "category": "General"}),
+    ];
+
+    if let Ok(registry) = zeus_core::PersonaRegistry::load_from_dir(&dir) {
+        if registry.personas.is_empty() {
+            return Json(Value::Array(fallback));
+        }
+        let list: Vec<Value> = registry.personas.iter().map(|p| {
+            json!({
+                "id": p.name.to_lowercase().replace(' ', "-").replace("the-", ""),
+                "name": p.name,
+                "tagline": p.tagline.as_deref().unwrap_or(""),
+                "description": p.description.as_deref().unwrap_or(""),
+                "category": p.category.as_deref().unwrap_or("General"),
+            })
+        }).collect();
+        Json(Value::Array(list))
+    } else {
+        Json(Value::Array(fallback))
+    }
 }
 
 // ============================================================================

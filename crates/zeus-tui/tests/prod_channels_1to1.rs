@@ -124,3 +124,38 @@ fn channels_tab_renders_api_empty_response_as_empty_not_mocked() {
         "empty live state missing:\n{dump}"
     );
 }
+
+
+#[test]
+fn channels_tab_renders_instagram_and_tiktok_post_only_rows() {
+    let live = vec![
+        ChannelResponse {
+            id: "ig-live".into(),
+            channel_type: "instagram".into(),
+            name: "".into(),
+            status: "connected".into(),
+            enabled: Some(true),
+            connected_at: None,
+            last_message_at: Some("2026-07-13T20:00:00Z".into()),
+        },
+        ChannelResponse {
+            id: "tt-post".into(),
+            channel_type: "tiktok".into(),
+            name: "".into(),
+            status: "connected".into(),
+            enabled: Some(true),
+            connected_at: None,
+            last_message_at: None,
+        },
+    ];
+    let (_buf, dump) = render_channels(ChannelsTab::with_live(Some(&live)));
+
+    assert!(dump.contains("Instagram"), "Instagram live row missing:\n{dump}");
+    assert!(dump.contains("TikTok"), "TikTok live row missing:\n{dump}");
+    assert!(dump.contains("mode post-only"), "TikTok must be labeled post-only:\n{dump}");
+    assert!(dump.contains("sdk post-only"), "TikTok SDK line must be post-only labeled:\n{dump}");
+    assert!(
+        !dump.contains("— MSGS / 24H"),
+        "TikTok post-only row must not render fake inbound message stats:\n{dump}"
+    );
+}

@@ -334,3 +334,51 @@ fn channels_100x30_uses_single_header_and_clean_footer() {
 {s}"
     );
 }
+
+
+#[test]
+fn instagram_tiktok_channelconfig_entries_render_and_toggle() {
+    let mut app = App::new();
+    app.current_step = 8; // ChannelConfig
+    app.chanconfig_screen.toggled = vec!["instagram".to_string(), "tiktok".to_string()];
+    app.chanconfig_screen.focus_next();
+    let lines = render_lines_at(&app, 140, 44);
+    let full = lines.join("\n");
+
+    assert!(full.contains("Instagram"), "Instagram config card must render:\n{full}");
+    assert!(full.contains("TikTok"), "TikTok config card must render:\n{full}");
+    for label in [
+        "Access Token",
+        "Account ID",
+        "Page ID",
+        "App ID",
+        "App Secret",
+        "Poll Interval Seconds",
+        "Auto Reply",
+    ] {
+        assert!(
+            full.contains(label),
+            "Instagram field `{label}` must render in ChannelConfig:\n{full}"
+        );
+    }
+
+    app.chanconfig_screen.focused_field = "instagram.auto_reply".to_string();
+    app.handle_key(KeyCode::Char(' '));
+    assert_eq!(
+        app.chanconfig_screen
+            .config_values
+            .get("instagram.auto_reply")
+            .map(String::as_str),
+        Some("true"),
+        "Space must toggle Instagram auto_reply on"
+    );
+    app.handle_key(KeyCode::Char(' '));
+    assert_eq!(
+        app.chanconfig_screen
+            .config_values
+            .get("instagram.auto_reply")
+            .map(String::as_str),
+        Some("false"),
+        "Space must toggle Instagram auto_reply off"
+    );
+}
