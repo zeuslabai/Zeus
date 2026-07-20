@@ -3,6 +3,7 @@
 //! Target: ~300 lines
 
 pub mod cook_state;
+pub mod fleet_telemetry;
 pub mod inbox;
 pub mod team_memory;
 pub mod migration;
@@ -11,7 +12,10 @@ pub mod sanitize;
 pub mod session_lane;
 pub mod soul;
 pub mod turn_boundary;
+pub mod platform;
+pub mod build_info;
 pub mod validator;
+pub use build_info::BuildInfo;
 pub use cook_state::{ActiveCookType, CookFlight, CookGuard, CookState};
 pub use session_lane::SessionLaneManager;
 pub use soul::{render_soul_md, soul_content_is_stub, soul_is_stub_or_missing, write_onboarding_soul};
@@ -1168,8 +1172,16 @@ pub struct CredentialsConfig {
     pub google_gemini_cli: Option<ProviderCredential>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qwen: Option<ProviderCredential>,
+    #[serde(default, rename = "qwen-coding", alias = "qwencoding", alias = "qwen_coding", skip_serializing_if = "Option::is_none")]
+    pub qwen_coding: Option<ProviderCredential>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minimax: Option<ProviderCredential>,
+    #[serde(default, rename = "minimax-coding", alias = "minimaxcoding", alias = "minimax_coding", skip_serializing_if = "Option::is_none")]
+    pub minimax_coding: Option<ProviderCredential>,
+    #[serde(default, rename = "kimi-code", alias = "kimicode", alias = "kimi_code", skip_serializing_if = "Option::is_none")]
+    pub kimi_code: Option<ProviderCredential>,
+    #[serde(default, rename = "glm-coding", alias = "glmcoding", alias = "glm_coding", skip_serializing_if = "Option::is_none")]
+    pub glm_coding: Option<ProviderCredential>,
     #[serde(default, rename = "xiaomimimo", skip_serializing_if = "Option::is_none")]
     pub xiaomimimo: Option<ProviderCredential>,
 }
@@ -1210,7 +1222,11 @@ impl CredentialsConfig {
             Provider::Google => self.google = Some(cred),
             Provider::GoogleGeminiCli => self.google_gemini_cli = Some(cred),
             Provider::Qwen => self.qwen = Some(cred),
+            Provider::QwenCoding => self.qwen_coding = Some(cred),
             Provider::Minimax => self.minimax = Some(cred),
+            Provider::MinimaxCoding => self.minimax_coding = Some(cred),
+            Provider::KimiCode => self.kimi_code = Some(cred),
+            Provider::GlmCoding => self.glm_coding = Some(cred),
             Provider::XiaomiMimo => self.xiaomimimo = Some(cred),
             _ => return false,
         }
@@ -1352,7 +1368,8 @@ fn is_default_credentials(v: &CredentialsConfig) -> bool {
     // dropped on write. (#257: xiaomimimo was missing → its OAuth token never
     // persisted even though set_oauth wrote it into the in-memory struct.)
     v.openai.is_none() && v.anthropic.is_none() && v.google.is_none()
-        && v.google_gemini_cli.is_none() && v.qwen.is_none() && v.minimax.is_none()
+        && v.google_gemini_cli.is_none() && v.qwen.is_none() && v.qwen_coding.is_none() && v.minimax.is_none()
+        && v.minimax_coding.is_none() && v.kimi_code.is_none() && v.glm_coding.is_none()
         && v.xiaomimimo.is_none()
 }
 fn is_default_ollama(v: &OllamaConfig) -> bool { *v == OllamaConfig::default() }
@@ -2664,6 +2681,11 @@ pub struct GatewayConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_token: Option<String>,
 
+    /// #383: Service install mode selected during onboarding.
+    /// "launchd" | "systemd" | "rcd" | "schtasks" | "manual"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_id: Option<String>,
+
     /// Comma-separated CORS allowed origins (replaces ZEUS_CORS_ORIGINS env var)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cors_origins: Option<String>,
@@ -2764,6 +2786,7 @@ impl Default for GatewayConfig {
             channel_prompt: None,
             fleet_channel_id: None,
             api_token: None,
+            service_id: None,
             cors_origins: None,
             dm_scope: default_dm_scope(),
             allow_peer_tagging: false,
@@ -4015,8 +4038,9 @@ fn default_irc_nick() -> String {
 /// Used for X/Twitter integration under `[channels.x_twitter]`.
 /// Env var fallbacks: `X_BEARER_TOKEN`, `X_CONSUMER_KEY`,
 /// `X_CONSUMER_KEY_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET`,
-/// `X_CLIENT_ID`, `X_CLIENT_SECRET` (legacy `X_API_KEY` / `X_API_SECRET`
-/// are still honored as fallbacks for existing installs).
+/// `X_CLIENT_ID`, `X_CLIENT_SECRET`, `X_OAUTH2_ACCESS_TOKEN`,
+/// `X_OAUTH2_REFRESH_TOKEN`, `X_OAUTH2_EXPIRES_AT` (legacy `X_API_KEY` /
+/// `X_API_SECRET` are still honored as fallbacks for existing installs).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XTwitterChannelConfig {
     /// Bearer token (OAuth 2.0 App-Only)
@@ -4040,6 +4064,17 @@ pub struct XTwitterChannelConfig {
     /// OAuth 2.0 Client Secret (for PKCE flow)
     #[serde(default = "default_x_client_secret")]
     pub client_secret: String,
+    /// OAuth 2.0 user-context access token (PKCE result). Preferred over
+    /// OAuth 1.0a for all X user-context requests when present.
+    #[serde(default = "default_x_oauth2_access_token")]
+    pub oauth2_access_token: String,
+    /// OAuth 2.0 refresh token. Requested with `offline.access`; persisted so
+    /// the X tools can refresh headlessly and store rotated refresh tokens.
+    #[serde(default = "default_x_oauth2_refresh_token")]
+    pub oauth2_refresh_token: String,
+    /// Unix epoch seconds when `oauth2_access_token` expires. `0` means unknown.
+    #[serde(default = "default_x_oauth2_expires_at")]
+    pub oauth2_expires_at: u64,
     /// Polling interval for mentions in seconds (default: 60)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub poll_interval_secs: Option<u64>,
@@ -4112,6 +4147,21 @@ fn default_x_client_id() -> String {
 
 fn default_x_client_secret() -> String {
     std::env::var("X_CLIENT_SECRET").unwrap_or_default()
+}
+
+fn default_x_oauth2_access_token() -> String {
+    std::env::var("X_OAUTH2_ACCESS_TOKEN").unwrap_or_default()
+}
+
+fn default_x_oauth2_refresh_token() -> String {
+    std::env::var("X_OAUTH2_REFRESH_TOKEN").unwrap_or_default()
+}
+
+fn default_x_oauth2_expires_at() -> u64 {
+    std::env::var("X_OAUTH2_EXPIRES_AT")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0)
 }
 
 /// Instagram channel configuration
@@ -6784,8 +6834,6 @@ impl Config {
     /// directory, fsync, then rename over the target. Prevents truncated/empty
     /// config if the process crashes mid-write.
     fn atomic_write(path: &std::path::Path, content: &str) -> Result<()> {
-        use std::io::Write;
-
         let parent = path.parent().ok_or_else(|| {
             Error::Config("Config path has no parent directory".to_string())
         })?;
@@ -6803,6 +6851,7 @@ impl Config {
         {
             #[cfg(unix)]
             {
+                use std::io::Write;
                 use std::os::unix::fs::OpenOptionsExt;
                 let mut f = std::fs::OpenOptions::new()
                     .write(true)
@@ -6953,6 +7002,26 @@ impl Config {
             Provider::Moonshot => {
                 if std::env::var("MOONSHOT_API_KEY").is_err() {
                     warnings.push("MOONSHOT_API_KEY not set. Kimi/Moonshot calls will fail.".to_string());
+                }
+            }
+            Provider::KimiCode => {
+                if std::env::var("KIMI_CODE_API_KEY").is_err() {
+                    warnings.push("KIMI_CODE_API_KEY not set. Kimi Code subscription calls will fail.".to_string());
+                }
+            }
+            Provider::GlmCoding => {
+                if std::env::var("GLM_CODING_API_KEY").is_err() {
+                    warnings.push("GLM_CODING_API_KEY not set. GLM Coding subscription calls will fail.".to_string());
+                }
+            }
+            Provider::MinimaxCoding => {
+                if std::env::var("MINIMAX_CODING_API_KEY").is_err() {
+                    warnings.push("MINIMAX_CODING_API_KEY not set. MiniMax Coding subscription calls will fail.".to_string());
+                }
+            }
+            Provider::QwenCoding => {
+                if std::env::var("QWEN_CODING_API_KEY").is_err() {
+                    warnings.push("QWEN_CODING_API_KEY not set. Qwen Coding subscription calls will fail.".to_string());
                 }
             }
             Provider::Zai => {
@@ -7179,8 +7248,12 @@ impl Config {
             (Provider::Bedrock, "AWS_ACCESS_KEY_ID"),
             (Provider::XAI, "XAI_API_KEY"),
             (Provider::Moonshot, "MOONSHOT_API_KEY"),
+            (Provider::KimiCode, "KIMI_CODE_API_KEY"),
+            (Provider::GlmCoding, "GLM_CODING_API_KEY"),
+            (Provider::MinimaxCoding, "MINIMAX_CODING_API_KEY"),
             (Provider::Zai, "ZAI_API_KEY"),
             (Provider::Qwen, "QWEN_API_KEY"),
+            (Provider::QwenCoding, "QWEN_CODING_API_KEY"),
             (Provider::XiaomiMimo, "XIAOMIMIMO_API_KEY"),
             (Provider::Sakana, "SAKANA_API_KEY"),
         ];
@@ -7211,8 +7284,12 @@ impl Config {
             (Provider::Bedrock, "bedrock/"),
             (Provider::XAI, "xai/"),
             (Provider::Moonshot, "moonshot/"),
+            (Provider::KimiCode, "kimi-code/"),
+            (Provider::GlmCoding, "glm-coding/"),
+            (Provider::MinimaxCoding, "minimax-coding/"),
             (Provider::Zai, "zai/"),
             (Provider::Qwen, "qwen/"),
+            (Provider::QwenCoding, "qwen-coding/"),
             (Provider::XiaomiMimo, "xiaomimimo/"),
             (Provider::Sakana, "sakana/"),
         ];
@@ -7300,8 +7377,16 @@ pub enum Provider {
     #[serde(rename = "google-gemini-cli")]
     GoogleGeminiCli,
     Moonshot,
+    #[serde(rename = "kimi-code", alias = "kimicode", alias = "kimi_code")]
+    KimiCode,
+    #[serde(rename = "glm-coding", alias = "glmcoding", alias = "glm_coding")]
+    GlmCoding,
+    #[serde(rename = "minimax-coding", alias = "minimaxcoding", alias = "minimax_coding")]
+    MinimaxCoding,
     Zai,
     Qwen,
+    #[serde(rename = "qwen-coding", alias = "qwencoding", alias = "qwen_coding")]
+    QwenCoding,
     Minimax,
     #[serde(rename = "xiaomimimo")]
     XiaomiMimo,
@@ -7332,8 +7417,12 @@ impl Provider {
             "xai" | "grok" => Provider::XAI,
             "cerebras" => Provider::Cerebras,
             "moonshot" | "kimi" => Provider::Moonshot,
+            "kimi-code" | "kimicode" | "kimi_code" => Provider::KimiCode,
+            "glm-coding" | "glmcoding" | "glm_coding" => Provider::GlmCoding,
+            "minimax-coding" | "minimaxcoding" | "minimax_coding" => Provider::MinimaxCoding,
             "zai" | "glm" | "zhipu" => Provider::Zai,
             "qwen" | "dashscope" | "modelstudio" => Provider::Qwen,
+            "qwen-coding" | "qwencoding" | "qwen_coding" => Provider::QwenCoding,
             "minimax" => Provider::Minimax,
             "xiaomimimo" | "mimo" => Provider::XiaomiMimo,
             "sakana" | "fugu" => Provider::Sakana,
@@ -7368,8 +7457,12 @@ impl Provider {
             Provider::XAI => "xai",
             Provider::Cerebras => "cerebras",
             Provider::Moonshot => "moonshot",
+            Provider::KimiCode => "kimi-code",
+            Provider::GlmCoding => "glm-coding",
+            Provider::MinimaxCoding => "minimax-coding",
             Provider::Zai => "zai",
             Provider::Qwen => "qwen",
+            Provider::QwenCoding => "qwen-coding",
             Provider::Minimax => "minimax",
             Provider::XiaomiMimo => "xiaomimimo",
             Provider::Sakana => "sakana",
@@ -7394,8 +7487,12 @@ impl Provider {
             Provider::XAI => "XAI_API_KEY",
             Provider::Cerebras => "CEREBRAS_API_KEY",
             Provider::Moonshot => "MOONSHOT_API_KEY",
+            Provider::KimiCode => "KIMI_CODE_API_KEY",
+            Provider::GlmCoding => "GLM_CODING_API_KEY",
+            Provider::MinimaxCoding => "MINIMAX_CODING_API_KEY",
             Provider::Zai => "ZAI_API_KEY",
             Provider::Qwen => "QWEN_API_KEY",
+            Provider::QwenCoding => "QWEN_CODING_API_KEY",
             Provider::Minimax => "MINIMAX_API_KEY",
             Provider::XiaomiMimo => "XIAOMIMIMO_API_KEY",
             Provider::Sakana => "SAKANA_API_KEY",

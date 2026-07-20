@@ -52,9 +52,21 @@ const KIMI_MODELS: &[ModelEntry] = &[
     ModelEntry { id: Cow::Borrowed("kimi-k2.7-code-highspeed"), name: Cow::Borrowed("Kimi K2.7 Code (Highspeed)"), ctx: Cow::Borrowed("256K"), price: Cow::Borrowed("$1.00/$4 per Mtok"), recommended: false, sub: Cow::Borrowed("Lower-latency variant") },
 ];
 
+const KIMI_CODE_MODELS: &[ModelEntry] = &[
+    ModelEntry { id: Cow::Borrowed("k3"), name: Cow::Borrowed("Kimi K3"), ctx: Cow::Borrowed("1M"), price: Cow::Borrowed("Subscription"), recommended: true, sub: Cow::Borrowed("Moderato+; thinking effort low/high/max") },
+    ModelEntry { id: Cow::Borrowed("kimi-for-coding"), name: Cow::Borrowed("Kimi K2.7 Code"), ctx: Cow::Borrowed("256K"), price: Cow::Borrowed("Subscription"), recommended: false, sub: Cow::Borrowed("Kimi Code membership") },
+    ModelEntry { id: Cow::Borrowed("kimi-for-coding-highspeed"), name: Cow::Borrowed("Kimi K2.7 HighSpeed"), ctx: Cow::Borrowed("256K"), price: Cow::Borrowed("Subscription"), recommended: false, sub: Cow::Borrowed("Allegretto+ lower-latency coding") },
+];
+
 const GLM_MODELS: &[ModelEntry] = &[
     ModelEntry { id: Cow::Borrowed("glm-5.2"), name: Cow::Borrowed("GLM-5.2"), ctx: Cow::Borrowed("200K"), price: Cow::Borrowed("$0.60/$2.20 per Mtok"), recommended: true, sub: Cow::Borrowed("Flagship code + reasoning") },
     ModelEntry { id: Cow::Borrowed("glm-4.6"), name: Cow::Borrowed("GLM-4.6"), ctx: Cow::Borrowed("200K"), price: Cow::Borrowed("$0.40/$1.60 per Mtok"), recommended: false, sub: Cow::Borrowed("Prior-gen, cheaper") },
+];
+
+const GLM_CODING_MODELS: &[ModelEntry] = &[
+    ModelEntry { id: Cow::Borrowed("glm-5.2"), name: Cow::Borrowed("GLM-5.2"), ctx: Cow::Borrowed("1M"), price: Cow::Borrowed("Subscription"), recommended: true, sub: Cow::Borrowed("GLM Coding Plan flagship") },
+    ModelEntry { id: Cow::Borrowed("glm-5-turbo"), name: Cow::Borrowed("GLM-5 Turbo"), ctx: Cow::Borrowed("1M"), price: Cow::Borrowed("Subscription"), recommended: false, sub: Cow::Borrowed("Fast coding model") },
+    ModelEntry { id: Cow::Borrowed("glm-4.7"), name: Cow::Borrowed("GLM-4.7"), ctx: Cow::Borrowed("200K"), price: Cow::Borrowed("Subscription"), recommended: false, sub: Cow::Borrowed("Coding Plan compatible") },
 ];
 
 const QWEN_MODELS: &[ModelEntry] = &[
@@ -65,6 +77,12 @@ const QWEN_MODELS: &[ModelEntry] = &[
 const MINIMAX_MODELS: &[ModelEntry] = &[
     ModelEntry { id: Cow::Borrowed("MiniMax-M3"), name: Cow::Borrowed("MiniMax-M3"), ctx: Cow::Borrowed("1M"), price: Cow::Borrowed("$0.20/$0.80 per Mtok"), recommended: true, sub: Cow::Borrowed("Flagship throughput + agentic") },
     ModelEntry { id: Cow::Borrowed("MiniMax-M2"), name: Cow::Borrowed("MiniMax-M2"), ctx: Cow::Borrowed("245K"), price: Cow::Borrowed("$0.10/$0.40 per Mtok"), recommended: false, sub: Cow::Borrowed("Prior-gen, lighter") },
+];
+
+const MINIMAX_CODING_MODELS: &[ModelEntry] = &[
+    ModelEntry { id: Cow::Borrowed("MiniMax-M2.5"), name: Cow::Borrowed("MiniMax-M2.5"), ctx: Cow::Borrowed("256K"), price: Cow::Borrowed("Subscription"), recommended: false, sub: Cow::Borrowed("MiniMax Token Plan") },
+    ModelEntry { id: Cow::Borrowed("MiniMax-M3"), name: Cow::Borrowed("MiniMax-M3"), ctx: Cow::Borrowed("1M"), price: Cow::Borrowed("Subscription"), recommended: true, sub: Cow::Borrowed("MiniMax Token Plan flagship") },
+    ModelEntry { id: Cow::Borrowed("MiniMax-M2.7"), name: Cow::Borrowed("MiniMax-M2.7"), ctx: Cow::Borrowed("256K"), price: Cow::Borrowed("Subscription"), recommended: false, sub: Cow::Borrowed("MiniMax Token Plan") },
 ];
 
 const MIMO_MODELS: &[ModelEntry] = &[
@@ -168,9 +186,12 @@ impl ModelScreen {
             "google" => GOOGLE_MODELS,
             "gemini-cli" => GEMINI_CLI_MODELS,
             "kimi" => KIMI_MODELS,
+            "kimi-code" => KIMI_CODE_MODELS,
             "glm" => GLM_MODELS,
+            "glm-coding" => GLM_CODING_MODELS,
             "qwen" => QWEN_MODELS,
             "minimax" => MINIMAX_MODELS,
+            "minimax-coding" => MINIMAX_CODING_MODELS,
             "mimo" => MIMO_MODELS,
             "openrouter" => OPENROUTER_MODELS,
             "xai" => XAI_MODELS,
@@ -189,6 +210,8 @@ impl ModelScreen {
             "ollama" => Some(("Models pulled from", "localhost:11434/api/tags")),
             "glm" | "zai" => Some(("Live catalog from", "api.z.ai/api/paas/v4/models")),
             "kimi" | "moonshot" => Some(("Live catalog from", "api.moonshot.ai/v1/models")),
+            "kimi-code" => Some(("Kimi Code models", "api.kimi.com/coding/v1/chat/completions")),
+            "minimax-coding" => Some(("MiniMax Coding models", "api.minimax.io/anthropic")),
             _ => None,
         }
     }
@@ -718,6 +741,7 @@ fn provider_glyph(id: &str) -> &'static str {
         "claude" => "ANT",
         "gpt" | "o1" | "o3" | "o4" => "OAI",
         "gemini" => "GCP",
+        "kimi-code" => "K3",
         "kimi" | "moonshot" => "KIM",
         "glm" => "GLM",
         "qwen" => "QWN",

@@ -294,7 +294,7 @@ fn WsNotifications() -> impl IntoView {
                             let snippet = msg.get("data")
                                 .and_then(|d| d.get("text")).and_then(|t| t.as_str())
                                 .unwrap_or("New message");
-                            let summary = format!("[{}] {}", channel, &snippet[..snippet.len().min(60)]);
+                            let summary = format!("[{}] {}", channel, crate::api::truncate_str(snippet, 60));
                             push_c("channel", &summary);
                             channel_toast_c.set(Some(summary.clone()));
                             // Auto-clear toast after 4s

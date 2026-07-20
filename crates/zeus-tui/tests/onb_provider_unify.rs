@@ -2,7 +2,7 @@
 //!
 //! Asserts the unification win — ONE shared provider registry consumed by
 //! Provider (03) + Fallback (06):
-//!   - the canonical registry is exactly our 12 providers;
+//!   - the canonical registry is exactly our 16 providers;
 //!   - membership: Grok/xAI IN, Groq/Mistral/Together/Fireworks/DeepSeek/Azure OUT;
 //!   - flagships are current (anthropic claude-opus-4-8, glm-5.2, MiniMax-M3, …);
 //!   - the Provider screen renders providers from the shared const;
@@ -10,11 +10,11 @@
 //!
 //! Separate file = conflict-free with the other agents' onb_*.rs files.
 
-use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use zeus_tui::App;
+use ratatui::Terminal;
 use zeus_tui::app::frame;
 use zeus_tui::screens::providers::{self, PROVIDERS};
+use zeus_tui::App;
 
 /// Render current app state into a 140×44 TestBackend; return joined text.
 fn render(app: &App) -> String {
@@ -35,30 +35,35 @@ fn render(app: &App) -> String {
 }
 
 #[test]
-fn registry_is_exactly_our_twelve() {
+fn registry_is_exactly_our_sixteen() {
     assert_eq!(
         PROVIDERS.len(),
-        13,
-        "canonical registry must be exactly our 13 providers"
+        16,
+        "canonical registry must be exactly our 16 providers"
     );
     let ids: Vec<&str> = PROVIDERS.iter().map(|p| p.id).collect();
-    for want in [
-        "anthropic",
-        "openai",
-        "google",
-        "ollama",
-        "gemini-cli",
-        "kimi",
-        "glm",
-        "qwen",
-        "minimax",
-        "mimo",
-        "openrouter",
-        "xai",
-        "sakana",
-    ] {
-        assert!(ids.contains(&want), "registry must include `{want}`");
-    }
+    assert_eq!(
+        ids,
+        vec![
+            "anthropic",
+            "openai",
+            "google",
+            "ollama",
+            "gemini-cli",
+            "kimi",
+            "kimi-code",
+            "glm",
+            "glm-coding",
+            "qwen",
+            "minimax",
+            "minimax-coding",
+            "mimo",
+            "openrouter",
+            "xai",
+            "sakana",
+        ],
+        "canonical provider registry order must keep PAYG/subscription pairs adjacent",
+    );
 }
 
 #[test]
@@ -74,7 +79,7 @@ fn dropped_providers_are_gone() {
     ] {
         assert!(
             !ids.contains(&gone),
-            "`{gone}` must be dropped from the canonical 12"
+            "`{gone}` must be dropped from the canonical 16"
         );
     }
 }
@@ -89,6 +94,11 @@ fn flagships_are_current() {
     );
     assert_eq!(f("glm"), "glm-5.2", "glm flagship stale");
     assert_eq!(f("minimax"), "MiniMax-M3", "minimax flagship stale");
+    assert_eq!(
+        f("minimax-coding"),
+        "MiniMax-M3",
+        "minimax-coding flagship stale"
+    );
     assert_eq!(f("kimi"), "kimi-k2.7-code", "kimi flagship stale");
     assert_eq!(f("openrouter"), "auto", "openrouter flagship stale");
 }
@@ -123,6 +133,6 @@ fn fallback_candidates_derive_from_shared_const() {
 
     assert!(
         !screen.contains("Groq") && !screen.contains("Mistral"),
-        "Fallback candidates derive from the canonical 12 — no dropped providers"
+        "Fallback candidates derive from the canonical 16 — no dropped providers"
     );
 }

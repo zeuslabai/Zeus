@@ -349,6 +349,10 @@ impl TalosRegistry {
         self.register(Box::new(mqtt_tools::MqttSubscribeTool));
 
         // X (Twitter) tools (cross-platform, X API v2 via zeus-channels XAdapter)
+        self.register(Box::new(x_tools::XOAuth2StartTool));
+        self.register(Box::new(x_tools::XOAuth2ExchangeTool));
+        self.register(Box::new(x_tools::XOAuth2RefreshTool));
+        self.register(Box::new(x_tools::XOAuth2StatusTool));
         self.register(Box::new(x_tools::XPostTool));
         self.register(Box::new(x_tools::XReplyTool));
         self.register(Box::new(x_tools::XThreadTool));

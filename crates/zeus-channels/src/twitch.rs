@@ -148,8 +148,12 @@ impl TwitchAdapter {
 
         // Handle PING
         if line.starts_with("PING") {
+            // #427: `line[5..]` panics if the server sends a bare "PING" with
+            // no trailing " <token>" (line.len() < 6). Use get() to stay safe
+            // against malformed/adversarial IRC input from the network.
+            let ping_arg = line.get(5..).unwrap_or("");
             if let Some(w) = writer.write().await.as_mut() {
-                let pong = format!("PONG {}\r\n", &line[5..]);
+                let pong = format!("PONG {}\r\n", ping_arg);
                 let _ = w.write_all(pong.as_bytes()).await;
             }
             return Ok(());
@@ -158,23 +162,39 @@ impl TwitchAdapter {
         // Parse PRIVMSG
         // Format: @tags :user!user@user.tmi.twitch.tv PRIVMSG #channel :message
         if let Some(privmsg_pos) = line.find("PRIVMSG") {
-            // Extract username
+            // Extract username. #427: if `!` appears before `:` (or is absent
+            // while `:` is present later), `user_end` can land before
+            // `user_start`, which panics on `&line[user_start..user_end]`.
+            // Guard with get() and skip malformed lines instead of crashing.
             let user_start = line.find(':').unwrap_or(0) + 1;
             let user_end = line.find('!').unwrap_or(user_start);
-            let username = &line[user_start..user_end];
+            let username = match line.get(user_start..user_end) {
+                Some(u) => u,
+                None => return Ok(()), // malformed IRC line, ignore
+            };
 
             // Skip our own messages
             if username.eq_ignore_ascii_case(my_username) {
                 return Ok(());
             }
 
-            // Extract channel
+            // Extract channel. #427: `channel_start` can exceed `line.len()`
+            // when "PRIVMSG" appears at/near the end of the line with no
+            // trailing space or channel name, which panics on a raw slice.
+            // Guard with get() and skip malformed lines instead of crashing.
             let channel_start = privmsg_pos + 8;
-            let channel_end = line[channel_start..]
+            let after_privmsg = match line.get(channel_start..) {
+                Some(s) => s,
+                None => return Ok(()), // malformed IRC line, ignore
+            };
+            let channel_end = after_privmsg
                 .find(' ')
                 .map(|p| channel_start + p)
                 .unwrap_or(line.len());
-            let channel = line[channel_start..channel_end].trim_start_matches('#');
+            let channel = line
+                .get(channel_start..channel_end)
+                .unwrap_or("")
+                .trim_start_matches('#');
 
             // Extract message
             if let Some(msg_start) = line[channel_end..].find(':') {
@@ -325,5 +345,51 @@ mod tests {
             .expect("TwitchAdapter::new should succeed");
         assert!(!adapter.is_connected());
         assert_eq!(adapter.channel_type(), "twitch");
+    }
+
+    /// #427: malformed/adversarial IRC lines from the Twitch server must
+    /// never panic `handle_irc_message`, regardless of `!`/`:`/space
+    /// placement or truncated PING commands. Each of these previously
+    /// panicked with a byte-slice range/index-out-of-bounds error.
+    #[tokio::test]
+    async fn test_handle_irc_message_malformed_lines_do_not_panic() {
+        let (tx, mut rx) = mpsc::channel::<ChannelMessage>(8);
+        let writer: Arc<RwLock<Option<tokio::net::tcp::OwnedWriteHalf>>> =
+            Arc::new(RwLock::new(None));
+
+        let malformed_lines = [
+            // Bare PING with no trailing " <token>" — used to panic on
+            // `&line[5..]` when line.len() < 6.
+            "PING",
+            "PIN", // shorter than "PING" itself, doesn't even match starts_with
+            // "!" appears before ":" so user_end < user_start — used to
+            // panic on `&line[user_start..user_end]`.
+            "!before:colon PRIVMSG #chan :hi",
+            // No "!" and no ":" at all — user_start=0, user_end=0, safe,
+            // but exercise anyway for the channel-slice path below.
+            "PRIVMSG",
+            // "PRIVMSG" right at the end of the line with nothing after —
+            // used to panic on `line[channel_start..]`.
+            ":user!user@host PRIVMSG",
+            ":user!user@host PRIVMSGx", // one char short of the old bound
+            "",
+        ];
+
+        for line in malformed_lines {
+            let result =
+                TwitchAdapter::handle_irc_message(line, &tx, "testbot", &writer).await;
+            assert!(
+                result.is_ok(),
+                "handle_irc_message should not error (and must not panic) on line: {line:?}"
+            );
+        }
+
+        // A well-formed PRIVMSG still parses correctly after the hardening.
+        let ok_line = ":alice!alice@host.tmi.twitch.tv PRIVMSG #zeuschan :hello world";
+        TwitchAdapter::handle_irc_message(ok_line, &tx, "testbot", &writer)
+            .await
+            .expect("well-formed PRIVMSG should still succeed");
+        let msg = rx.try_recv().expect("well-formed message should be forwarded");
+        assert_eq!(msg.content, "hello world");
     }
 }

@@ -90,3 +90,107 @@ pub async fn gateway_status(
         "has_default_agent": state.default_agent.is_some(),
     }))
 }
+
+/// POST /v1/daemon/install — Install Zeus as a system service.
+///
+/// #383: WebUI onboarding parity with TUI's service picker. The TUI calls
+/// `zeus daemon install` as a subprocess; this endpoint does the same from
+/// the API. The `service_id` field selects the install method:
+/// "launchd" (macOS), "systemd" (Linux), "rcd" (FreeBSD), "schtasks" (Windows),
+/// "manual" (no-op — user starts zeus manually).
+///
+/// Returns the install path and status. Non-fatal failures (e.g., need sudo)
+/// return success=false with guidance rather than an HTTP error.
+#[derive(Debug, serde::Deserialize)]
+pub struct DaemonInstallRequest {
+    /// Service id: "launchd" | "systemd" | "rcd" | "schtasks" | "manual"
+    pub service_id: String,
+}
+
+pub async fn daemon_install(
+    State(shared): State<SharedState>,
+    Json(req): Json<DaemonInstallRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    use tracing::warn;
+
+    // "manual" = no service install needed
+    if req.service_id == "manual" {
+        return Ok(Json(json!({
+            "success": true,
+            "service_id": "manual",
+            "message": "Manual start — no service installed. Run `zeus gateway` to start.",
+            "path": null,
+        })));
+    }
+
+    // Persist service_id to config so the gateway knows the install mode
+    {
+        let mut state = shared.write().await;
+        state.config.gateway.get_or_insert_with(Default::default).service_id =
+            Some(req.service_id.clone());
+        if let Err(e) = state.config.save() {
+            warn!("daemon_install: config save failed: {e}");
+        }
+    }
+
+    // Run `zeus daemon install` as a subprocess (same as TUI awaken.rs)
+    let exe = std::env::current_exe()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Cannot find zeus binary: {e}")))?;
+
+    let result = std::process::Command::new(&exe)
+        .args(["daemon", "install"])
+        .output();
+
+    match result {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+            if output.status.success() {
+                info!("daemon_install: service installed ({})", req.service_id);
+                Ok(Json(json!({
+                    "success": true,
+                    "service_id": req.service_id,
+                    "message": stdout,
+                    "path": service_install_path(&req.service_id),
+                })))
+            } else {
+                // Non-fatal: service install may need sudo or platform support
+                let guidance = match req.service_id.as_str() {
+                    "launchd" => format!("{stdout} {stderr} — run `sudo zeus daemon install` to enable boot persistence"),
+                    "systemd" => format!("{stdout} {stderr} — run `systemctl --user daemon-reload` after install"),
+                    "rcd" => format!("{stdout} {stderr} — run `sudo service zeus_gateway enable` to enable at boot"),
+                    "schtasks" => format!("{stdout} {stderr} — Task Scheduler may require elevation"),
+                    _ => format!("{stdout} {stderr}"),
+                };
+                Ok(Json(json!({
+                    "success": false,
+                    "service_id": req.service_id,
+                    "message": guidance,
+                    "path": service_install_path(&req.service_id),
+                })))
+            }
+        }
+        Err(e) => {
+            warn!("daemon_install: failed to spawn `zeus daemon install`: {e}");
+            Ok(Json(json!({
+                "success": false,
+                "service_id": req.service_id,
+                "message": format!("Could not run `zeus daemon install`: {e}"),
+                "path": service_install_path(&req.service_id),
+            })))
+        }
+    }
+}
+
+/// Return the expected install path for a given service id.
+fn service_install_path(service_id: &str) -> Option<&'static str> {
+    match service_id {
+        "launchd" => Some("~/Library/LaunchAgents/ai.zeuslab.gateway.plist"),
+        "systemd" => Some("/etc/systemd/system/zeus-gateway.service"),
+        "rcd" => Some("/usr/local/etc/rc.d/zeus_gateway"),
+        "schtasks" => Some("Task Scheduler: ZeusGateway"),
+        "manual" => None,
+        _ => None,
+    }
+}

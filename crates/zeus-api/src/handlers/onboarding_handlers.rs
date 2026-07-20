@@ -13,6 +13,15 @@ use serde_json::{Value, json};
 
 use crate::SharedState;
 
+/// Generate a cryptographically random API token for gateway auth.
+/// Format: `zsk_<32 hex chars>` (Zeus Secret Key).
+pub fn generate_api_token() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    format!("zsk_{}", hex::encode(bytes))
+}
+
 // ============================================================================
 // Request / Response types
 // ============================================================================
@@ -64,6 +73,13 @@ pub struct OnboardingGatewayConfig {
     pub port: Option<u16>,
     pub timeout_secs: Option<u64>,
     pub mentions_only: Option<bool>,
+    /// Service install mode: "launchd" | "systemd" | "rcd" | "schtasks" | "manual"
+    /// (#383: parity with TUI's 5-card service picker)
+    pub service_id: Option<String>,
+    /// Gateway feature toggles: agent_processing, webui, mcp
+    pub enable_agent_processing: Option<bool>,
+    pub enable_webui: Option<bool>,
+    pub enable_mcp: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -73,6 +89,11 @@ pub struct OnboardingSetupResponse {
     pub security_level: String,
     pub model: String,
     pub onboarding_complete: bool,
+    /// Generated API auth token — frontend stores this and sends it as
+    /// `Authorization: Bearer <token>` on all subsequent requests.
+    /// Only present when onboarding is completed (complete=true).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
 }
 
 // ============================================================================
@@ -94,8 +115,12 @@ fn provider_env_key(provider: &str) -> Option<&'static str> {
         "bedrock"    => Some("AWS_ACCESS_KEY_ID"),
         // #220: canonical TUI provider set (registry ids + WebUI aliases)
         "moonshot" | "kimi" => Some("MOONSHOT_API_KEY"),
+        "kimi-code" | "kimicode" | "kimi_code" => Some("KIMI_CODE_API_KEY"),
+        "glm-coding" | "glmcoding" | "glm_coding" => Some("GLM_CODING_API_KEY"),
+        "minimax-coding" | "minimaxcoding" | "minimax_coding" => Some("MINIMAX_CODING_API_KEY"),
         "zai" | "glm"       => Some("ZAI_API_KEY"),
         "qwen"              => Some("QWEN_API_KEY"),
+        "qwen-coding" | "qwencoding" | "qwen_coding" => Some("QWEN_CODING_API_KEY"),
         "minimax"           => Some("MINIMAX_API_KEY"),
         "xiaomimimo" | "mimo" => Some("XIAOMIMIMO_API_KEY"),
         "deepseek"          => Some("DEEPSEEK_API_KEY"),
@@ -106,14 +131,28 @@ fn provider_env_key(provider: &str) -> Option<&'static str> {
 }
 
 /// Map a security level string to an AegisConfig sandbox_level string.
+///
+/// The 5 canonical values are `zeus_aegis::sandbox::SandboxLevel`'s own names
+/// (none/basic/standard/strict/paranoid — see zeus-aegis/src/sandbox.rs
+/// `FromStr`). Callers may also send the older UI-only aliases
+/// ("minimal"→none, "permissive"→none) for backward compat with any
+/// onboarding client still on the pre-#401 vocabulary. Anything unrecognized
+/// falls back to the safe default "standard" rather than silently mapping to
+/// "none" (the previous version mapped the literal string "paranoid" to
+/// "none" — the exact opposite of its meaning; that bug is the likely root
+/// cause of "standard felt too paranoid" reports, since level semantics were
+/// scrambling on the round trip through this function).
 fn security_level_to_sandbox(level: &str) -> &'static str {
     let lower = level.to_lowercase();
     match lower.as_str() {
-        "minimal" => "none",
-        "standard" => "basic",
-        "strict" => "standard",
-        "none" | "paranoid" => "none",
-        _ => "basic",
+        "none" => "none",
+        "basic" => "basic",
+        "standard" => "standard",
+        "strict" => "strict",
+        "paranoid" => "paranoid",
+        // Legacy UI aliases (pre-#401 3/4-level onboarding pickers).
+        "minimal" | "permissive" => "none",
+        _ => "standard",
     }
 }
 
@@ -310,23 +349,39 @@ pub async fn onboarding_setup(
     // Persist to config.gateway (mirrors TUI gateway_screen fields).
     if let Some(gw) = &req.gateway {
         let gateway = state.config.gateway.get_or_insert_with(Default::default);
-        if let Some(host) = &gw.host {
-            if !host.is_empty() {
-                gateway.host = host.clone();
-            }
+        if let Some(host) = &gw.host
+            && !host.is_empty()
+        {
+            gateway.host = host.clone();
         }
-        if let Some(port) = gw.port {
-            if port > 0 {
-                gateway.port = port;
-            }
+        if let Some(port) = gw.port
+            && port > 0
+        {
+            gateway.port = port;
         }
-        if let Some(timeout) = gw.timeout_secs {
-            if timeout > 0 {
-                gateway.timeout_secs = timeout;
-            }
+        if let Some(timeout) = gw.timeout_secs
+            && timeout > 0
+        {
+            gateway.timeout_secs = timeout;
         }
         if let Some(mentions) = gw.mentions_only {
             gateway.mentions_only = mentions;
+        }
+        // #383: persist service install mode + gateway feature toggles
+        if let Some(sid) = &gw.service_id
+            && !sid.is_empty()
+        {
+            gateway.service_id = Some(sid.clone());
+        }
+        if let Some(v) = gw.enable_agent_processing {
+            gateway.enable_heartbeat = v;
+            gateway.enable_cron = v;
+        }
+        if let Some(v) = gw.enable_webui {
+            gateway.enable_api = v;
+        }
+        if let Some(v) = gw.enable_mcp {
+            gateway.enable_mcp = v;
         }
     }
 
@@ -494,10 +549,28 @@ pub async fn onboarding_setup(
         // wizard needs only this one endpoint to finish onboarding.
         state.config.loaded_from_default = false;
         generate_workspace_files(&state.config);
+
+        // #385: Generate an API auth token on onboarding completion so the
+        // gateway's auth middleware can gate /api/* routes. The frontend
+        // stores this token and sends it as Bearer on all subsequent calls.
+        // If a token is already configured (e.g. from a previous partial
+        // onboarding), keep it — don't invalidate existing sessions.
+        let gateway = state.config.gateway.get_or_insert_with(Default::default);
+        if gateway.api_token.is_none() {
+            let token = generate_api_token();
+            tracing::info!("#385: Generated API auth token during onboarding completion");
+            gateway.api_token = Some(token);
+        }
     }
 
     let model = state.config.model.clone();
     let onboarding_complete = state.config.onboarding_complete;
+    let auth_token = if onboarding_complete {
+        state.config.gateway.as_ref()
+            .and_then(|g| g.api_token.clone())
+    } else {
+        None
+    };
 
     // ── 10. Persist ───────────────────────────────────────────────────────────
     state.config.save().map_err(|e| {
@@ -510,6 +583,7 @@ pub async fn onboarding_setup(
         security_level: security_level.to_string(),
         model,
         onboarding_complete,
+        auth_token,
     }))
 }
 
@@ -529,13 +603,14 @@ pub async fn onboarding_config(
     let provider = cfg.model.split('/').next().unwrap_or("").to_string();
     let model_id = cfg.model.splitn(2, '/').nth(1).unwrap_or(&cfg.model).to_string();
 
+    // Identity passthrough — report the real aegis level rather than
+    // compressing 5 canonical values down into 3 UI buckets. `standard` and
+    // `strict` are no longer collapsed into the same reported string (#401:
+    // the old 3-bucket compression here made "standard" and "strict"
+    // indistinguishable to any onboarding UI polling this endpoint).
     let security_level = cfg.aegis.as_ref()
-        .map(|a| match a.sandbox_level.as_str() {
-            "none"   => "minimal",
-            "basic"  => "standard",
-            "standard" | "strict" | "paranoid" => "strict",
-            other => other,
-        })
+        .map(|a| a.sandbox_level.as_str())
+        .filter(|s| matches!(*s, "none" | "basic" | "standard" | "strict" | "paranoid"))
         .unwrap_or("standard");
 
     // Which provider keys are present (names only, not values)

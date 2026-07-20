@@ -76,6 +76,17 @@ pub fn spawn_gateway_detached() {
             Ok(())
         });
     }
+    // Windows equivalent (#308): CREATE_NEW_PROCESS_GROUP detaches the child
+    // from this console's Ctrl+C group (the setsid analog for signal
+    // delivery) and CREATE_NO_WINDOW keeps a console window from flashing
+    // up — stdio is already redirected to the log files / null above.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    }
 
     match cmd.spawn() {
         Ok(child) => tracing::info!(

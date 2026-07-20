@@ -1212,6 +1212,22 @@ pub async fn test_provider_connection(provider: &str, api_key: Option<&str>, url
     post_json("/v1/config/test", &body).await
 }
 
+/// Fetch available models from a provider API using supplied credentials.
+/// Calls POST /v1/config/models on the gateway, which polls the provider's
+/// /v1/models (or equivalent) endpoint server-side.
+#[derive(Clone, Debug, Deserialize, Default)]
+pub struct ProviderModelsResponse {
+    #[serde(default)]
+    pub models: Vec<ProviderModel>,
+    #[serde(default)]
+    pub error: String,
+}
+
+pub async fn fetch_provider_models(provider: &str, api_key: &str) -> Result<ProviderModelsResponse, String> {
+    let body = serde_json::json!({ "provider": provider, "api_key": api_key });
+    post_json("/v1/config/models", &body).await
+}
+
 // ── Analytics provider costs ──
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -2701,6 +2717,7 @@ pub async fn onboarding_setup(
     embedding_provider: Option<&str>,
     workspace_path: Option<&str>,
     persona: Option<&str>,
+    gateway: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
     let mut body = serde_json::json!({
         "provider": provider,
@@ -2729,6 +2746,10 @@ pub async fn onboarding_setup(
     }
     if let Some(v) = persona {
         body["persona"] = serde_json::Value::String(v.to_string());
+    }
+    // #383: gateway config (host, port, service_id, feature toggles)
+    if let Some(gw) = gateway {
+        body["gateway"] = gw;
     }
     post_json("/v1/onboarding/setup", &body).await
 }
@@ -2780,6 +2801,15 @@ pub async fn start_gateway(port: u16, bind: &str) -> Result<GatewayStartResponse
         "bind": bind,
     });
     post_json("/v1/gateway/restart", &body).await
+}
+
+/// #383: Install Zeus as a system service.
+/// POST /v1/daemon/install — runs `zeus daemon install` server-side.
+pub async fn daemon_install(service_id: &str) -> Result<serde_json::Value, String> {
+    let body = serde_json::json!({
+        "service_id": service_id,
+    });
+    post_json("/v1/daemon/install", &body).await
 }
 
 // ── Web search via backend web_fetch tool ──
@@ -3619,7 +3649,7 @@ pub async fn upload_file(file: web_sys::File, _on_progress: impl Fn(f64) + 'stat
         .unwrap_or_default();
 
     serde_json::from_str::<UploadedFile>(&text)
-        .map_err(|e| format!("Parse error: {} (body: {})", e, &text[..text.len().min(200)]))
+        .map_err(|e| format!("Parse error: {} (body: {})", e, truncate_str(&text, 200)))
 }
 
 pub async fn list_uploads() -> Result<Vec<UploadedFile>, String> {
@@ -5200,7 +5230,7 @@ pub async fn upload_room_file(room_id: &str, file: &web_sys::File, sender_id: &s
     let text = wasm_bindgen_futures::JsFuture::from(resp.text().map_err(|e| format!("Text: {:?}", e))?)
         .await.map_err(|e| format!("Read: {:?}", e))?.as_string().unwrap_or_default();
     serde_json::from_str::<PantheonRoomMessage>(&text)
-        .map_err(|e| format!("Parse: {} (body: {})", e, &text[..text.len().min(200)]))
+        .map_err(|e| format!("Parse: {} (body: {})", e, truncate_str(&text, 200)))
 }
 
 pub async fn fetch_room_members(room_id: &str) -> Result<Vec<PantheonRoomMember>, String> {

@@ -251,28 +251,14 @@ async fn setup_workspace(target: &FleetNode, tx: &mpsc::Sender<ProgressEvent>) -
         .await?;
     }
 
-    // Write config.toml if it doesn't exist (strip macOS-only sections for non-macOS)
-    let config_content = if target.is_macos() {
-        crate::config::DEFAULT_CONFIG.to_string()
-    } else {
-        // Remove [talos] and enable_talos for FreeBSD/Linux — AppleScript doesn't exist
-        crate::config::DEFAULT_CONFIG
-            .lines()
-            .map(|l| {
-                if l.contains("enable_talos") {
-                    "enable_talos = false"
-                } else {
-                    l
-                }
-            })
-            .filter(|l| {
-                !l.contains("[talos]")
-                    && !l.contains("enable_applescript")
-                    && !l.contains("Talos (macOS Automation)")
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
+    // Write config.toml if it doesn't exist.
+    // DEFAULT_CONFIG ships enable_talos = true on all targets: the cross-platform
+    // Talos tools (x_*, nostr, instagram, tiktok, youtube, twitch, matrix, mqtt,
+    // feishu, …) have no AppleScript dependency and must be available everywhere.
+    // macOS-only tools (AppleScript-backed: calendar, notes, music, safari, …) are
+    // already compiled out via #[cfg(target_os = "macos")] in TalosRegistry::register_all,
+    // so a runtime config override here is both over-broad and redundant.
+    let config_content = crate::config::DEFAULT_CONFIG.to_string();
     let config_cmd = format!(
         r#"test -f ~/.zeus/config.toml || cat > ~/.zeus/config.toml << 'ZEUS_CONFIG_EOF'
 {}

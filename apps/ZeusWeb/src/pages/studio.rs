@@ -1324,7 +1324,7 @@ pub fn StudioPage() -> impl IntoView {
                                         _            => ("\u{25b6}",  "rgba(255,245,240,0.4)"),
                                     };
                                     let val_preview = if a.value.len() > 24 {
-                                        format!("\"{}...\"", &a.value[..24])
+                                        format!("\"{}...\"", api::truncate_str(&a.value, 24))
                                     } else if !a.value.is_empty() {
                                         format!("\"{}\"", a.value)
                                     } else {

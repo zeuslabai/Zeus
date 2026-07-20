@@ -10,6 +10,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{info, warn};
+
+use crate::fleet_telemetry::{self, FleetEventKind, FleetSeverity};
 use crate::ChannelSource;
 
 /// Maximum queued messages before backpressure kicks in.
@@ -145,6 +147,15 @@ impl InboxSender {
     ) -> Result<String, String> {
         let (response_tx, response_rx) = oneshot::channel();
         let timeout_secs = options.timeout_secs;
+        let use_cooking = options.use_cooking;
+        let session_id = options.session_id.clone();
+        let telemetry_channel = source
+            .as_ref()
+            .map(|s| s.channel_type.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let telemetry_channel_id = source.as_ref().and_then(|s| s.channel_id.clone());
+        let content_len = content.len();
         let msg = InboxMessage {
             content,
             source,
@@ -152,7 +163,7 @@ impl InboxSender {
             is_addressed: options.is_addressed,
             session_id: options.session_id,
             timeout_secs,
-            use_cooking: options.use_cooking,
+            use_cooking,
             response_tx: ResponseChannel::OneShot(response_tx),
         };
         // Counter-invariant: increment BEFORE enqueue, symmetric rollback on send-err.
@@ -167,7 +178,26 @@ impl InboxSender {
         ).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err("Agent dropped response channel".to_string()),
-            Err(_) => Err(format!("Agent processing timed out after {}s", timeout_secs)),
+            Err(_) => {
+                let summary = format!("agent cook timed out after {timeout_secs}s");
+                if use_cooking {
+                    let details = format!(
+                        "timeout_secs={timeout_secs} use_cooking={use_cooking} channel={} channel_id={} session_id={} content_bytes={content_len}",
+                        telemetry_channel,
+                        telemetry_channel_id.as_deref().unwrap_or(""),
+                        session_id.as_deref().unwrap_or("")
+                    );
+                    fleet_telemetry::record_event_best_effort(
+                        FleetEventKind::CookTimeout,
+                        FleetSeverity::Error,
+                        "cook-wrapper",
+                        &summary,
+                        None,
+                        Some(&details),
+                    );
+                }
+                Err(summary)
+            }
         }
     }
 

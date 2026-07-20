@@ -1228,7 +1228,16 @@ impl Marketplace {
             .wallets
             .entry(seller_id.to_string())
             .or_insert_with(|| AgentWallet::new(seller_id, 0));
-        let _ = seller_wallet.earn(seller_amount);
+        if let Err(e) = seller_wallet.earn(seller_amount) {
+            // Atomicity: seller credit failed — roll back the buyer debit and
+            // fail the tx rather than completing it with money destroyed.
+            if let Some(w) = self.wallets.get_mut(buyer_id) {
+                let _ = w.earn(price);
+            }
+            tx.fail();
+            self.transaction_log.append(tx);
+            return Err(e);
+        }
 
         // Transition to Completed; attach settlement reference.
         tx.complete();
@@ -1430,7 +1439,16 @@ impl Marketplace {
             .wallets
             .entry(tx.seller_agent_id.clone())
             .or_insert_with(|| AgentWallet::new(&tx.seller_agent_id, 0));
-        let _ = seller_wallet.earn(seller_amount);
+        if let Err(e) = seller_wallet.earn(seller_amount) {
+            // Atomicity: seller credit failed — roll back the buyer debit and
+            // fail the tx rather than completing it with money destroyed.
+            if let Some(w) = self.wallets.get_mut(&tx.buyer_agent_id) {
+                let _ = w.earn(tx.credits_transferred);
+            }
+            tx.fail();
+            self.transaction_log.append(tx);
+            return Err(e);
+        }
 
         tx.complete();
         tx.settlement_reference = reference;
@@ -1920,6 +1938,49 @@ mod tests {
 
         assert_eq!(mp.transaction_count(), 1);
         assert_eq!(mp.total_volume(), 20);
+    }
+
+    #[test]
+    fn test_marketplace_purchase_seller_credit_failure_rolls_back_buyer() {
+        // M2: if the seller credit fails, the buyer debit must be rolled back
+        // and the tx must NOT complete — otherwise credits vanish.
+        let mut mp = Marketplace::with_defaults();
+        mp.register_wallet("buyer", 100);
+        // Pre-seed a seller wallet whose balance is near i64::MAX so crediting
+        // the sale overflows and fails.
+        mp.register_wallet("seller", i64::MAX - 1);
+        mp.list_skill(test_listing("seller", "analyze", 20))
+            .unwrap();
+
+        let err = mp.purchase("buyer", "seller", "analyze").unwrap_err();
+        assert!(matches!(err, AgoraError::Overflow(_)));
+
+        // Buyer must be made whole; seller balance unchanged.
+        assert_eq!(mp.balance("buyer"), Some(100));
+        assert_eq!(mp.balance("seller"), Some(i64::MAX - 1));
+    }
+
+    #[test]
+    fn test_marketplace_commit_seller_credit_failure_blocks_completion() {
+        // M2 (two-phase path): commit_transaction must propagate the seller
+        // credit failure instead of marking the tx Completed.
+        let mut mp = Marketplace::with_defaults();
+        mp.register_wallet("buyer", 100);
+        mp.register_wallet("seller", i64::MAX - 1);
+        let listing = test_listing("seller", "analyze", 20);
+        mp.list_skill(listing.clone()).unwrap();
+
+        let tx_id = mp.begin_transaction("buyer", &listing).unwrap();
+        let err = mp.commit_transaction(tx_id, None).unwrap_err();
+        assert!(matches!(err, AgoraError::Overflow(_)));
+
+        // Buyer refunded, seller untouched, tx not left pending.
+        assert_eq!(mp.balance("buyer"), Some(100));
+        assert_eq!(mp.balance("seller"), Some(i64::MAX - 1));
+        assert!(matches!(
+            mp.commit_transaction(tx_id, None),
+            Err(AgoraError::TransactionNotFound(_))
+        ));
     }
 
     #[test]

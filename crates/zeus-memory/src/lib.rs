@@ -15,6 +15,42 @@ use zeus_core::{Error, Result};
 // Workspace (~250 lines)
 // ============================================================================
 
+/// Scope for a remembered fact (#433).
+///
+/// `Global` is the pre-#433 behavior (single shared MEMORY.md). `Workspace`
+/// and `User` partition facts by caller-supplied id so cross-scope reads
+/// never bleed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemoryScope {
+    Global,
+    Workspace(String),
+    User(String),
+}
+
+/// Validate a caller-supplied scope id before it becomes a path segment.
+///
+/// Fail-closed: rejects empty ids, path separators, `.`/`..` segments, and
+/// anything outside `[A-Za-z0-9._-]`. This runs *before* `validate_path` —
+/// the id must be a single safe path component, never a path.
+fn validate_scope_id(id: &str) -> Result<&str> {
+    if id.is_empty() {
+        return Err(Error::Memory("scope id must not be empty".into()));
+    }
+    if id == "." || id == ".." {
+        return Err(Error::Memory(format!("invalid scope id '{}'", id)));
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(Error::Memory(format!(
+            "scope id '{}' contains characters outside [A-Za-z0-9._-]",
+            id
+        )));
+    }
+    Ok(id)
+}
+
 /// File-based workspace for memory and context
 #[derive(Clone)]
 pub struct Workspace {
@@ -611,9 +647,35 @@ impl Workspace {
 
     /// Remember a fact (append to MEMORY.md)
     pub async fn remember(&self, fact: &str) -> Result<()> {
+        self.remember_scoped(fact, MemoryScope::Global).await
+    }
+
+    /// Remember a fact under an explicit scope (#433).
+    ///
+    /// Scoped facts land in a scope-partitioned layout so cross-scope reads
+    /// can never bleed:
+    ///   - Global    → `memory/MEMORY.md` (legacy path, unchanged)
+    ///   - Workspace → `memory/scoped/workspace/<workspace_id>/MEMORY.md`
+    ///   - User      → `memory/scoped/user/<user_id>/MEMORY.md`
+    ///
+    /// The composed path flows through the same traversal guard as every
+    /// other file op (`validate_path`), so a hostile scope id containing
+    /// `..` or a symlink escape is rejected, not resolved.
+    pub async fn remember_scoped(&self, fact: &str, scope: MemoryScope) -> Result<()> {
         let timestamp = Local::now().format("%Y-%m-%d %H:%M");
         let entry = format!("\n- [{}] {}", timestamp, fact);
-        self.append("memory/MEMORY.md", &entry).await
+        let path = match &scope {
+            MemoryScope::Global => "memory/MEMORY.md".to_string(),
+            MemoryScope::Workspace(id) => {
+                let id = validate_scope_id(id)?;
+                format!("memory/scoped/workspace/{}/MEMORY.md", id)
+            }
+            MemoryScope::User(id) => {
+                let id = validate_scope_id(id)?;
+                format!("memory/scoped/user/{}/MEMORY.md", id)
+            }
+        };
+        self.append(&path, &entry).await
     }
 
     /// Get or create today's daily note

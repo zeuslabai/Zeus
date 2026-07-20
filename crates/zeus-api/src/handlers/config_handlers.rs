@@ -974,6 +974,195 @@ pub async fn fetch_provider_models(
             }
             Ok(Json(json!({ "models": [], "error": last_err })))
         }
+        "sakana" => {
+            // Sakana AI (Fugu) — OpenAI-compatible /v1/models, Bearer key.
+            if key.is_empty() {
+                return Ok(Json(json!({ "models": [], "error": "No API key provided" })));
+            }
+            let base = std::env::var("SAKANA_BASE_URL")
+                .ok()
+                .filter(|u| !u.trim().is_empty())
+                .map(|u| u.trim_end_matches('/').to_string())
+                .unwrap_or_else(|| "https://api.sakana.ai/v1".to_string());
+            // Normalize: strip trailing /v1 if present, then re-add
+            let base = base.trim_end_matches("/v1");
+            match client.get(format!("{base}/v1/models"))
+                .header("Authorization", format!("Bearer {}", key))
+                .timeout(timeout)
+                .send().await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    let body: Value = resp.json().await.unwrap_or(json!({}));
+                    let models: Vec<Value> = body.get("data")
+                        .and_then(|d| d.as_array())
+                        .map(|arr| arr.iter()
+                            .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(|s| json!({ "id": s })))
+                            .collect())
+                        .unwrap_or_default();
+                    Ok(Json(json!({ "models": models })))
+                }
+                Ok(resp) => Ok(Json(json!({ "models": [], "error": format!("HTTP {}", resp.status()) }))),
+                Err(e) => Ok(Json(json!({ "models": [], "error": e.to_string() }))),
+            }
+        }
+        "xai" => {
+            // xAI (Grok) — OpenAI-compatible /v1/models, Bearer key.
+            if key.is_empty() {
+                return Ok(Json(json!({ "models": [], "error": "No API key provided" })));
+            }
+            let base = std::env::var("XAI_BASE_URL")
+                .ok()
+                .filter(|u| !u.trim().is_empty())
+                .map(|u| u.trim_end_matches('/').to_string())
+                .unwrap_or_else(|| "https://api.x.ai".to_string());
+            match client.get(format!("{base}/v1/models"))
+                .header("Authorization", format!("Bearer {}", key))
+                .timeout(timeout)
+                .send().await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    let body: Value = resp.json().await.unwrap_or(json!({}));
+                    let models: Vec<Value> = body.get("data")
+                        .and_then(|d| d.as_array())
+                        .map(|arr| arr.iter()
+                            .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(|s| json!({ "id": s })))
+                            .collect())
+                        .unwrap_or_default();
+                    Ok(Json(json!({ "models": models })))
+                }
+                Ok(resp) => Ok(Json(json!({ "models": [], "error": format!("HTTP {}", resp.status()) }))),
+                Err(e) => Ok(Json(json!({ "models": [], "error": e.to_string() }))),
+            }
+        }
+        "qwen-coding" => {
+            // Qwen Coding Plan — OpenAI-compatible /models, Bearer key.
+            if key.is_empty() {
+                return Ok(Json(json!({ "models": [], "error": "No API key provided" })));
+            }
+            match client.get("https://coding.dashscope.aliyuncs.com/v1/models")
+                .header("Authorization", format!("Bearer {}", key))
+                .timeout(timeout)
+                .send().await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    let body: Value = resp.json().await.unwrap_or(json!({}));
+                    let models: Vec<Value> = body.get("data")
+                        .and_then(|d| d.as_array())
+                        .map(|arr| arr.iter()
+                            .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(|s| json!({ "id": s })))
+                            .collect())
+                        .unwrap_or_default();
+                    Ok(Json(json!({ "models": models })))
+                }
+                Ok(resp) => Ok(Json(json!({ "models": [], "error": format!("HTTP {}", resp.status()) }))),
+                Err(e) => Ok(Json(json!({ "models": [], "error": e.to_string() }))),
+            }
+        }
+        "qwen" => {
+            // Qwen (DashScope) — OpenAI-compatible /models, Bearer key.
+            if key.is_empty() {
+                return Ok(Json(json!({ "models": [], "error": "No API key provided" })));
+            }
+            let base = std::env::var("QWEN_BASE_URL")
+                .ok()
+                .filter(|u| !u.trim().is_empty())
+                .map(|u| u.trim_end_matches('/').to_string())
+                .unwrap_or_else(|| "https://dashscope-intl.aliyuncs.com/compatible-mode/v1".to_string());
+            match client.get(format!("{base}/models"))
+                .header("Authorization", format!("Bearer {}", key))
+                .timeout(timeout)
+                .send().await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    let body: Value = resp.json().await.unwrap_or(json!({}));
+                    let models: Vec<Value> = body.get("data")
+                        .and_then(|d| d.as_array())
+                        .map(|arr| arr.iter()
+                            .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(|s| json!({ "id": s })))
+                            .collect())
+                        .unwrap_or_default();
+                    Ok(Json(json!({ "models": models })))
+                }
+                Ok(resp) => Ok(Json(json!({ "models": [], "error": format!("HTTP {}", resp.status()) }))),
+                Err(e) => Ok(Json(json!({ "models": [], "error": e.to_string() }))),
+            }
+        }
+        "moonshot" => {
+            // Moonshot/Kimi — OpenAI-compatible /v1/models, Bearer key.
+            if key.is_empty() {
+                return Ok(Json(json!({ "models": [], "error": "No API key provided" })));
+            }
+            match client.get("https://api.moonshot.ai/v1/models")
+                .header("Authorization", format!("Bearer {}", key))
+                .timeout(timeout)
+                .send().await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    let body: Value = resp.json().await.unwrap_or(json!({}));
+                    let models: Vec<Value> = body.get("data")
+                        .and_then(|d| d.as_array())
+                        .map(|arr| arr.iter()
+                            .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(|s| json!({ "id": s })))
+                            .collect())
+                        .unwrap_or_default();
+                    Ok(Json(json!({ "models": models })))
+                }
+                Ok(resp) => Ok(Json(json!({ "models": [], "error": format!("HTTP {}", resp.status()) }))),
+                Err(e) => Ok(Json(json!({ "models": [], "error": e.to_string() }))),
+            }
+        }
+        "minimax" | "minimax-coding" => {
+            // MiniMax — Anthropic-compatible API; list models via /v1/models on the inference base.
+            if key.is_empty() {
+                return Ok(Json(json!({ "models": [], "error": "No API key provided" })));
+            }
+            match client.get("https://api.minimax.io/anthropic/v1/models")
+                .header("Authorization", format!("Bearer {}", key))
+                .timeout(timeout)
+                .send().await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    let body: Value = resp.json().await.unwrap_or(json!({}));
+                    let models: Vec<Value> = body.get("data")
+                        .and_then(|d| d.as_array())
+                        .map(|arr| arr.iter()
+                            .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(|s| json!({ "id": s })))
+                            .collect())
+                        .unwrap_or_default();
+                    Ok(Json(json!({ "models": models })))
+                }
+                Ok(resp) => Ok(Json(json!({ "models": [], "error": format!("HTTP {}", resp.status()) }))),
+                Err(e) => Ok(Json(json!({ "models": [], "error": e.to_string() }))),
+            }
+        }
+        "xiaomimimo" => {
+            // Xiaomi MiMo — OpenAI-compatible /v1/models, Bearer key.
+            if key.is_empty() {
+                return Ok(Json(json!({ "models": [], "error": "No API key provided" })));
+            }
+            match client.get("https://api.xiaomimimo.com/v1/models")
+                .header("Authorization", format!("Bearer {}", key))
+                .timeout(timeout)
+                .send().await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    let body: Value = resp.json().await.unwrap_or(json!({}));
+                    let models: Vec<Value> = body.get("data")
+                        .and_then(|d| d.as_array())
+                        .map(|arr| arr.iter()
+                            .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(|s| json!({ "id": s })))
+                            .collect())
+                        .unwrap_or_default();
+                    Ok(Json(json!({ "models": models })))
+                }
+                Ok(resp) => Ok(Json(json!({ "models": [], "error": format!("HTTP {}", resp.status()) }))),
+                Err(e) => Ok(Json(json!({ "models": [], "error": e.to_string() }))),
+            }
+        }
+        "google-gemini-cli" => {
+            // Gemini CLI uses OAuth, not API keys — can't list models without an OAuth token.
+            Ok(Json(json!({ "models": [], "error": "Gemini CLI uses OAuth — models will be available after authentication." })))
+        }
         "bedrock" => {
             // Bedrock requires AWS SDK — return empty with instruction
             Ok(Json(json!({ "models": [], "error": "Bedrock model listing requires AWS SDK. Enter model ID manually." })))

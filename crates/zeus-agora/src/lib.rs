@@ -213,17 +213,32 @@ impl AgentWallet {
             });
         }
         self.balance -= amount;
-        self.total_spent += amount;
+        self.total_spent = self
+            .total_spent
+            .checked_add(amount)
+            .ok_or(AgoraError::Overflow("spend would overflow total_spent"))?;
         Ok(())
     }
 
     /// Add credits earned from a sale.
+    ///
+    /// All-or-nothing: both `balance` and `total_earned` are computed into
+    /// locals first; if either `checked_add` overflows, neither field is
+    /// mutated. Prevents partial state on overflow.
     pub fn earn(&mut self, amount: i64) -> Result<(), AgoraError> {
         if amount <= 0 {
             return Err(AgoraError::InvalidAmount(amount));
         }
-        self.balance += amount;
-        self.total_earned += amount;
+        let new_balance = self
+            .balance
+            .checked_add(amount)
+            .ok_or(AgoraError::Overflow("earn would overflow balance"))?;
+        let new_total_earned = self
+            .total_earned
+            .checked_add(amount)
+            .ok_or(AgoraError::Overflow("earn would overflow total_earned"))?;
+        self.balance = new_balance;
+        self.total_earned = new_total_earned;
         Ok(())
     }
 }
@@ -238,6 +253,8 @@ pub enum AgoraError {
     InsufficientCredits { available: i64, required: i64 },
     #[error("invalid amount: {0}")]
     InvalidAmount(i64),
+    #[error("credit overflow: {0}")]
+    Overflow(&'static str),
     #[error("listing not found: {agent_id}/{skill_name}")]
     ListingNotFound {
         agent_id: String,
@@ -393,6 +410,40 @@ mod tests {
         let mut wallet = AgentWallet::new("a", 50);
         assert!(wallet.earn(0).is_err());
         assert!(wallet.earn(-1).is_err());
+    }
+
+    #[test]
+    fn test_wallet_earn_overflow() {
+        let mut wallet = AgentWallet::new("a", i64::MAX - 10);
+        let err = wallet.earn(100).expect_err("earn past i64::MAX must fail");
+        assert!(matches!(err, AgoraError::Overflow(_)));
+        // Failed earn must not mutate the wallet.
+        assert_eq!(wallet.balance, i64::MAX - 10);
+        assert_eq!(wallet.total_earned, 0);
+    }
+
+    #[test]
+    fn test_wallet_earn_total_earned_overflow() {
+        let mut wallet = AgentWallet::new("a", 0);
+        wallet.total_earned = i64::MAX - 5;
+        let err = wallet
+            .earn(10)
+            .expect_err("total_earned overflow must fail");
+        assert!(matches!(err, AgoraError::Overflow(_)));
+        // M1: all-or-nothing — a total_earned overflow must NOT leave
+        // balance already mutated. Both fields stay at their pre-call values.
+        assert_eq!(wallet.balance, 0, "balance must not mutate on partial failure");
+        assert_eq!(wallet.total_earned, i64::MAX - 5, "total_earned must not mutate on overflow");
+    }
+
+    #[test]
+    fn test_wallet_spend_total_spent_overflow() {
+        let mut wallet = AgentWallet::new("a", i64::MAX);
+        wallet.total_spent = i64::MAX - 5;
+        let err = wallet
+            .spend(10)
+            .expect_err("total_spent overflow must fail");
+        assert!(matches!(err, AgoraError::Overflow(_)));
     }
 
     #[test]

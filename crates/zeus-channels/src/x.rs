@@ -16,8 +16,10 @@
 //! (`statuses/update.json`, `upload.twitter.com/1.1/media/upload.json`) is
 //! deprecated by X and must not be reintroduced. Posting is
 //! `POST https://api.x.com/2/tweets` (the `create_tweet` operation); media
-//! upload is `POST https://api.x.com/2/media/upload` with the same
-//! INIT/APPEND/FINALIZE command flow.
+//! upload follows the v2 OpenAPI contract: one-shot multipart
+//! `POST /2/media/upload` for static images, and chunked
+//! `initialize` → `{id}/append` → `{id}/finalize` subresource calls
+//! for video/gif. No query parameters on any media POST.
 //!
 //! Replies use the v2 request shape `POST /2/tweets` with body:
 //! `{"text": "...", "reply": {"in_reply_to_tweet_id": "..."}}`.
@@ -27,7 +29,7 @@
 //! rejects. Validated end-to-end via ZeusMarketing integration test
 //! (see `memory/2026-04-23.md`).
 
-use crate::{AgentSendIdentity, ChannelAdapter, ChannelMessage, ChannelSource, ReceiveMode};
+use crate::{AgentSendIdentity, ChannelAdapter, ChannelMessage, ChannelSource, MediaFile, ReceiveMode};
 use async_trait::async_trait;
 use base64::Engine as _;
 use hmac::{Hmac, Mac};
@@ -43,6 +45,70 @@ use zeus_core::{Error, Result};
 type HmacSha1 = Hmac<Sha1>;
 
 const X_API_BASE: &str = "https://api.x.com/2";
+
+/// Build the X API v2 `create_tweet` request body from options.
+///
+/// Pure function so the mapping from [`CreateTweetOptions`] (text, reply_to,
+/// media_ids, poll, schedule) to the wire JSON is unit-testable without a
+/// network call. `post_tweet` sends exactly what this returns.
+fn build_tweet_body(opts: &CreateTweetOptions) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "text": opts.text,
+    });
+
+    if let Some(ref reply_to) = opts.reply_to {
+        body["reply"] = serde_json::json!({
+            "in_reply_to_tweet_id": reply_to,
+        });
+    }
+
+    if let Some(ref quote_id) = opts.quote_tweet_id {
+        body["quote_tweet_id"] = serde_json::json!(quote_id);
+    }
+
+    if !opts.media_ids.is_empty() {
+        body["media"] = serde_json::json!({
+            "media_ids": opts.media_ids,
+        });
+    }
+
+    if !opts.poll_options.is_empty() {
+        body["poll"] = serde_json::json!({
+            "options": opts.poll_options.iter().map(|o| serde_json::json!({"label": o})).collect::<Vec<_>>(),
+            "duration_minutes": opts.poll_duration_minutes.unwrap_or(1440),
+        });
+    }
+
+    if let Some(ref scheduled_at) = opts.scheduled_at {
+        body["scheduled_at"] = serde_json::json!(scheduled_at);
+    }
+
+    body
+}
+
+/// Infer an X-supported MIME type from a filename's extension.
+///
+/// X accepts png/jpg/gif/webp images and mp4 video for tweet media. Returns an
+/// error for anything else so the caller surfaces a clear message rather than
+/// a failed upload.
+fn mime_from_filename(filename: &str) -> Result<&'static str> {
+    match std::path::Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => Ok("image/png"),
+        Some("jpg") | Some("jpeg") => Ok("image/jpeg"),
+        Some("gif") => Ok("image/gif"),
+        Some("webp") => Ok("image/webp"),
+        Some("mp4") => Ok("video/mp4"),
+        other => Err(Error::channel(format!(
+            "Unsupported media type for X: {:?} (png/jpg/gif/webp/mp4 only)",
+            other
+        ))),
+    }
+}
 
 fn parse_retry_after_seconds(value: &str) -> Option<u64> {
     value.trim().parse::<u64>().ok()
@@ -547,6 +613,23 @@ impl XAdapter {
     ///   3. OAuth 2.0 App-Only bearer token (last resort — often read-only,
     ///      especially on free tier).
     fn write_auth_header(&self, method: &str, url: &str) -> String {
+        self.write_auth_header_with_params(method, url, &[])
+    }
+
+    /// Like [`Self::write_auth_header`], but includes request body parameters
+    /// in the OAuth 1.0a signature base string.
+    ///
+    /// REQUIRED for `application/x-www-form-urlencoded` requests (RFC 5849
+    /// §3.4.1.3): X rejects form posts whose body params are missing from the
+    /// signature with 401 Unauthorized. JSON and multipart bodies must NOT be
+    /// signed — use [`Self::write_auth_header`] for those. The Bearer arms
+    /// ignore `extra_params` (OAuth 2.0 does not sign bodies).
+    fn write_auth_header_with_params(
+        &self,
+        method: &str,
+        url: &str,
+        extra_params: &[(&str, &str)],
+    ) -> String {
         let oauth2 = self.try_oauth2_token_snapshot();
         if !oauth2.is_empty() {
             return format!("Bearer {}", oauth2);
@@ -557,7 +640,7 @@ impl XAdapter {
             && !self.config.access_token.is_empty()
             && !self.config.access_token_secret.is_empty();
         if has_oauth1 {
-            self.oauth1_header(method, url, &[])
+            self.oauth1_header(method, url, extra_params)
         } else if !self.config.bearer_token.is_empty() {
             format!("Bearer {}", self.config.bearer_token)
         } else {
@@ -631,36 +714,7 @@ impl XAdapter {
 
     /// Post a single tweet
     pub async fn post_tweet(&self, opts: &CreateTweetOptions) -> Result<Tweet> {
-        let mut body = serde_json::json!({
-            "text": opts.text,
-        });
-
-        if let Some(ref reply_to) = opts.reply_to {
-            body["reply"] = serde_json::json!({
-                "in_reply_to_tweet_id": reply_to,
-            });
-        }
-
-        if let Some(ref quote_id) = opts.quote_tweet_id {
-            body["quote_tweet_id"] = serde_json::json!(quote_id);
-        }
-
-        if !opts.media_ids.is_empty() {
-            body["media"] = serde_json::json!({
-                "media_ids": opts.media_ids,
-            });
-        }
-
-        if !opts.poll_options.is_empty() {
-            body["poll"] = serde_json::json!({
-                "options": opts.poll_options.iter().map(|o| serde_json::json!({"label": o})).collect::<Vec<_>>(),
-                "duration_minutes": opts.poll_duration_minutes.unwrap_or(1440),
-            });
-        }
-
-        if let Some(ref scheduled_at) = opts.scheduled_at {
-            body["scheduled_at"] = serde_json::json!(scheduled_at);
-        }
+        let body = build_tweet_body(opts);
 
         let tweet_url = format!("{}/tweets", X_API_BASE);
         let resp = self
@@ -741,97 +795,158 @@ impl XAdapter {
         mime_type: &str,
         alt_text: Option<&str>,
     ) -> Result<String> {
-        // Step 1: INIT — v2 chunked upload (POST /2/media/upload).
-        // The legacy v1.1 upload.twitter.com endpoint was deprecated alongside
-        // v1.1 statuses/update; v2 keeps the INIT/APPEND/FINALIZE command flow.
-        let upload_url = format!("{}/media/upload", X_API_BASE);
-        let init_resp = self
-            .client
-            .post(&upload_url)
-            .header("Authorization", self.write_auth_header("POST", &upload_url))
-            .form(&[
-                ("command", "INIT"),
-                ("total_bytes", &data.len().to_string()),
-                ("media_type", mime_type),
-            ])
-            .send()
-            .await
-            .map_err(|e| Error::Channel(format!("X media upload INIT error: {}", e)))?;
+        // X API v2 media upload — contract verified against X's own OpenAPI
+        // spec (api.x.com/2/openapi.json). The command=INIT/APPEND/FINALIZE
+        // flow from X's sample code no longer exists: POST /2/media/upload
+        // accepts NO query parameters ("query parameter [x] is not one of []").
+        //   images/subtitles → ONE-SHOT multipart POST /2/media/upload
+        //     (parts: media, media_category, media_type)
+        //   video + gif → chunked: POST /2/media/upload/initialize (JSON body)
+        //     → POST /2/media/upload/{id}/append (multipart media+segment_index)
+        //     → POST /2/media/upload/{id}/finalize (empty body)
+        // Multipart and JSON bodies contribute nothing to the OAuth 1.0a
+        // signature base string (RFC 5849 §3.4.1.3) — plain auth header,
+        // the same proven path `post_tweet` uses.
+        let media_category = if mime_type.starts_with("video/") {
+            "tweet_video"
+        } else if mime_type == "image/gif" {
+            "tweet_gif"
+        } else {
+            "tweet_image"
+        };
 
-        if !init_resp.status().is_success() {
-            let text = init_resp.text().await.unwrap_or_else(|_| "unknown".into());
-            return Err(Error::Channel(format!("X media INIT failed: {}", text)));
-        }
-
-        let init_data: serde_json::Value = init_resp
-            .json()
-            .await
-            .map_err(|e| Error::Channel(format!("X media INIT parse: {}", e)))?;
-
-        // v2 wraps the payload in `data` and names the field `id`;
-        // fall back to the legacy `media_id_string` shape defensively.
-        let media_id = init_data["data"]["id"]
-            .as_str()
-            .or_else(|| init_data["media_id_string"].as_str())
-            .ok_or_else(|| Error::Channel("X media: no media id in INIT response".into()))?
-            .to_string();
-
-        // Step 2: APPEND (chunked for large files)
-        let chunk_size = 5 * 1024 * 1024; // 5MB chunks
-        for (i, chunk) in data.chunks(chunk_size).enumerate() {
-            let part = reqwest::multipart::Part::bytes(chunk.to_vec())
+        let media_id = if mime_type.starts_with("image/") && mime_type != "image/gif" {
+            // ONE-SHOT (static images): a single multipart request.
+            let upload_url = format!("{}/media/upload", self.api_base);
+            let part = reqwest::multipart::Part::bytes(data.to_vec())
                 .file_name("media")
                 .mime_str(mime_type)
                 .map_err(|e| Error::Channel(format!("MIME error: {}", e)))?;
-
             let form = reqwest::multipart::Form::new()
-                .text("command", "APPEND")
-                .text("media_id", media_id.clone())
-                .text("segment_index", i.to_string())
-                .part("media_data", part);
-
-            let append_resp = self
+                .text("media_category", media_category)
+                .text("media_type", mime_type.to_string())
+                .part("media", part);
+            let resp = self
                 .client
                 .post(&upload_url)
                 .header("Authorization", self.write_auth_header("POST", &upload_url))
                 .multipart(form)
                 .send()
                 .await
-                .map_err(|e| Error::Channel(format!("X media APPEND error: {}", e)))?;
+                .map_err(|e| Error::Channel(format!("X media upload error: {}", e)))?;
 
-            if !append_resp.status().is_success() {
-                let text = append_resp
+            if !resp.status().is_success() {
+                let text = resp.text().await.unwrap_or_else(|_| "unknown".into());
+                return Err(Error::Channel(format!("X media upload failed: {}", text)));
+            }
+
+            let body: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| Error::Channel(format!("X media upload parse: {}", e)))?;
+
+            // v2 wraps the payload in `data` and names the field `id`;
+            // fall back to the legacy `media_id_string` shape defensively.
+            body["data"]["id"]
+                .as_str()
+                .or_else(|| body["media_id_string"].as_str())
+                .ok_or_else(|| {
+                    Error::Channel("X media: no media id in upload response".into())
+                })?
+                .to_string()
+        } else {
+            // CHUNKED (video/gif): initialize → append(s) → finalize.
+            let init_url = format!("{}/media/upload/initialize", self.api_base);
+            let init_resp = self
+                .client
+                .post(&init_url)
+                .header("Authorization", self.write_auth_header("POST", &init_url))
+                .json(&serde_json::json!({
+                    "media_type": mime_type,
+                    "total_bytes": data.len(),
+                    "media_category": media_category,
+                }))
+                .send()
+                .await
+                .map_err(|e| Error::Channel(format!("X media INIT error: {}", e)))?;
+
+            if !init_resp.status().is_success() {
+                let text = init_resp.text().await.unwrap_or_else(|_| "unknown".into());
+                return Err(Error::Channel(format!("X media INIT failed: {}", text)));
+            }
+
+            let init_data: serde_json::Value = init_resp
+                .json()
+                .await
+                .map_err(|e| Error::Channel(format!("X media INIT parse: {}", e)))?;
+
+            let media_id = init_data["data"]["id"]
+                .as_str()
+                .or_else(|| init_data["media_id_string"].as_str())
+                .ok_or_else(|| {
+                    Error::Channel("X media: no media id in INIT response".into())
+                })?
+                .to_string();
+
+            // Segments capped well under X's per-APPEND limit.
+            let chunk_size = 4 * 1024 * 1024;
+            for (i, chunk) in data.chunks(chunk_size).enumerate() {
+                let append_url = format!("{}/media/upload/{}/append", self.api_base, media_id);
+                let part = reqwest::multipart::Part::bytes(chunk.to_vec())
+                    .file_name("media")
+                    .mime_str("application/octet-stream")
+                    .map_err(|e| Error::Channel(format!("MIME error: {}", e)))?;
+                let form = reqwest::multipart::Form::new()
+                    .text("segment_index", i.to_string())
+                    .part("media", part);
+
+                let append_resp = self
+                    .client
+                    .post(&append_url)
+                    .header("Authorization", self.write_auth_header("POST", &append_url))
+                    .multipart(form)
+                    .send()
+                    .await
+                    .map_err(|e| Error::Channel(format!("X media APPEND error: {}", e)))?;
+
+                if !append_resp.status().is_success() {
+                    let text = append_resp
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "unknown".into());
+                    return Err(Error::Channel(format!(
+                        "X media APPEND chunk {} failed: {}",
+                        i, text
+                    )));
+                }
+            }
+
+            let finalize_url = format!("{}/media/upload/{}/finalize", self.api_base, media_id);
+            let finalize_resp = self
+                .client
+                .post(&finalize_url)
+                .header(
+                    "Authorization",
+                    self.write_auth_header("POST", &finalize_url),
+                )
+                .send()
+                .await
+                .map_err(|e| Error::Channel(format!("X media FINALIZE error: {}", e)))?;
+
+            if !finalize_resp.status().is_success() {
+                let text = finalize_resp
                     .text()
                     .await
                     .unwrap_or_else(|_| "unknown".into());
-                return Err(Error::Channel(format!(
-                    "X media APPEND chunk {} failed: {}",
-                    i, text
-                )));
+                return Err(Error::Channel(format!("X media FINALIZE failed: {}", text)));
             }
-        }
 
-        // Step 3: FINALIZE
-        let finalize_resp = self
-            .client
-            .post(&upload_url)
-            .header("Authorization", self.write_auth_header("POST", &upload_url))
-            .form(&[("command", "FINALIZE"), ("media_id", &media_id)])
-            .send()
-            .await
-            .map_err(|e| Error::Channel(format!("X media FINALIZE error: {}", e)))?;
-
-        if !finalize_resp.status().is_success() {
-            let text = finalize_resp
-                .text()
-                .await
-                .unwrap_or_else(|_| "unknown".into());
-            return Err(Error::Channel(format!("X media FINALIZE failed: {}", text)));
-        }
+            media_id
+        };
 
         // Step 4: Set alt text if provided (v2 metadata endpoint)
         if let Some(alt) = alt_text {
-            let meta_url = format!("{}/media/metadata", X_API_BASE);
+            let meta_url = format!("{}/media/metadata", self.api_base);
             let _ = self
                 .client
                 .post(&meta_url)
@@ -2571,24 +2686,7 @@ impl ChannelAdapter for XAdapter {
             return Err(Error::channel("Invalid channel source for X"));
         }
 
-        let mime_type = match std::path::Path::new(filename)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
-            .as_deref()
-        {
-            Some("png") => "image/png",
-            Some("jpg") | Some("jpeg") => "image/jpeg",
-            Some("gif") => "image/gif",
-            Some("webp") => "image/webp",
-            Some("mp4") => "video/mp4",
-            other => {
-                return Err(Error::channel(format!(
-                    "Unsupported media type for X: {:?} (png/jpg/gif/webp/mp4 only)",
-                    other
-                )));
-            }
-        };
+        let mime_type = mime_from_filename(filename)?;
 
         let media_id = self.upload_media(data, mime_type, None).await?;
 
@@ -2599,6 +2697,55 @@ impl ChannelAdapter for XAdapter {
             ..Default::default()
         };
 
+        self.post_tweet(&opts).await?;
+        Ok(())
+    }
+
+    /// Attach one or more media items to a single tweet.
+    ///
+    /// Each file is uploaded (v2 chunked INIT/APPEND/FINALIZE) to obtain a
+    /// media ID, then all IDs are attached to one `create_tweet` call. This is
+    /// what powers illustrated posts/threads from the agent `x_twitter` and
+    /// `message` tools — text-only `send` cannot carry media. Any upload or
+    /// post error propagates verbatim (never a silent partial success).
+    async fn send_media(
+        &self,
+        to: &ChannelSource,
+        files: &[MediaFile],
+        caption: Option<&str>,
+        alt_text: Option<&str>,
+    ) -> Result<()> {
+        if to.channel_type() != "x_twitter" {
+            return Err(Error::channel("Invalid channel source for X"));
+        }
+        if files.is_empty() {
+            return Err(Error::channel("send_media requires at least one file"));
+        }
+        if files.len() > 4 {
+            return Err(Error::channel(format!(
+                "X supports at most 4 media items per tweet, got {}",
+                files.len()
+            )));
+        }
+
+        let mut media_ids = Vec::with_capacity(files.len());
+        for (filename, data, mime_type) in files {
+            // Trust the caller-supplied MIME type when present, else infer.
+            let mime = if mime_type.is_empty() {
+                mime_from_filename(filename)?
+            } else {
+                mime_type.as_str()
+            };
+            let id = self.upload_media(data, mime, alt_text).await?;
+            media_ids.push(id);
+        }
+
+        let opts = CreateTweetOptions {
+            text: caption.unwrap_or("").to_string(),
+            reply_to: to.reply_to_message_id.clone(),
+            media_ids,
+            ..Default::default()
+        };
         self.post_tweet(&opts).await?;
         Ok(())
     }
@@ -2948,6 +3095,103 @@ mod tests {
     }
 
     #[test]
+    fn test_build_tweet_body_media_ids_flow() {
+        // #420: media_ids must reach the create_tweet request body under
+        // `media.media_ids`, alongside text — this is the wire contract that
+        // makes an illustrated tweet actually carry its images.
+        let opts = CreateTweetOptions {
+            text: "illustrated tweet".to_string(),
+            media_ids: vec!["111".to_string(), "222".to_string()],
+            ..Default::default()
+        };
+        let body = build_tweet_body(&opts);
+        assert_eq!(body["text"], "illustrated tweet");
+        assert_eq!(body["media"]["media_ids"][0], "111");
+        assert_eq!(body["media"]["media_ids"][1], "222");
+    }
+
+    #[test]
+    fn test_build_tweet_body_media_and_reply_together() {
+        // #420: illustrated threads need media_ids + reply_to in the SAME body
+        // (a reply tweet that also carries an image).
+        let opts = CreateTweetOptions {
+            text: "reply with image".to_string(),
+            reply_to: Some("999".to_string()),
+            media_ids: vec!["abc".to_string()],
+            ..Default::default()
+        };
+        let body = build_tweet_body(&opts);
+        assert_eq!(body["reply"]["in_reply_to_tweet_id"], "999");
+        assert_eq!(body["media"]["media_ids"][0], "abc");
+    }
+
+    #[test]
+    fn test_build_tweet_body_no_media_omits_key() {
+        // Text-only tweets must NOT carry a media key (keeps text path clean).
+        let opts = CreateTweetOptions {
+            text: "plain".to_string(),
+            ..Default::default()
+        };
+        let body = build_tweet_body(&opts);
+        assert!(body.get("media").is_none());
+    }
+
+    #[test]
+    fn test_mime_from_filename() {
+        assert_eq!(mime_from_filename("a.png").unwrap(), "image/png");
+        assert_eq!(mime_from_filename("b.JPG").unwrap(), "image/jpeg");
+        assert_eq!(mime_from_filename("c.jpeg").unwrap(), "image/jpeg");
+        assert_eq!(mime_from_filename("d.gif").unwrap(), "image/gif");
+        assert_eq!(mime_from_filename("e.webp").unwrap(), "image/webp");
+        assert_eq!(mime_from_filename("f.mp4").unwrap(), "video/mp4");
+        assert!(mime_from_filename("g.txt").is_err());
+        assert!(mime_from_filename("noext").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_send_media_rejects_wrong_channel() {
+        let config = XConfig {
+            bearer_token: "test-bearer".to_string(),
+            ..Default::default()
+        };
+        let adapter = XAdapter::new(config).await.unwrap();
+        let src = ChannelSource::new("discord", "agent");
+        let files = vec![("a.png".to_string(), vec![0u8; 4], "image/png".to_string())];
+        let err = adapter
+            .send_media(&src, &files, Some("hi"), None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Invalid channel source"));
+    }
+
+    #[tokio::test]
+    async fn test_send_media_rejects_empty_and_too_many() {
+        let config = XConfig {
+            bearer_token: "test-bearer".to_string(),
+            ..Default::default()
+        };
+        let adapter = XAdapter::new(config).await.unwrap();
+        let src = ChannelSource::new("x_twitter", "agent");
+
+        // empty
+        let err = adapter
+            .send_media(&src, &[], Some("hi"), None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("at least one file"));
+
+        // >4
+        let files: Vec<MediaFile> = (0..5)
+            .map(|i| (format!("{i}.png"), vec![0u8; 4], "image/png".to_string()))
+            .collect();
+        let err = adapter
+            .send_media(&src, &files, Some("hi"), None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("at most 4"));
+    }
+
+    #[test]
     fn test_thread_options() {
         let thread = ThreadOptions {
             tweets: vec![
@@ -3169,6 +3413,226 @@ mod tests {
             oauth2_access_token: "test-oauth2-token".to_string(),
             ..Default::default()
         }
+    }
+
+    fn test_x_config_oauth1() -> XConfig {
+        XConfig {
+            api_key: "test-consumer-key".to_string(),
+            api_secret: "test-consumer-secret".to_string(),
+            access_token: "test-access-token".to_string(),
+            access_token_secret: "test-access-secret".to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Recompute the OAuth 1.0a HMAC-SHA1 signature the way `oauth1_header`
+    /// builds it — from the `oauth_*` params in a captured Authorization
+    /// header plus the given body params — and assert it matches the
+    /// signature the adapter actually sent. Proves the form body params were
+    /// part of the signature base string (RFC 5849 §3.4.1.3).
+    fn assert_oauth1_signature_covers_params(
+        auth_header: &str,
+        method: &str,
+        url: &str,
+        body_params: &[(&str, &str)],
+        consumer_secret: &str,
+        token_secret: &str,
+    ) {
+        let mut params: Vec<(String, String)> = Vec::new();
+        let mut captured_signature = String::new();
+        for piece in auth_header.trim_start_matches("OAuth ").split(", ") {
+            let (k, v) = piece.split_once('=').expect("header piece must be k=v");
+            let v = urlencoding::decode(v.trim_matches('"'))
+                .expect("header value must urldecode")
+                .into_owned();
+            if k == "oauth_signature" {
+                captured_signature = v;
+            } else {
+                params.push((k.to_string(), v));
+            }
+        }
+        assert!(
+            !captured_signature.is_empty(),
+            "no oauth_signature in header: {auth_header}"
+        );
+        for (k, v) in body_params {
+            params.push((k.to_string(), v.to_string()));
+        }
+        params.sort_by(|a, b| a.0.cmp(&b.0));
+        let param_string = params
+            .iter()
+            .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
+            .collect::<Vec<_>>()
+            .join("&");
+        let base_string = format!(
+            "{}&{}&{}",
+            urlencoding::encode(method),
+            urlencoding::encode(url),
+            urlencoding::encode(&param_string),
+        );
+        let signing_key = format!(
+            "{}&{}",
+            urlencoding::encode(consumer_secret),
+            urlencoding::encode(token_secret),
+        );
+        let mut mac = HmacSha1::new_from_slice(signing_key.as_bytes()).expect("hmac key");
+        mac.update(base_string.as_bytes());
+        let expected =
+            base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
+        assert_eq!(
+            expected, captured_signature,
+            "OAuth1 signature must cover the form body params"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_media_upload_oneshot_image_multipart_no_query() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/media/upload"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "id": "777" }
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_oauth1(), server.uri())
+            .await
+            .unwrap();
+        let media_id = adapter
+            .upload_media(b"png-bytes", "image/png", None)
+            .await
+            .unwrap();
+        assert_eq!(media_id, "777");
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(
+            requests.len(),
+            1,
+            "one-shot image upload must be a single request"
+        );
+        let req = &requests[0];
+        // Spec contract: POST /2/media/upload accepts NO query parameters
+        // ("query parameter [x] is not one of []").
+        assert!(
+            req.url.query().unwrap_or("").is_empty(),
+            "no query params allowed on one-shot upload, got: {:?}",
+            req.url.query()
+        );
+        let auth = req
+            .headers
+            .get("authorization")
+            .expect("Authorization header present")
+            .to_str()
+            .unwrap();
+        assert!(auth.starts_with("OAuth "), "OAuth1-signed, got: {auth}");
+        let content_type = req
+            .headers
+            .get("content-type")
+            .expect("content-type present")
+            .to_str()
+            .unwrap();
+        assert!(
+            content_type.starts_with("multipart/form-data"),
+            "multipart body required, got: {content_type}"
+        );
+        let body = String::from_utf8_lossy(&req.body);
+        assert!(
+            body.contains("name=\"media_category\""),
+            "media_category part present"
+        );
+        assert!(body.contains("tweet_image"));
+        assert!(body.contains("name=\"media\""), "media part present");
+    }
+
+    #[tokio::test]
+    async fn test_media_upload_chunked_video_initialize_append_finalize() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/media/upload/initialize"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "id": "888" }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/media/upload/888/append"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/media/upload/888/finalize"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "id": "888" }
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = XAdapter::new_with_base_url(test_x_config_oauth1(), server.uri())
+            .await
+            .unwrap();
+        let media_id = adapter
+            .upload_media(b"vid-bytes", "video/mp4", None)
+            .await
+            .unwrap();
+        assert_eq!(media_id, "888");
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 3, "initialize + append + finalize");
+        let init = &requests[0];
+        assert!(init.url.path().ends_with("/media/upload/initialize"));
+        let init_body: serde_json::Value = serde_json::from_slice(&init.body).unwrap();
+        assert_eq!(init_body["media_type"], "video/mp4");
+        assert_eq!(init_body["total_bytes"], 9);
+        assert_eq!(init_body["media_category"], "tweet_video");
+        let append_body = String::from_utf8_lossy(&requests[1].body);
+        assert!(append_body.contains("name=\"segment_index\""));
+        assert!(append_body.contains("name=\"media\""));
+        for req in &requests {
+            let auth = req
+                .headers
+                .get("authorization")
+                .expect("Authorization header present")
+                .to_str()
+                .unwrap();
+            assert!(auth.starts_with("OAuth "), "OAuth1-signed, got: {auth}");
+            assert!(
+                req.url.query().unwrap_or("").is_empty(),
+                "no query params on any chunked media call"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_oauth1_form_param_signing_helper_covers_extra_params() {
+        // `write_auth_header_with_params` must fold extra params into the
+        // OAuth 1.0a signature base string (RFC 5849 §3.4.1.3). Media upload
+        // no longer sends form/query params, but the helper stays for any
+        // future form-urlencoded X endpoint — keep its contract pinned.
+        let adapter = XAdapter::new_with_base_url(
+            test_x_config_oauth1(),
+            "https://api.x.com/2".to_string(),
+        )
+        .await
+        .unwrap();
+        let url = "https://api.x.com/2/example";
+        let params = [("alpha", "1"), ("beta", "two words")];
+        let auth = adapter.write_auth_header_with_params("POST", url, &params);
+        assert!(auth.starts_with("OAuth "), "OAuth1-signed, got: {auth}");
+        assert_oauth1_signature_covers_params(
+            &auth,
+            "POST",
+            url,
+            &params,
+            "test-consumer-secret",
+            "test-access-secret",
+        );
     }
 
     #[tokio::test]

@@ -29,7 +29,7 @@ pub struct ProviderInfo {
     pub featured: bool,
 }
 
-/// The canonical 13. Order = display order on the Provider 3-col grid.
+/// The canonical 16. Order = display order on the Provider 3-col grid.
 pub const PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
         id: "anthropic",
@@ -98,6 +98,17 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         featured: false,
     },
     ProviderInfo {
+        id: "kimi-code",
+        name: "Kimi Code",
+        glyph: "K3",
+        color: theme::PURPLE,
+        sub: "Kimi subscription — K3 + coding",
+        flagship: "k3",
+        price: "Subscription",
+        key_fmt: "sk-...",
+        featured: false,
+    },
+    ProviderInfo {
         id: "glm",
         name: "GLM",
         glyph: "GLM",
@@ -105,6 +116,17 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         sub: "Zhipu — strong code + reasoning",
         flagship: "glm-5.2",
         price: "$0.60/$2.20 per Mtok",
+        key_fmt: "...",
+        featured: false,
+    },
+    ProviderInfo {
+        id: "glm-coding",
+        name: "GLM Coding",
+        glyph: "GLC",
+        color: theme::TEAL,
+        sub: "GLM Coding subscription — flat-rate",
+        flagship: "glm-5.2",
+        price: "Subscription",
         key_fmt: "...",
         featured: false,
     },
@@ -128,6 +150,17 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         flagship: "MiniMax-M3",
         price: "$0.20/$0.80 per Mtok",
         // MiniMax: keys start with `sk-api-` prefix.
+        key_fmt: "sk-api-...",
+        featured: false,
+    },
+    ProviderInfo {
+        id: "minimax-coding",
+        name: "MiniMax Coding",
+        glyph: "MNC",
+        color: theme::AMBER,
+        sub: "MiniMax subscription — Token Plan",
+        flagship: "MiniMax-M3",
+        price: "Subscription",
         key_fmt: "sk-api-...",
         featured: false,
     },

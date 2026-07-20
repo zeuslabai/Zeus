@@ -82,6 +82,22 @@ pub async fn run_with_force_and_gateway(
         let mut a = app.lock().unwrap_or_else(|e| e.into_inner());
         a.onboarding_complete = false;
     }
+
+    // Resume-on-reopen: the gateway already persists the fixed TUI chat session.
+    // Mirror it into the visible chat pane once at startup so reopening the TUI
+    // shows the same transcript instead of an empty composer.
+    {
+        let app = app.clone();
+        let client = api::ApiClient::new(&gateway_url);
+        tokio::spawn(async move {
+            if let Ok(messages) = client.session_messages(api::TUI_CHAT_SESSION_ID).await {
+                if let Ok(mut a) = app.lock() {
+                    a.hydrate_chat_history_if_empty(messages);
+                }
+            }
+        });
+    }
+
     // AWAKEN-B signal: snapshot the onboarding flag at launch. If it flips
     // false→true during this run, onboarding just completed and the parent
     // must launch the gateway. An already-onboarded install starts true here.

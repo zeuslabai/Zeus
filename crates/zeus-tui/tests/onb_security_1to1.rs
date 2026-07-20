@@ -2,7 +2,7 @@
 //!
 //! Covers the zeus106 fidelity cut on `fix/tui-1to1-security`:
 //!   • header "Aegis security level" + sub,
-//!   • 4-col grid of level cards (Strict/Standard/Permissive/Custom) sharing one row,
+//!   • 5-col grid of level cards (None/Basic/Standard/Strict/Paranoid) sharing one row,
 //!   • glyph badge (filled), name, italic sub,
 //!   • BLOCKED list: red label + `✕ {item}` (first 3 only),
 //!   • badge precedence: ▸ SELECTED on the selected card, ★ REC on the
@@ -98,15 +98,17 @@ fn security_four_col_grid_names_share_row() {
     let mut app = App::new();
     goto_security(&mut app);
     let s = render(&mut app);
-    // All four cards render their name; in a single horizontal row they should
+    // All five cards render their name; in a single horizontal row they should
     // land on the same buffer line.
-    let r_strict = row_of(&s, "Strict").expect("Strict missing");
+    let r_none = row_of(&s, "None").expect("None missing");
+    let r_basic = row_of(&s, "Basic").expect("Basic missing");
     let r_std = row_of(&s, "Standard").expect("Standard missing");
-    let r_perm = row_of(&s, "Permissive").expect("Permissive missing");
-    let r_cust = row_of(&s, "Custom").expect("Custom missing");
-    assert_eq!(r_strict, r_std, "Strict/Standard not on same row\n{s}");
-    assert_eq!(r_std, r_perm, "Standard/Permissive not on same row\n{s}");
-    assert_eq!(r_perm, r_cust, "Permissive/Custom not on same row\n{s}");
+    let r_strict = row_of(&s, "Strict").expect("Strict missing");
+    let r_par = row_of(&s, "Paranoid").expect("Paranoid missing");
+    assert_eq!(r_none, r_basic, "None/Basic not on same row\n{s}");
+    assert_eq!(r_basic, r_std, "Basic/Standard not on same row\n{s}");
+    assert_eq!(r_std, r_strict, "Standard/Strict not on same row\n{s}");
+    assert_eq!(r_strict, r_par, "Strict/Paranoid not on same row\n{s}");
 }
 
 #[test]
@@ -114,7 +116,7 @@ fn security_glyph_badges_present() {
     let mut app = App::new();
     goto_security(&mut app);
     let s = render(&mut app);
-    for g in ["STR", "STD", "PRM", "CST"] {
+    for g in ["NON", "BSC", "STD", "STR", "PAR"] {
         assert!(s.contains(g), "missing glyph badge {g}\n{s}");
     }
 }
@@ -135,8 +137,8 @@ fn security_blocked_list_uses_cross_glyph() {
 
 #[test]
 fn security_blocked_slices_first_three() {
-    // Strict has 4 blocked items in the const; only the first 3 may render.
-    // The 4th ("fs_write outside workspace") must NOT appear on a card.
+    // Paranoid has 4 blocked items in the const; only the first 3 may render.
+    // The 4th ("fs_write anywhere") must NOT appear on any card.
     let mut app = App::new();
     goto_security(&mut app);
     let s = render(&mut app);
@@ -145,10 +147,9 @@ fn security_blocked_slices_first_three() {
         s.contains("shell") || s.contains("✕"),
         "blocked items not rendered\n{s}"
     );
-    // 4th strict item is long + distinctive; with first-3 slice it shouldn't show.
-    // (Standard's "fs_write outside workspace + home" is a different string.)
+    // Paranoid's 4th blocked item is distinctive; with first-3 slice it shouldn't show.
     assert!(
-        !s.contains("apply_patch") || s.matches("apply_patch").count() <= 1,
+        !s.contains("fs_write anywhere"),
         "blocked list appears to exceed first-3 slice\n{s}"
     );
 }
@@ -214,7 +215,7 @@ fn security_left_right_move_selection_not_step() {
     goto_security(&mut app);
     let start_step = app.current_step;
 
-    // Right → selection advances (Standard→Permissive), step unchanged.
+    // Right → selection advances (Standard→Strict), step unchanged.
     app.handle_key(KeyCode::Right);
     assert_eq!(
         app.current_step, start_step,
@@ -222,11 +223,11 @@ fn security_left_right_move_selection_not_step() {
     );
     let s = render(&mut app);
     assert!(
-        s.contains("SELECTED: PERMISSIVE"),
+        s.contains("SELECTED: STRICT"),
         "Right did not move selection\n{s}"
     );
 
-    // Left twice → back to Strict, still same step.
+    // Left twice → back to Basic, still same step.
     app.handle_key(KeyCode::Left);
     app.handle_key(KeyCode::Left);
     assert_eq!(
@@ -235,14 +236,14 @@ fn security_left_right_move_selection_not_step() {
     );
     let s2 = render(&mut app);
     assert!(
-        s2.contains("SELECTED: STRICT"),
+        s2.contains("SELECTED: BASIC"),
         "Left did not move selection\n{s2}"
     );
 }
 
 #[test]
 fn security_left_clamps_at_first_card() {
-    // Hammer Left past the first card — must clamp at Strict (index 0), no wrap.
+    // Hammer Left past the first card — must clamp at None (index 0), no wrap.
     let mut app = App::new();
     goto_security(&mut app);
     for _ in 0..6 {
@@ -250,7 +251,7 @@ fn security_left_clamps_at_first_card() {
     }
     let s = render(&mut app);
     assert!(
-        s.contains("SELECTED: STRICT"),
+        s.contains("SELECTED: NONE"),
         "Left did not clamp at first card\n{s}"
     );
 }

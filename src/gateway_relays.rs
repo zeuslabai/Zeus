@@ -589,13 +589,15 @@ pub async fn start_x_relay(
         return;
     };
 
-    // Minimum viable credentials: bearer token OR full OAuth 1.0a set.
+    // Minimum viable credentials: OAuth 2.0 user-context token, app bearer,
+    // or full OAuth 1.0a set.
+    let has_oauth2 = !xt.oauth2_access_token.is_empty();
     let has_bearer = !xt.bearer_token.is_empty();
     let has_oauth1 = !xt.consumer_key.is_empty()
         && !xt.consumer_key_secret.is_empty()
         && !xt.access_token.is_empty()
         && !xt.access_token_secret.is_empty();
-    if !has_bearer && !has_oauth1 {
+    if !has_oauth2 && !has_bearer && !has_oauth1 {
         info!("X relay: not configured (no credentials) — skipping");
         return;
     }
@@ -608,9 +610,9 @@ pub async fn start_x_relay(
         access_token_secret: xt.access_token_secret.clone(),
         client_id: xt.client_id.clone(),
         client_secret: xt.client_secret.clone(),
-        oauth2_access_token: String::new(),
-        oauth2_refresh_token: String::new(),
-        oauth2_expires_at: 0,
+        oauth2_access_token: xt.oauth2_access_token.clone(),
+        oauth2_refresh_token: xt.oauth2_refresh_token.clone(),
+        oauth2_expires_at: xt.oauth2_expires_at,
         user_id: None,
         poll_interval_secs: xt.poll_interval_secs,
         auto_reply: xt.auto_reply,

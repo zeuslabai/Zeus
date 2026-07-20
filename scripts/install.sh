@@ -863,7 +863,7 @@ if $DO_BUILD; then
                 printf "  ${CS}└─────────────────────────────────────────────────┘${N}\n"
                 printf "\n"
             else
-                warn "WebUI build failed (non-fatal)"
+                fail "WebUI build failed (--with-webui was requested)"
             fi
             cd "$REPO_ROOT"
         fi
@@ -1849,8 +1849,15 @@ if $DO_LAUNCH; then
 fi
 
 if $DO_LAUNCH; then
-    # Stop existing gateway (PID file + process scan)
+    # Stop the managing supervisor first so rc.d/launchd/systemd cannot
+    # respawn an old gateway while the fresh-install launch block starts
+    # a new one. Mirrors the --update duplicate-gateway fix.
     GATEWAY_WAS_RUNNING=false
+    case "$OS" in
+        Darwin)  sudo launchctl bootout system /Library/LaunchDaemons/com.zeus.gateway.plist 2>/dev/null || true ;;
+        FreeBSD) sudo service zeus_gateway stop 2>/dev/null || true ;;
+        Linux)   systemctl --user stop zeus-gateway 2>/dev/null || sudo systemctl stop zeus-gateway 2>/dev/null || true ;;
+    esac
 
     if [ -f "$ZEUS_HOME/gateway.pid" ]; then
         OLD_PID=$(cat "$ZEUS_HOME/gateway.pid" 2>/dev/null || echo "")
@@ -1862,18 +1869,29 @@ if $DO_LAUNCH; then
         rm -f "$ZEUS_HOME/gateway.pid"
     fi
 
-    RUNNING_PIDS=$(pgrep -f 'zeus gateway' 2>/dev/null || true)
-    if [ -n "$RUNNING_PIDS" ]; then
-        echo "$RUNNING_PIDS" | while read -r pid; do
-            kill "$pid" 2>/dev/null && GATEWAY_WAS_RUNNING=true
-        done
+    if pkill -f 'zeus gateway' 2>/dev/null; then
+        GATEWAY_WAS_RUNNING=true
     fi
+    pkill -f 'zeus serve' 2>/dev/null || true
+    pkill -f 'zeus daemon' 2>/dev/null || true
 
-    # Always sleep after killing — KeepAlive=true daemons (macOS launchd)
-    # respawn immediately, so the old binary may still be settling even if
-    # GATEWAY_WAS_RUNNING is false (PID file was stale/missing).
-    sleep 2
-    $GATEWAY_WAS_RUNNING && ok "Old gateway stopped — restarting" || info "Cleared stale gateway state"
+    WAIT_I=0
+    while pgrep -f 'zeus gateway' >/dev/null 2>&1; do
+        WAIT_I=$((WAIT_I + 1))
+        if [ $WAIT_I -ge 30 ]; then
+            warn "Gateway still running after 30s — escalating to SIGKILL"
+            pkill -9 -f 'zeus gateway' 2>/dev/null || true
+            sleep 1
+            break
+        fi
+        sleep 1
+    done
+    pgrep -f 'zeus gateway' >/dev/null 2>&1 && fail "Gateway refuses to exit — cannot start gateway cleanly"
+    if $GATEWAY_WAS_RUNNING; then
+        ok "Old gateway stopped — restarting"
+    else
+        info "Cleared stale gateway state"
+    fi
 
     case "$OS" in
         Darwin)
@@ -1908,14 +1926,15 @@ if $DO_LAUNCH; then
                 sudo sysrc zeus_gateway_user="$(id -un)" 2>/dev/null || true
                 sudo sysrc zeus_gateway_home="$HOME" 2>/dev/null || true
                 # #311 launch UX: capture the service's actual error output —
-                # a silent `2>/dev/null` here is why failed launches ended
-                # with no explanation and no URL.
-                SVC_OUT=$(sudo service zeus_gateway restart 2>&1) && SVC_OK=true || SVC_OK=false
-                if $SVC_OK; then
+                # but do NOT use $(...). The rc.d script spawns the gateway via
+                # /usr/sbin/daemon, which inherits the pipe write fd; command
+                # substitution then waits for EOF until the gateway exits (#365).
+                restart_log=$(mktemp -t zeus_restart) || restart_log="/tmp/zeus_restart.$$"
+                if sudo service zeus_gateway restart >"$restart_log" 2>&1; then
                     ok "Gateway via rc.d (zeus_gateway)"
                 else
                     warn "rc.d launch failed:"
-                    printf '%s\n' "$SVC_OUT" | tail -5 | sed 's/^/      /'
+                    tail -5 "$restart_log" 2>/dev/null | sed 's/^/      /' || true
                     [ -f /var/log/zeus_gateway.log ] && {
                         info "Service log tail (/var/log/zeus_gateway.log):"
                         tail -5 /var/log/zeus_gateway.log 2>/dev/null | sed 's/^/      /' || true
@@ -1925,6 +1944,7 @@ if $DO_LAUNCH; then
                     nohup zeus gateway >> "$ZEUS_HOME/logs/gateway.log" 2>> "$ZEUS_HOME/logs/error.log" &
                     ok "Gateway via nohup"
                 fi
+                rm -f "$restart_log"
             else
                 mkdir -p "$ZEUS_HOME/logs"
                 nohup zeus gateway >> "$ZEUS_HOME/logs/gateway.log" 2>> "$ZEUS_HOME/logs/error.log" &

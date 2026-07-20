@@ -211,7 +211,7 @@ pub async fn poll_minimax_token(
         let text = resp.text().await.unwrap_or_default();
         let payload: MinimaxTokenResponse = match serde_json::from_str(&text) {
             Ok(p) => p,
-            Err(_) => { warn!("MiniMax token poll: unparseable response: {}", &text[..text.len().min(200)]); continue; }
+            Err(_) => { let end = zeus_core::floor_char_boundary(&text, 200); warn!("MiniMax token poll: unparseable response: {}", &text[..end]); continue; }
         };
 
         match payload.status.as_str() {
@@ -269,7 +269,7 @@ pub async fn refresh_minimax_token(
 
     let text = resp.text().await.unwrap_or_default();
     let payload: MinimaxTokenResponse = serde_json::from_str(&text)
-        .map_err(|e| anyhow::anyhow!("MiniMax refresh: bad response: {} — {}", e, &text[..text.len().min(200)]))?;
+        .map_err(|e| { let end = zeus_core::floor_char_boundary(&text, 200); anyhow::anyhow!("MiniMax refresh: bad response: {} — {}", e, &text[..end]) })?;
 
     match payload.status.as_str() {
         "success" => {

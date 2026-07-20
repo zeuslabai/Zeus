@@ -313,6 +313,15 @@ async fn run_with_repair(tx: mpsc::Sender<ProgressEvent>, repair: bool) -> Resul
         check(&tx, "Telegram config", ok, detail).await;
     }
 
+    // 20. Deploy-on-merge (#390/#431): is the poll timer enabled, and what SHA
+    // did it last deploy? A disabled timer here is not necessarily an error —
+    // this check reports state, it does not fail doctor — but it is exactly
+    // the signal that would have caught the empty deploy.db regression early.
+    {
+        let (enabled, detail) = check_deploy_on_merge(&platform, &zeus_dir).await;
+        check(&tx, "Deploy-on-merge", enabled, detail).await;
+    }
+
     // === Repair pass ===
     if repair {
         let outcomes = perform_repairs_sync(&workspace, &sessions, &config_path, &zeus_dir);
@@ -697,6 +706,68 @@ fn quick_hash(data: &[u8]) -> u64 {
     hasher.finish()
 }
 
+/// Check whether the #390/#431 deploy-on-merge poll timer is installed and
+/// enabled on this seat, and report the last-deployed SHA if any.
+///
+/// This intentionally shells out to the platform's own service manager
+/// (launchctl/systemctl --user/service) rather than re-implementing enable
+/// detection, so it stays truthful even if `enable-deploy-on-merge.sh`'s
+/// install paths evolve.
+async fn check_deploy_on_merge(platform: &Platform, zeus_dir: &std::path::Path) -> (bool, String) {
+    let enabled = match platform.os {
+        crate::platform::Os::MacOS => {
+            tokio::process::Command::new("launchctl")
+                .args(["list", "com.zeus.deploy-poll"])
+                .output()
+                .await
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        }
+        crate::platform::Os::Linux => {
+            tokio::process::Command::new("systemctl")
+                .args(["--user", "is-enabled", "zeus-deploy-poll.timer"])
+                .output()
+                .await
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        }
+        crate::platform::Os::FreeBSD => {
+            tokio::process::Command::new("service")
+                .args(["zeus_deploy_poll", "status"])
+                .output()
+                .await
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        }
+    };
+
+    let stamp = zeus_dir.join("deploy").join("last-deploy");
+    let last_sha = std::fs::read_to_string(&stamp)
+        .ok()
+        .and_then(|content| parse_last_deploy_sha(&content));
+
+    let detail = match (&last_sha, enabled) {
+        (Some(sha), true) => format!("enabled — last deployed sha={sha}"),
+        (Some(sha), false) => format!("disabled — stale (last deployed sha={sha}, not polling)"),
+        (None, true) => "enabled — no successful deploy recorded yet".to_string(),
+        (None, false) => {
+            "disabled — run scripts/zeus-deploy/enable-deploy-on-merge.sh to enable".to_string()
+        }
+    };
+
+    (enabled, detail)
+}
+
+/// Parse the `sha=<value>` line out of a deploy-on-merge `last-deploy` state
+/// file (see `scripts/zeus-deploy/deploy-on-merge.sh`'s `stamp_success`).
+fn parse_last_deploy_sha(content: &str) -> Option<String> {
+    content
+        .lines()
+        .find_map(|line| line.strip_prefix("sha="))
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+}
+
 async fn check_service(platform: &Platform) -> bool {
     let output = match platform.os {
         crate::platform::Os::MacOS => {
@@ -1078,5 +1149,28 @@ mod tests {
         let h1 = quick_hash(b"config v1");
         let h2 = quick_hash(b"config v2");
         assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_parse_last_deploy_sha_present() {
+        let content = "sha=bc9e5062\ndeployed_at=2026-07-19T13:45:00Z\nrepo=/home/zeus/Zeus\nbranch=main\ninstall_bin=/usr/local/bin/zeus\n";
+        assert_eq!(parse_last_deploy_sha(content), Some("bc9e5062".to_string()));
+    }
+
+    #[test]
+    fn test_parse_last_deploy_sha_missing() {
+        let content = "deployed_at=2026-07-19T13:45:00Z\nrepo=/home/zeus/Zeus\n";
+        assert_eq!(parse_last_deploy_sha(content), None);
+    }
+
+    #[test]
+    fn test_parse_last_deploy_sha_empty_value() {
+        let content = "sha=\ndeployed_at=2026-07-19T13:45:00Z\n";
+        assert_eq!(parse_last_deploy_sha(content), None);
+    }
+
+    #[test]
+    fn test_parse_last_deploy_sha_empty_content() {
+        assert_eq!(parse_last_deploy_sha(""), None);
     }
 }

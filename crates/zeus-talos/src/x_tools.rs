@@ -9,26 +9,58 @@
 use crate::TalosTool;
 use async_trait::async_trait;
 use serde_json::Value;
-use zeus_channels::x::XDmOptions;
+use zeus_channels::x::{
+    build_authorize_url, exchange_code, generate_pkce_pair, refresh_oauth2_token, XDmOptions,
+    OAuth2TokenResponse, X_OAUTH2_DEFAULT_SCOPES,
+};
 use zeus_channels::{
     CreateTweetOptions, ThreadOptions, XAdapter, XConfig, XListOptions, XReadOptions,
 };
-use zeus_core::{Error, Result, ToolSchema};
+use zeus_core::{Config, Error, Result, ToolSchema, XTwitterChannelConfig};
+
+const X_OAUTH2_DEFAULT_REDIRECT_URI: &str = "http://127.0.0.1:8787/x/oauth2/callback";
+const X_OAUTH2_REFRESH_SKEW_SECS: u64 = 300;
 
 /// Build an XAdapter from `[channels.x_twitter]` config (env fallbacks
 /// included via the config layer's serde defaults). Mirrors the field
 /// mapping in zeus-agent's channel_builder so tool and adapter behavior
 /// can never drift apart.
 async fn x_adapter() -> Result<XAdapter> {
-    let config = zeus_core::Config::load()?;
-    let xt = config.channels.and_then(|c| c.x_twitter).ok_or_else(|| {
-        Error::Tool(
-            "X is not configured: add [channels.x_twitter] to config.toml \
-             (bearer_token / consumer_key + secrets / oauth2 credentials)"
-                .to_string(),
-        )
-    })?;
-    let x_config = XConfig {
+    let mut config = Config::load()?;
+    refresh_configured_oauth2_if_needed(&mut config).await?;
+    let xt = configured_x(&config)?;
+    XAdapter::new(x_config_from_channel(xt)).await
+}
+
+fn configured_x(config: &Config) -> Result<&XTwitterChannelConfig> {
+    config
+        .channels
+        .as_ref()
+        .and_then(|c| c.x_twitter.as_ref())
+        .ok_or_else(|| {
+            Error::Tool(
+                "X is not configured: add [channels.x_twitter] to config.toml \
+                 (oauth2 credentials / bearer_token / consumer_key + secrets)"
+                    .to_string(),
+            )
+        })
+}
+
+fn configured_x_mut(config: &mut Config) -> Result<&mut XTwitterChannelConfig> {
+    config
+        .channels
+        .as_mut()
+        .and_then(|c| c.x_twitter.as_mut())
+        .ok_or_else(|| {
+            Error::Tool(
+                "X is not configured: add [channels.x_twitter] to config.toml before OAuth2 setup"
+                    .to_string(),
+            )
+        })
+}
+
+fn x_config_from_channel(xt: &XTwitterChannelConfig) -> XConfig {
+    XConfig {
         bearer_token: xt.bearer_token.clone(),
         api_key: xt.consumer_key.clone(),
         api_secret: xt.consumer_key_secret.clone(),
@@ -36,11 +68,94 @@ async fn x_adapter() -> Result<XAdapter> {
         access_token_secret: xt.access_token_secret.clone(),
         client_id: xt.client_id.clone(),
         client_secret: xt.client_secret.clone(),
+        oauth2_access_token: xt.oauth2_access_token.clone(),
+        oauth2_refresh_token: xt.oauth2_refresh_token.clone(),
+        oauth2_expires_at: xt.oauth2_expires_at,
         poll_interval_secs: xt.poll_interval_secs,
         auto_reply: xt.auto_reply,
         ..Default::default()
+    }
+}
+
+fn has_oauth1_user_tokens(xt: &XTwitterChannelConfig) -> bool {
+    !xt.consumer_key.is_empty()
+        && !xt.consumer_key_secret.is_empty()
+        && !xt.access_token.is_empty()
+        && !xt.access_token_secret.is_empty()
+}
+
+fn now_epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn oauth2_refresh_due(xt: &XTwitterChannelConfig) -> bool {
+    if xt.oauth2_refresh_token.is_empty() {
+        return false;
+    }
+    xt.oauth2_access_token.is_empty()
+        || xt.oauth2_expires_at == 0
+        || xt.oauth2_expires_at <= now_epoch_secs().saturating_add(X_OAUTH2_REFRESH_SKEW_SECS)
+}
+
+fn oauth2_expires_at(token: &OAuth2TokenResponse) -> u64 {
+    now_epoch_secs().saturating_add(token.expires_in)
+}
+
+fn persist_oauth2_response(
+    config: &mut Config,
+    token: &OAuth2TokenResponse,
+    fallback_refresh_token: Option<&str>,
+) -> Result<u64> {
+    let expires_at = oauth2_expires_at(token);
+    {
+        let xt = configured_x_mut(config)?;
+        xt.oauth2_access_token = token.access_token.clone();
+        if let Some(refresh) = token
+            .refresh_token
+            .as_deref()
+            .filter(|refresh| !refresh.is_empty())
+            .or(fallback_refresh_token)
+        {
+            xt.oauth2_refresh_token = refresh.to_string();
+        }
+        xt.oauth2_expires_at = expires_at;
+    }
+    config.save()?;
+    Ok(expires_at)
+}
+
+async fn refresh_configured_oauth2_if_needed(config: &mut Config) -> Result<bool> {
+    let Some((client_id, client_secret, refresh_token, has_oauth1)) = (|| {
+        let xt = configured_x(config).ok()?;
+        if !oauth2_refresh_due(xt) || xt.client_id.is_empty() {
+            return None;
+        }
+        Some((
+            xt.client_id.clone(),
+            xt.client_secret.clone(),
+            xt.oauth2_refresh_token.clone(),
+            has_oauth1_user_tokens(xt),
+        ))
+    })() else {
+        return Ok(false);
     };
-    XAdapter::new(x_config).await
+
+    let client = reqwest::Client::new();
+    match refresh_oauth2_token(&client, &client_id, &client_secret, &refresh_token).await {
+        Ok(token) => {
+            persist_oauth2_response(config, &token, Some(&refresh_token))?;
+            Ok(true)
+        }
+        Err(err) if has_oauth1 => {
+            eprintln!("X OAuth2 refresh failed; falling back to OAuth1 for this tool call: {err}");
+            configured_x_mut(config)?.oauth2_access_token.clear();
+            Ok(false)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// Guess a MIME type from a media file extension (X accepts jpg/png/gif/webp/mp4).
@@ -74,6 +189,18 @@ async fn upload_media_paths(adapter: &XAdapter, args: &Value) -> Result<Vec<Stri
         ids.push(id);
     }
     Ok(ids)
+}
+
+fn extract_query_param(input: &str, key: &str) -> Option<String> {
+    let query = input.split_once('?').map(|(_, query)| query).unwrap_or(input);
+    query.split('&').find_map(|pair| {
+        let (k, v) = pair.split_once('=')?;
+        if k == key {
+            urlencoding::decode(v).ok().map(|value| value.into_owned())
+        } else {
+            None
+        }
+    })
 }
 
 fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
@@ -168,6 +295,195 @@ fn x_list_options(args: &Value) -> Result<XListOptions> {
         pagination_token: optional_string(args, "pagination_token"),
         max_results: optional_u32(args, "max_results")?,
     })
+}
+
+// ---------------------------------------------------------------------------
+// 0. X OAuth2 user-context tools — #440
+// ---------------------------------------------------------------------------
+
+pub struct XOAuth2StartTool;
+
+#[async_trait]
+impl TalosTool for XOAuth2StartTool {
+    fn name(&self) -> &'static str {
+        "x_oauth2_start"
+    }
+    fn description(&self) -> &'static str {
+        "Start X OAuth2 PKCE user-context onboarding. Returns the authorize URL, verifier, state, and redirect URI."
+    }
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(self.name(), self.description())
+            .with_param("redirect_uri", "string", "OAuth2 callback redirect URI", false)
+            .with_param("scopes", "string", "Space-separated X OAuth2 scopes", false)
+            .with_param("state", "string", "Optional CSRF state value", false)
+    }
+    async fn execute(&self, args: Value) -> Result<String> {
+        let config = Config::load()?;
+        let xt = configured_x(&config)?;
+        if xt.client_id.is_empty() {
+            return Err(Error::Tool(
+                "X OAuth2 PKCE requires client_id in [channels.x_twitter]".into(),
+            ));
+        }
+        let redirect_uri = optional_string(&args, "redirect_uri")
+            .unwrap_or_else(|| X_OAUTH2_DEFAULT_REDIRECT_URI.to_string());
+        let scopes = optional_string(&args, "scopes")
+            .unwrap_or_else(|| X_OAUTH2_DEFAULT_SCOPES.to_string());
+        let state = optional_string(&args, "state").unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let (code_verifier, code_challenge) = generate_pkce_pair();
+        let authorize_url = build_authorize_url(
+            &xt.client_id,
+            &redirect_uri,
+            &scopes,
+            &state,
+            &code_challenge,
+        );
+        Ok(serde_json::json!({
+            "authorize_url": authorize_url,
+            "code_verifier": code_verifier,
+            "state": state,
+            "redirect_uri": redirect_uri,
+            "scopes": scopes,
+            "next": "Open authorize_url, approve X access, then run x_oauth2_exchange with code or callback_url plus this code_verifier."
+        })
+        .to_string())
+    }
+}
+
+pub struct XOAuth2ExchangeTool;
+
+#[async_trait]
+impl TalosTool for XOAuth2ExchangeTool {
+    fn name(&self) -> &'static str {
+        "x_oauth2_exchange"
+    }
+    fn description(&self) -> &'static str {
+        "Exchange an X OAuth2 PKCE authorization code for user-context tokens and persist them to config.toml."
+    }
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(self.name(), self.description())
+            .with_param("code", "string", "Authorization code from X callback", false)
+            .with_param("callback_url", "string", "Full redirect URL containing ?code=...", false)
+            .with_param("code_verifier", "string", "PKCE code verifier returned by x_oauth2_start", true)
+            .with_param("redirect_uri", "string", "OAuth2 callback redirect URI", false)
+    }
+    async fn execute(&self, args: Value) -> Result<String> {
+        let code = optional_string(&args, "code")
+            .or_else(|| optional_string(&args, "callback_url").and_then(|url| extract_query_param(&url, "code")))
+            .ok_or_else(|| Error::Tool("x_oauth2_exchange requires code or callback_url".into()))?;
+        let code_verifier = require_str(&args, "code_verifier")?;
+        let redirect_uri = optional_string(&args, "redirect_uri")
+            .unwrap_or_else(|| X_OAUTH2_DEFAULT_REDIRECT_URI.to_string());
+        let mut config = Config::load()?;
+        let (client_id, client_secret) = {
+            let xt = configured_x(&config)?;
+            if xt.client_id.is_empty() {
+                return Err(Error::Tool(
+                    "X OAuth2 exchange requires client_id in [channels.x_twitter]".into(),
+                ));
+            }
+            (xt.client_id.clone(), xt.client_secret.clone())
+        };
+        let client = reqwest::Client::new();
+        let token = exchange_code(
+            &client,
+            &client_id,
+            &client_secret,
+            &code,
+            code_verifier,
+            &redirect_uri,
+        )
+        .await?;
+        let expires_at = persist_oauth2_response(&mut config, &token, None)?;
+        Ok(serde_json::json!({
+            "status": "persisted",
+            "token_type": token.token_type,
+            "scope": token.scope,
+            "expires_at": expires_at,
+            "has_refresh_token": token.refresh_token.is_some(),
+            "auth_priority": "oauth2_user_context_bearer"
+        })
+        .to_string())
+    }
+}
+
+pub struct XOAuth2RefreshTool;
+
+#[async_trait]
+impl TalosTool for XOAuth2RefreshTool {
+    fn name(&self) -> &'static str {
+        "x_oauth2_refresh"
+    }
+    fn description(&self) -> &'static str {
+        "Refresh and persist configured X OAuth2 user-context tokens, including rotated refresh tokens."
+    }
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(self.name(), self.description())
+    }
+    async fn execute(&self, _args: Value) -> Result<String> {
+        let mut config = Config::load()?;
+        let (client_id, client_secret, refresh_token) = {
+            let xt = configured_x(&config)?;
+            if xt.client_id.is_empty() || xt.oauth2_refresh_token.is_empty() {
+                return Err(Error::Tool(
+                    "x_oauth2_refresh requires client_id and oauth2_refresh_token in [channels.x_twitter]".into(),
+                ));
+            }
+            (
+                xt.client_id.clone(),
+                xt.client_secret.clone(),
+                xt.oauth2_refresh_token.clone(),
+            )
+        };
+        let client = reqwest::Client::new();
+        let token = refresh_oauth2_token(&client, &client_id, &client_secret, &refresh_token).await?;
+        let expires_at = persist_oauth2_response(&mut config, &token, Some(&refresh_token))?;
+        Ok(serde_json::json!({
+            "status": "refreshed",
+            "expires_at": expires_at,
+            "has_rotated_refresh_token": token.refresh_token.is_some()
+        })
+        .to_string())
+    }
+}
+
+pub struct XOAuth2StatusTool;
+
+#[async_trait]
+impl TalosTool for XOAuth2StatusTool {
+    fn name(&self) -> &'static str {
+        "x_oauth2_status"
+    }
+    fn description(&self) -> &'static str {
+        "Report X auth mode and OAuth2 user-context readiness without exposing token values."
+    }
+    fn schema(&self) -> ToolSchema {
+        ToolSchema::new(self.name(), self.description())
+    }
+    async fn execute(&self, _args: Value) -> Result<String> {
+        let config = Config::load()?;
+        let xt = configured_x(&config)?;
+        let auth_mode = if !xt.oauth2_access_token.is_empty() {
+            "oauth2_user_context_bearer"
+        } else if has_oauth1_user_tokens(xt) {
+            "oauth1_user_context_fallback"
+        } else if !xt.bearer_token.is_empty() {
+            "app_only_bearer_read_only"
+        } else {
+            "unconfigured"
+        };
+        Ok(serde_json::json!({
+            "auth_mode": auth_mode,
+            "has_client_id": !xt.client_id.is_empty(),
+            "has_oauth2_access_token": !xt.oauth2_access_token.is_empty(),
+            "has_oauth2_refresh_token": !xt.oauth2_refresh_token.is_empty(),
+            "oauth2_expires_at": xt.oauth2_expires_at,
+            "oauth2_refresh_due": oauth2_refresh_due(xt),
+            "has_oauth1_fallback": has_oauth1_user_tokens(xt),
+            "has_app_bearer": !xt.bearer_token.is_empty()
+        })
+        .to_string())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1423,6 +1739,10 @@ mod tests {
 
     #[test]
     fn test_schemas_have_names() {
+        assert_eq!(XOAuth2StartTool.name(), "x_oauth2_start");
+        assert_eq!(XOAuth2ExchangeTool.name(), "x_oauth2_exchange");
+        assert_eq!(XOAuth2RefreshTool.name(), "x_oauth2_refresh");
+        assert_eq!(XOAuth2StatusTool.name(), "x_oauth2_status");
         assert_eq!(XPostTool.name(), "x_post");
         assert_eq!(XReplyTool.name(), "x_reply");
         assert_eq!(XThreadTool.name(), "x_thread");

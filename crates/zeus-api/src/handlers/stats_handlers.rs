@@ -264,6 +264,35 @@ pub async fn doctor(State(state): State<SharedState>) -> Result<Json<Value>, (St
         }
     }
 
+    // Talos / cross-platform tools check.
+    // #435: the legacy deploy path force-wrote `enable_talos = false` to
+    // ~/.zeus/config.toml on every FreeBSD/Linux seat, which silently disabled
+    // ALL Talos tools — including the cross-platform ones (x_*, nostr,
+    // instagram, tiktok, youtube, twitch, …) that have no AppleScript
+    // dependency. The deploy override is gone; this check surfaces any seat
+    // still carrying the stale setting so an operator can flip it during a
+    // fleet config pass. Seats never self-edit their live config (#291 class).
+    let talos_enabled = state
+        .config
+        .mcp_server
+        .as_ref()
+        .map(|m| m.enable_talos)
+        .unwrap_or(true);
+    if !talos_enabled {
+        has_warning = true;
+        checks.push(json!({
+            "name": "Talos tools",
+            "status": "warning",
+            "detail": "enable_talos = false in config.toml — cross-platform tools (x_*, nostr, instagram, tiktok, youtube, twitch) are unavailable. If this seat was deployed before #435, flip to true during a fleet config pass; macOS-only tools are already compiled out per-target."
+        }));
+    } else {
+        checks.push(json!({
+            "name": "Talos tools",
+            "status": "ok",
+            "detail": "Cross-platform tools available"
+        }));
+    }
+
     let overall = if has_error {
         "error"
     } else if has_warning {

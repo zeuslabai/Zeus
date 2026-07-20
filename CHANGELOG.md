@@ -6,7 +6,27 @@ All notable changes to Zeus are documented here.
 
 ## [Unreleased] - 2026-07-13
 
-Soul-pipeline hardening, on-chain wallet surfaces (API + TUI), WebUI onboarding parity (both phases complete), XAI capability isolation, and a hermetic installer fix.
+Soul-pipeline hardening, on-chain wallet surfaces (API + TUI), WebUI onboarding parity (both phases complete), XAI capability isolation, a hermetic installer fix, a FreeBSD fresh-install deadlock fix, the release-publish path unblocked, the missing OpenRouter/xAI/Sakana providers restored, Ollama per-model capability probing, portable TUI newline/copy handling, a WebUI build-stamp footer, and published Terms of Service + Privacy Policy.
+
+### Added
+
+**Ollama per-model capability probing — #357 (`be9026e4`)**
+- `query_model_capabilities` now probes `POST /api/show` per Ollama model and parses the model's own `capabilities` array (`completion`, `tools`, `vision`, `thinking`) as the primary signal for `supports_tools`/`supports_vision`, falling back to the existing family-name heuristics only when the field is absent (older Ollama versions, custom modelfiles) — zero behavior change on that fallback path
+- New `supports_parallel_tools` flag on `ModelCapabilities`/`DynamicModelCapabilities`, true only when a model declares tool support **and** its family is known to handle parallel calls well (qwen2.5, qwen3.5, gemma4, glm-4); conservative `false` default everywhere else
+- `OllamaResolver` is now actually wired into `complete_openai` and `stream_openai` — it existed before but was never called in the request path, so per-model capabilities now really gate tool injection and `parallel_tool_calls` at runtime instead of unconditionally sending `true`
+- 6 new tests covering capabilities-array parsing, embedding models, fallback behavior, and parallel-tools gating; zero behavior change for non-Ollama providers
+
+**TUI chat newline + text selection — #369 (`0fd95371`)**
+- Shift+Enter inserts a literal newline in the chat input instead of submitting, so multi-line messages are composable without leaving the TUI
+- Mouse-driven text selection and copy now work in the chat pane across terminal emulators, replacing the previous copy-paste-unfriendly behavior
+
+**WebUI build-stamp footer — #367 (`6bdd43ae`)**
+- Onboarding wizard footer now shows the build's git SHA and build time (injected via a new `build.rs` at compile time), so a stale WebUI bundle is diagnosable at a glance instead of silently serving old code
+- Hardcoded `"STEP {} OF 19"` replaced with a count derived from `STEPS.len()` — the step counter can no longer drift out of sync with the actual step list
+
+**Terms of Service + Privacy Policy published — #370, #371**
+- `docs/legal/TERMS_OF_SERVICE.md` and `docs/legal/PRIVACY_POLICY.md` drafted grounded in the shipped code, not boilerplate: self-hosted architecture (users run their own gateway, Zeus Lab operates nothing for them), credentials live only in the user's local `~/.zeus/config.toml`, no telemetry endpoint to Zeus Lab (OTEL/OTLP is user-configured, defaults to `localhost`), Instagram/TikTok scopes act only on the user's own connected accounts with their own tokens, wallet keys are server-side local and devnet-guarded
+- Ported to the public `zeuslab.ai` site (`src/legal.rs`, commit `09d2c800`) at `/terms` and `/privacy`, replacing 176 lines of stale boilerplate that had implied a hosted-accounts model contradicting the self-hosted architecture — unblocks the TikTok app audit and Meta App Review, both of which require a public privacy-policy URL
 
 ### Fixed
 
@@ -30,6 +50,13 @@ Soul-pipeline hardening, on-chain wallet surfaces (API + TUI), WebUI onboarding 
 - Native wallet screens shipped across all three mobile/desktop app repos (separate from `main`): macOS (`33d1b3b`), iOS (`231ff21`), Android (`0accf0e`)
 - Same security posture as the API/TUI surfaces — honest 402/403 rendering, no client-side key material
 - Completes every on-chain wallet surface except WebUI, tracked as #351
+
+**WebUI Wallet Page — #351 (`c26ef420`)**
+- New `POST /v1/wallet/onchain/transfer/preview` endpoint: runs `build_transfer_plan` only, returns the plan (fee estimate, balance-after, ATA existence) without ever signing or submitting a transaction
+- WebUI wallet page: two-step transfer flow — Preview (renders the plan) → Confirm (calls the real `/transfer` endpoint) — so nothing is signed before the operator sees the plan
+- `402` (insufficient balance) and `403` (non-devnet RPC) rendered honestly in the UI, not swallowed
+- Zero key material client-side, same as every other wallet surface
+- **Completes the on-chain wallet stack on every surface — API, TUI, macOS, iOS, Android, WebUI — closes #190**
 
 **WebUI Onboarding Parity Phase 1 — #356**
 - Added OpenRouter, xAI, Sakana providers to WebUI wizard, matching TUI's 13-provider set (`349eda7a`)
@@ -70,6 +97,22 @@ Soul-pipeline hardening, on-chain wallet surfaces (API + TUI), WebUI onboarding 
 **Instagram + TikTok: feature-complete across all surfaces**
 - With #362 landed, Instagram and TikTok are now live and config-wired end-to-end: backend (#360), TUI (#361), and WebUI (#362) all ship the same field sets and behavior
 - Code-complete is not the same as production-usable: TikTok apps post `SELF_ONLY` (private) until the TikTok app audit passes, and Instagram publish/comments/DMs require Meta App Review — both are operator-side platform paperwork, not code gaps
+
+**Missing providers in `/v1/providers` — no ticket #**
+- `list_providers()` was returning only 10 of 13 providers, silently dropping OpenRouter, xAI, and Sakana from the onboarding wizard's selection UI (the WebUI onboarding fetches from this endpoint and replaces its hardcoded fallback list)
+- All 13 providers now match the WebUI's own hardcoded list
+
+**FreeBSD fresh-install gateway restart deadlock — #365**
+- The `$()` command-substitution restart path deadlocked on FreeBSD fresh installs — replaced with the #223 temp-file pattern
+- `--update`'s stop-supervisor-first + stray-process-sweep + poll/kill ordering ported to the fresh-install launch path, ending the four-gateway boot races that pattern caused
+- A failed `trunk build` is now **fatal** when `--with-webui` was requested, instead of a silent non-fatal warning that let the installer serve a stale WebUI bundle
+- Fixed a latent subshell bug that was losing the "gateway was already running" flag across the restart
+
+**Release script publish path — #366**
+- `release-local.sh --version` now stamps the workspace `Cargo.toml` version (single source of truth all crates inherit) and syncs `Cargo.lock` via `cargo update --workspace`, so the release tag, artifact names, and `zeus --version` always agree; the stamp is left uncommitted for review, and `--publish` refuses to run until it's committed
+- Fixed a fatal top-level `local` in the publish block — every `--publish` run had been dying on it, which explains zero releases shipped to date
+- `--targets` is now validated upfront; previously an unknown target silently sailed through to a zero-artifact "success"
+- Exit codes are now honest: a run that builds nothing dies, a partial failure exits 1, and `--publish` refuses a partial matrix
 
 ---
 

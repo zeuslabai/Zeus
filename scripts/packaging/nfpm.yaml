@@ -1,0 +1,78 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Zeus — nfpm package spec (deb + rpm from a single YAML, any build host)
+#
+# #396 P2: nfpm (https://nfpm.goreleaser.com) is a pure-Go, 0-dependency
+# packager — no dpkg-deb/rpmbuild required on the build host. This is the
+# cross-host complement to build-deb.sh/build-rpm.sh (which shell the native
+# Linux tools and only run correctly on a matching Linux host). Same staged
+# layout, same systemd unit, same user-creation scripts — different builder.
+#
+# Usage: always via scripts/packaging/build-nfpm.sh, never invoked directly —
+# the ${VAR} placeholders below are sed-substituted by build-nfpm.sh before
+# nfpm ever sees this file (nfpm's own env-var expansion does not reach
+# contents[].src, only scalar fields — see build-nfpm.sh for why).
+# Do not hardcode arch/version/paths here.
+# ═══════════════════════════════════════════════════════════════════════════════
+name: "zeus"
+arch: "${NFPM_ARCH}"
+platform: "linux"
+version: "${NFPM_VERSION}"
+section: "utils"
+priority: "optional"
+maintainer: "Zeus Team <team@zeuslab.ai>"
+homepage: "https://zeuslab.ai"
+license: "MIT"
+description: |
+  Autonomous AI assistant with 327 tools and 11 LLM providers
+  Zeus is a local-first AI assistant featuring a cognitive engine (Nous),
+  multi-channel chat (Telegram, Discord, Slack, Email, iMessage, WhatsApp,
+  Signal, Matrix), 5 frontends (TUI, Web, macOS, iOS, visionOS), browser
+  automation, voice calls, and security sandboxing.
+  .
+  Run 'zeus' for the TUI, 'zeus gateway' for the API server,
+  or 'zeus setup' for guided first-run configuration.
+
+depends:
+  - libc6 (>= 2.31)
+
+overrides:
+  rpm:
+    depends:
+      - glibc >= 2.31
+
+contents:
+  - src: "${NFPM_BINARY}"
+    dst: /usr/local/bin/zeus
+    file_info:
+      mode: 0755
+
+  - src: "${NFPM_REPO_ROOT}/scripts/systemd/zeus-gateway.service"
+    dst: /usr/lib/systemd/system/zeus-gateway.service
+    file_info:
+      mode: 0644
+
+  - src: "${NFPM_COMPLETIONS_DIR}/zeus.bash"
+    dst: /etc/bash_completion.d/zeus
+    file_info:
+      mode: 0644
+    type: "config|noreplace"
+
+  - src: "${NFPM_COMPLETIONS_DIR}/_zeus"
+    dst: /usr/share/zsh/site-functions/_zeus
+    file_info:
+      mode: 0644
+
+  - src: "${NFPM_COMPLETIONS_DIR}/zeus.fish"
+    dst: /usr/share/fish/vendor_completions.d/zeus.fish
+    file_info:
+      mode: 0644
+
+  - src: "${NFPM_LICENSE_FILE}"
+    dst: /usr/share/doc/zeus/copyright
+    file_info:
+      mode: 0644
+
+scripts:
+  preinstall: "${NFPM_SCRIPTS_DIR}/preinstall.sh"
+  postinstall: "${NFPM_SCRIPTS_DIR}/postinstall.sh"
+  preremove: "${NFPM_SCRIPTS_DIR}/preremove.sh"

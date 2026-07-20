@@ -1,0 +1,15 @@
+[Unit]
+Description=Zeus deploy-on-merge poll
+Documentation=file:__ZEUS_REPO__/scripts/zeus-deploy/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=ZEUS_REPO=__ZEUS_REPO__
+Environment=ZEUS_HOME=__ZEUS_HOME__
+WorkingDirectory=__ZEUS_REPO__
+ExecStart=__ZEUS_REPO__/scripts/zeus-deploy/deploy-poll.sh
+
+# Poll failures should be visible in journal and the per-seat telemetry log, but
+# systemd should not spin in a restart loop; the timer owns cadence.

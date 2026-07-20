@@ -1,0 +1,12 @@
+[Unit]
+Description=PRISM deploy-on-merge (poll origin/main, redeploy on change)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mike
+# scripts/ path is where redeploy.sh + redeploy-poll.sh live in the oracles repo
+ExecStart=/home/mike/oracles/scripts/redeploy-poll.sh
+# Never let a hung build wedge the timer.
+TimeoutStartSec=1200

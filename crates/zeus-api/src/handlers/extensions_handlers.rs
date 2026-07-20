@@ -329,6 +329,21 @@ pub async fn onboarding_complete(
     }
 
     state.config.loaded_from_default = false;
+
+    // #385: Generate API auth token on onboarding completion (legacy path).
+    // Mirrors the same logic in onboarding_setup's complete=true branch.
+    let generated_token: Option<String> = {
+        let gateway = state.config.gateway.get_or_insert_with(Default::default);
+        if gateway.api_token.is_none() {
+            let token = crate::handlers::onboarding_handlers::generate_api_token();
+            tracing::info!("#385: Generated API auth token during onboarding completion (legacy path)");
+            gateway.api_token = Some(token.clone());
+            Some(token)
+        } else {
+            None
+        }
+    };
+
     let _ = state.config.save();
 
     // S98: Do NOT process::exit() here — it kills the server before the HTTP response
@@ -342,7 +357,10 @@ pub async fn onboarding_complete(
     // implementation in onboarding_handlers so both paths stay identical.
     crate::handlers::onboarding_handlers::generate_workspace_files(&state.config);
 
-    Json(json!({ "success": true }))
+    Json(json!({
+        "success": true,
+        "auth_token": generated_token,
+    }))
 }
 
 
@@ -428,6 +446,30 @@ pub async fn list_providers() -> Json<Value> {
                 "models": []
             },
             {
+                "id": "kimi-code",
+                "name": "Kimi Code",
+                "tagline": "Kimi Code subscription — K3 and coding models",
+                "icon": "🌙",
+                "color": "#ff8c42",
+                "auth_methods": ["api_key"],
+                "env_var": "KIMI_CODE_API_KEY",
+                "requires_url": false,
+                "default_url": "",
+                "models": ["k3", "kimi-for-coding", "kimi-for-coding-highspeed"]
+            },
+            {
+                "id": "glm-coding",
+                "name": "GLM Coding",
+                "tagline": "GLM Coding subscription — flat-rate coding plan",
+                "icon": "🔮",
+                "color": "#3fbfbf",
+                "auth_methods": ["api_key"],
+                "env_var": "GLM_CODING_API_KEY",
+                "requires_url": false,
+                "default_url": "",
+                "models": ["glm-5.2", "glm-5-turbo", "glm-4.7"]
+            },
+            {
                 "id": "zai",
                 "name": "GLM",
                 "tagline": "ZAI — GLM series models",
@@ -452,6 +494,18 @@ pub async fn list_providers() -> Json<Value> {
                 "models": []
             },
             {
+                "id": "qwen-coding",
+                "name": "Qwen Coding",
+                "tagline": "Qwen Coding Plan subscription — Max Preview, Coder",
+                "icon": "🌀",
+                "color": "#6c5ce7",
+                "auth_methods": ["api_key"],
+                "env_var": "QWEN_CODING_API_KEY",
+                "requires_url": false,
+                "default_url": "https://coding.dashscope.aliyuncs.com/v1",
+                "models": ["qwen3.8-max-preview", "qwen3-coder"]
+            },
+            {
                 "id": "minimax",
                 "name": "MiniMax",
                 "tagline": "Portal OAuth — Anthropic Messages API",
@@ -464,6 +518,18 @@ pub async fn list_providers() -> Json<Value> {
                 "models": []
             },
             {
+                "id": "minimax-coding",
+                "name": "MiniMax Coding",
+                "tagline": "MiniMax Token Plan subscription — M2.5, M3, M2.7",
+                "icon": "Ⓜ️",
+                "color": "#f5b642",
+                "auth_methods": ["api_key"],
+                "env_var": "MINIMAX_CODING_API_KEY",
+                "requires_url": false,
+                "default_url": "",
+                "models": ["MiniMax-M2.5", "MiniMax-M3", "MiniMax-M2.7"]
+            },
+            {
                 "id": "xiaomimimo",
                 "name": "MiMo",
                 "tagline": "Xiaomi — MiMo models",
@@ -471,6 +537,42 @@ pub async fn list_providers() -> Json<Value> {
                 "color": "#ff8800",
                 "auth_methods": ["api_key"],
                 "env_var": "XIAOMIMIMO_API_KEY",
+                "requires_url": false,
+                "default_url": "",
+                "models": []
+            },
+            {
+                "id": "openrouter",
+                "name": "OpenRouter",
+                "tagline": "Multi-provider routing — 200+ models",
+                "icon": "🔀",
+                "color": "#6c5ce7",
+                "auth_methods": ["api_key"],
+                "env_var": "OPENROUTER_API_KEY",
+                "requires_url": false,
+                "default_url": "",
+                "models": []
+            },
+            {
+                "id": "xai",
+                "name": "xAI",
+                "tagline": "Grok models — xAI platform",
+                "icon": "⚡",
+                "color": "#ffd43b",
+                "auth_methods": ["api_key"],
+                "env_var": "XAI_API_KEY",
+                "requires_url": false,
+                "default_url": "",
+                "models": []
+            },
+            {
+                "id": "sakana",
+                "name": "Sakana",
+                "tagline": "Sakana AI — Fugu series models",
+                "icon": "🐟",
+                "color": "#20c997",
+                "auth_methods": ["api_key"],
+                "env_var": "SAKANA_API_KEY",
                 "requires_url": false,
                 "default_url": "",
                 "models": []

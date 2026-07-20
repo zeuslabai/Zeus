@@ -5,6 +5,11 @@ pub mod history_handlers;
 pub use history_handlers::*;
 pub mod tts_handlers;
 pub use tts_handlers::*;
+pub mod voice_handlers;
+pub use voice_handlers::*;
+
+pub mod meet_handlers;
+pub use meet_handlers::*;
 
 pub mod analytics;
 pub use analytics::*;
@@ -48,6 +53,7 @@ pub mod fleet_provisioner;
 pub mod marketplace_dto;
 pub mod marketplace_store;
 pub mod observatory;
+pub mod org;
 pub mod pantheon;
 pub mod pantheon_store;
 pub mod studio_handlers;

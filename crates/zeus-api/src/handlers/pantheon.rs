@@ -703,7 +703,7 @@ impl zeus_prometheus::ToolExecutor for MissionToolExecutor {
                 mission_id = %self.mission_id,
                 agent_id = %agent_id,
                 "Spawned subagent for mission task: {}",
-                &task[..task.len().min(80)]
+                &task[..zeus_core::floor_char_boundary(&task, 80)]
             );
 
             return zeus_core::ToolResult {
@@ -2243,7 +2243,7 @@ fn execute_spawn(
             &room_id,
             2,
             total_steps,
-            &format!("Processing: {}", &task[..task.len().min(80)]),
+            &format!("Processing: {}", &task[..zeus_core::floor_char_boundary(&task, 80)]),
         )
         .await;
 

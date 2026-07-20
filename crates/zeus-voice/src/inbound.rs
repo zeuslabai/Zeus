@@ -345,8 +345,16 @@ pub async fn save_recording(
 /// Transcribe a WAV file using Whisper API (Groq or OpenAI).
 ///
 /// Accepts raw WAV bytes and sends to the best available Whisper API.
-pub async fn transcribe_recording(wav_data: &[u8]) -> Result<String> {
-    if wav_data.is_empty() {
+/// Transcribe arbitrary audio bytes (wav/mp3/ogg/etc.) with an explicit MIME type
+/// and filename. Used by the `/v1/stt` and `/v1/audio/transcriptions` endpoints.
+///
+/// Falls back to the original WAV-only behavior when `mime` is empty.
+pub async fn transcribe_audio(
+    data: &[u8],
+    mime: &str,
+    filename: &str,
+) -> Result<String> {
+    if data.is_empty() {
         return Ok(String::new());
     }
 
@@ -354,15 +362,19 @@ pub async fn transcribe_recording(wav_data: &[u8]) -> Result<String> {
     let (endpoint, model, api_key) = select_whisper_provider()?;
 
     info!(
-        "Transcribing {} bytes via {} ({})",
-        wav_data.len(),
+        "Transcribing {} bytes via {} ({}) [{}]",
+        data.len(),
         model,
-        endpoint
+        endpoint,
+        mime
     );
 
-    let file_part = reqwest::multipart::Part::bytes(wav_data.to_vec())
-        .file_name("recording.wav")
-        .mime_str("audio/wav")
+    let resolved_mime = if mime.is_empty() { "audio/wav" } else { mime };
+    let resolved_name = if filename.is_empty() { "recording.wav" } else { filename };
+
+    let file_part = reqwest::multipart::Part::bytes(data.to_vec())
+        .file_name(resolved_name.to_string())
+        .mime_str(resolved_mime)
         .map_err(|e| Error::Internal(format!("Failed to set MIME type: {}", e)))?;
 
     let form = reqwest::multipart::Form::new()
@@ -404,6 +416,14 @@ pub async fn transcribe_recording(wav_data: &[u8]) -> Result<String> {
 
     debug!("Transcription result: {} chars", text.len());
     Ok(text)
+}
+
+/// Transcribe a WAV file using Whisper API (Groq or OpenAI).
+///
+/// Thin wrapper around [`transcribe_audio`] preserving the original
+/// WAV-only contract for existing callers (recording pipeline).
+pub async fn transcribe_recording(wav_data: &[u8]) -> Result<String> {
+    transcribe_audio(wav_data, "audio/wav", "recording.wav").await
 }
 
 /// Transcription result with metadata

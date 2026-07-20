@@ -19,6 +19,7 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 use tracing::{info, warn};
+use zeus_core::fleet_telemetry::{self, FleetEventKind, FleetSeverity};
 
 use super::deploy_store::{DeployStore, DeployTargetRow, RollbackSnapshotRow};
 
@@ -604,6 +605,41 @@ async fn finish_pipeline(
             Some(total_duration),
         )
         .await;
+
+    let telemetry_kind = if success {
+        FleetEventKind::DeploySuccess
+    } else {
+        FleetEventKind::DeployFailure
+    };
+    let telemetry_severity = if success {
+        FleetSeverity::Info
+    } else {
+        FleetSeverity::Error
+    };
+    let telemetry_summary = if success {
+        format!("deployment '{}' finished live", config.deployment_id)
+    } else {
+        format!("deployment '{}' failed", config.deployment_id)
+    };
+    let telemetry_details = format!(
+        "deployment_id={} target={} provider={} status={} duration_secs={} version={} deploy_url={} error={}",
+        config.deployment_id,
+        config.target.name,
+        config.target.provider,
+        final_status,
+        total_duration,
+        config.version,
+        deploy_url.unwrap_or(""),
+        error.unwrap_or("")
+    );
+    fleet_telemetry::record_event_best_effort(
+        telemetry_kind,
+        telemetry_severity,
+        "zeus-api-deploy-pipeline",
+        &telemetry_summary,
+        None,
+        Some(&telemetry_details),
+    );
 
     info!(
         deployment_id = %config.deployment_id,

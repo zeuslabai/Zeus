@@ -121,7 +121,8 @@ pub async fn build_channel_manager_from_config(
             };
             match zeus_channels::DiscordAdapter::new(discord_config).await {
                 Ok(adapter) => {
-                    // Wire voice support if configured
+                    // Wire voice support if configured (requires "voice" feature on zeus-channels)
+                    #[cfg(feature = "voice")]
                     if let Some(ref vc) = dc.voice
                         && vc.enabled
                     {

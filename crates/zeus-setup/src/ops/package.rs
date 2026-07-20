@@ -38,6 +38,12 @@ struct Component {
     install_location: &'static str,
     payload_dir: Option<PathBuf>,
     scripts_dir: Option<PathBuf>,
+    /// Whether this component has its own built .pkg file that productbuild
+    /// can reference in a <pkg-ref>. `com.zeus.setup` is bundled inside the
+    /// CLI payload (no separate pkgbuild invocation), so it's `false` — the
+    /// Distribution.xml generator must skip emitting a pkg-ref/choice entry
+    /// for it, or productbuild warns about a missing package file.
+    has_pkg: bool,
 }
 
 pub async fn run(opts: PackageOpts, tx: mpsc::Sender<ProgressEvent>) -> Result<()> {
@@ -551,6 +557,7 @@ async fn build_component_packages(
                 } else {
                     None
                 },
+                has_pkg: true,
             };
             build_one_pkg(&comp, pkgs_dir, tx).await?;
             components.push(comp);
@@ -571,6 +578,7 @@ async fn build_component_packages(
                 install_location: "/",
                 payload_dir: None, // already in CLI payload
                 scripts_dir: None,
+                has_pkg: false,
             };
             // No separate pkg needed — setup binary is in the CLI package
             // Just register it in components for Distribution.xml
@@ -594,6 +602,7 @@ async fn build_component_packages(
                 } else {
                     None
                 },
+                has_pkg: true,
             };
             build_one_pkg(&comp, pkgs_dir, tx).await?;
             components.push(comp);
@@ -615,6 +624,7 @@ async fn build_component_packages(
             } else {
                 None
             },
+            has_pkg: true,
         };
         build_one_pkg(&comp, pkgs_dir, tx).await?;
         components.push(comp);
@@ -631,6 +641,7 @@ async fn build_component_packages(
                 install_location: "/tmp",
                 payload_dir: None,
                 scripts_dir: Some(scripts),
+                has_pkg: true,
             };
             build_one_pkg(&comp, pkgs_dir, tx).await?;
             components.push(comp);
@@ -648,6 +659,7 @@ async fn build_component_packages(
                 install_location: "/tmp",
                 payload_dir: None,
                 scripts_dir: Some(scripts),
+                has_pkg: true,
             };
             build_one_pkg(&comp, pkgs_dir, tx).await?;
             components.push(comp);
@@ -665,6 +677,7 @@ async fn build_component_packages(
                 install_location: "/",
                 payload_dir: Some(web_root),
                 scripts_dir: None,
+                has_pkg: true,
             };
             build_one_pkg(&comp, pkgs_dir, tx).await?;
             components.push(comp);
@@ -682,6 +695,7 @@ async fn build_component_packages(
                 install_location: "/",
                 payload_dir: Some(comp_root),
                 scripts_dir: None,
+                has_pkg: true,
             };
             build_one_pkg(&comp, pkgs_dir, tx).await?;
             components.push(comp);
@@ -770,7 +784,6 @@ fn generate_distribution_xml(
     xml.push_str("    <choices-outline>\n");
     xml.push_str("        <line choice=\"core\">\n");
     xml.push_str("            <line choice=\"com.zeus.cli\" />\n");
-    xml.push_str("            <line choice=\"com.zeus.setup\" />\n");
     xml.push_str("        </line>\n");
     if include_desktop {
         xml.push_str("        <line choice=\"desktop\">\n");
@@ -802,9 +815,18 @@ fn generate_distribution_xml(
     xml.push_str("    </choice>\n");
     xml.push('\n');
 
-    // Component choices + pkg-ref entries
+    // Component choices + pkg-ref entries.
+    // com.zeus.setup is bundled inside the CLI payload (no separate .pkg built —
+    // see build_component_packages), so it's tracked in `components` for
+    // metadata/bookkeeping only and must NOT get a <choice>/<pkg-ref> here:
+    // productbuild resolves every <pkg-ref> filename against pkgs_dir, and a
+    // ref to a file that was never built (com.zeus.setup.pkg) throws
+    // "warning: No package found for distribution URL ...". Gate on has_pkg.
     for comp in components {
-        let required = comp.identifier == "com.zeus.cli" || comp.identifier == "com.zeus.setup";
+        if !comp.has_pkg {
+            continue;
+        }
+        let required = comp.identifier == "com.zeus.cli";
         let pkg_file = format!("{}.pkg", comp.identifier);
 
         xml.push_str(&format!(

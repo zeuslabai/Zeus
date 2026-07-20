@@ -15,6 +15,7 @@ pub mod call;
 pub mod cpal_audio;
 #[cfg(not(all(feature = "audio", not(target_os = "freebsd"))))]
 pub mod cpal_audio_stub;
+pub mod deepgram;
 pub mod elevenlabs;
 pub mod inbound;
 pub mod media;

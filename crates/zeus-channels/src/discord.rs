@@ -778,6 +778,7 @@ pub struct DiscordAdapter {
     slash_tx: Arc<Mutex<Option<mpsc::Sender<SlashCommandInvocation>>>>,
     reaction_tx: Arc<Mutex<Option<mpsc::Sender<ReactionEvent>>>>,
     /// Optional songbird voice manager for voice channel support
+    #[cfg(feature = "voice")]
     songbird: Arc<RwLock<Option<Arc<songbird::Songbird>>>>,
 }
 
@@ -795,6 +796,7 @@ impl DiscordAdapter {
             connected: Arc::new(AtomicBool::new(false)),
             shutdown: Arc::new(Mutex::new(None)),
             slash_commands: Arc::new(RwLock::new(Vec::new())),
+            #[cfg(feature = "voice")]
             songbird: Arc::new(RwLock::new(None)),
             slash_rx: Arc::new(Mutex::new(Some(slash_rx))),
             reaction_rx: Arc::new(Mutex::new(Some(reaction_rx))),
@@ -1132,11 +1134,13 @@ impl DiscordAdapter {
     ///
     /// Must be called before `start()`. The songbird instance will be
     /// registered with the serenity client builder for gateway voice events.
+    #[cfg(feature = "voice")]
     pub async fn set_songbird(&self, songbird: Arc<songbird::Songbird>) {
         *self.songbird.write().await = Some(songbird);
     }
 
     /// Get the songbird voice manager, if registered.
+    #[cfg(feature = "voice")]
     pub async fn songbird(&self) -> Option<Arc<songbird::Songbird>> {
         self.songbird.read().await.clone()
     }
@@ -1239,6 +1243,7 @@ impl ChannelAdapter for DiscordAdapter {
             .iter()
             .filter_map(|s| s.parse::<u64>().ok())
             .collect();
+        #[cfg(feature = "voice")]
         let songbird_clone = self.songbird.read().await.as_ref().cloned();
         let http_arc = self.http.clone();
 
@@ -1313,6 +1318,7 @@ impl ChannelAdapter for DiscordAdapter {
                 // Build client (with optional songbird voice support).
                 let mut builder =
                     SerenityClient::builder(&token_owned, intents).event_handler(handler);
+                #[cfg(feature = "voice")]
                 if let Some(songbird) = songbird_clone.as_ref() {
                     builder = builder.voice_manager_arc(songbird.clone());
                 }

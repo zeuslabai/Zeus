@@ -10,11 +10,47 @@ use std::collections::HashMap;
 use tracing::debug;
 use zeus_core::{Error, Result};
 
+use crate::deepgram::{DEEPGRAM_API_KEY_ENV, DeepgramStreamingStt, resolve_deepgram_api_key};
+
 /// Which STT provider to use
 #[derive(Debug, Clone, Copy)]
 enum SttProvider {
     Groq,
     OpenAI,
+}
+
+/// Which realtime streaming STT provider to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamingSttProvider {
+    Deepgram,
+}
+
+impl StreamingSttProvider {
+    /// Select the best available realtime streaming STT provider.
+    ///
+    /// Resolution order per key: credentials map → environment variable.
+    /// Deepgram is currently the only realtime provider.
+    pub fn select(credentials: Option<&HashMap<String, String>>) -> Result<(Self, String)> {
+        if let Some(key) = resolve_deepgram_api_key(credentials) {
+            return Ok((StreamingSttProvider::Deepgram, key));
+        }
+
+        Err(Error::Internal(format!(
+            "No realtime STT API key found. Set {} in [credentials].",
+            DEEPGRAM_API_KEY_ENV
+        )))
+    }
+}
+
+/// Build the configured realtime streaming STT client.
+pub fn streaming_stt_client(
+    credentials: Option<&HashMap<String, String>>,
+) -> Result<DeepgramStreamingStt> {
+    let (provider, api_key) = StreamingSttProvider::select(credentials)?;
+
+    match provider {
+        StreamingSttProvider::Deepgram => DeepgramStreamingStt::new(api_key),
+    }
 }
 
 impl SttProvider {
@@ -30,18 +66,18 @@ impl SttProvider {
             return Ok((SttProvider::OpenAI, key));
         }
         Err(Error::Internal(
-            "No STT API key found. Set GROQ_API_KEY or OPENAI_API_KEY in [credentials].".to_string(),
+            "No STT API key found. Set GROQ_API_KEY or OPENAI_API_KEY in [credentials]."
+                .to_string(),
         ))
     }
 
     /// Look up a key from credentials first, then fall back to env var.
     fn resolve_key(name: &str, credentials: Option<&HashMap<String, String>>) -> Option<String> {
-        if let Some(creds) = credentials {
-            if let Some(val) = creds.get(name) {
-                if !val.is_empty() {
-                    return Some(val.clone());
-                }
-            }
+        if let Some(creds) = credentials
+            && let Some(val) = creds.get(name)
+            && !val.is_empty()
+        {
+            return Some(val.clone());
         }
         std::env::var(name).ok()
     }

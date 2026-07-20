@@ -160,7 +160,7 @@ pub async fn upload_file(file: web_sys::File, _on_progress: impl Fn(f64) + 'stat
         .unwrap_or_default();
 
     serde_json::from_str::<UploadedFile>(&text)
-        .map_err(|e| format!("Parse error: {} (body: {})", e, &text[..text.len().min(200)]))
+        .map_err(|e| format!("Parse error: {} (body: {})", e, truncate_str(&text, 200)))
 }
 
 pub async fn list_uploads() -> Result<Vec<UploadedFile>, String> {

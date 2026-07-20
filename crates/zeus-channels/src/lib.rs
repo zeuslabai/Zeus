@@ -31,6 +31,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use zeus_core::fleet_telemetry::{self, FleetEventKind, FleetSeverity};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use zeus_core::Result;
@@ -45,6 +46,7 @@ pub use accounts::{AccountError, AccountId, AccountStore, ChannelAccount};
 pub mod chunker;
 pub mod config;
 pub mod discord;
+#[cfg(feature = "voice")]
 pub mod discord_voice;
 pub mod discovery;
 pub mod email;
@@ -113,6 +115,7 @@ pub use discord::{
     BotPresence, DiscordAdapter, DiscordConfig, DiscordEmbed, EmbedField, ReactionEvent,
     SlashCommand, SlashCommandInvocation, SlashCommandOption, SlashOptionKind,
 };
+#[cfg(feature = "voice")]
 pub use discord_voice::{DiscordVoiceConfig, DiscordVoiceSession, VoiceTranscript};
 pub use discovery::{AdvertiseConfig, DiscoveredNode, DiscoveryManager};
 pub use email::{EmailAdapter, EmailConfig};
@@ -543,7 +546,18 @@ impl AgentSendIdentity {
     }
 }
 
+/// A media attachment ready to send: `(filename, data, mime_type)`.
+///
+/// `mime_type` may be empty to signal the adapter should infer it from the
+/// filename extension.
+pub type MediaFile = (String, Vec<u8>, String);
+
 /// A messaging channel adapter
+///
+/// # Media attachments
+///
+/// [`MediaFile`] — `(filename, data, mime_type)` — is the standard media
+/// tuple for [`ChannelAdapter::send_media`].
 #[async_trait]
 pub trait ChannelAdapter: Send + Sync {
     /// Get the channel type
@@ -627,6 +641,29 @@ pub trait ChannelAdapter: Send + Sync {
     ) -> Result<()> {
         Err(zeus_core::Error::Channel(format!(
             "File sending not supported on {} channel",
+            self.channel_type()
+        )))
+    }
+
+    /// Send one or more media attachments as a single message.
+    ///
+    /// `files` are `(filename, data, mime_type)` tuples already read from
+    /// disk; `caption` is the accompanying message text; `alt_text` (where the
+    /// platform supports it) is accessibility text for the media.
+    ///
+    /// Unlike [`Self::send_file`], which carries a single attachment, this
+    /// supports attaching multiple media items to **one** message (e.g. an X
+    /// tweet with several images). Default returns an error for channels that
+    /// don't support media sending.
+    async fn send_media(
+        &self,
+        _to: &ChannelSource,
+        _files: &[MediaFile],
+        _caption: Option<&str>,
+        _alt_text: Option<&str>,
+    ) -> Result<()> {
+        Err(zeus_core::Error::Channel(format!(
+            "Media sending not supported on {} channel",
             self.channel_type()
         )))
     }
@@ -798,16 +835,27 @@ impl ChannelManager {
                     );
                 }
                 Err(e) => {
+                    let channel = adapter.channel_type();
+                    let summary = format!("adapter '{channel}' failed to start");
+                    let details = e.to_string();
+                    fleet_telemetry::record_event_best_effort(
+                        FleetEventKind::AdapterFlap,
+                        FleetSeverity::Warn,
+                        "channel-manager",
+                        &summary,
+                        None,
+                        Some(&details),
+                    );
                     tracing::info!(
                         target: "adapter",
-                        channel = adapter.channel_type(),
+                        channel = channel,
                         event = "dropped",
                         error = %e,
                         "adapter failed to start"
                     );
                     tracing::warn!(
                         "Channel adapter '{}' failed to start: {} — skipping",
-                        adapter.channel_type(),
+                        channel,
                         e
                     );
                 }
@@ -839,9 +887,20 @@ impl ChannelManager {
                     );
                 }
                 Err(e) => {
+                    let channel = adapter.channel_type();
+                    let summary = format!("adapter '{channel}' failed to stop cleanly");
+                    let details = e.to_string();
+                    fleet_telemetry::record_event_best_effort(
+                        FleetEventKind::AdapterFlap,
+                        FleetSeverity::Warn,
+                        "channel-manager",
+                        &summary,
+                        None,
+                        Some(&details),
+                    );
                     tracing::warn!(
                         target: "adapter",
-                        channel = adapter.channel_type(),
+                        channel = channel,
                         event = "disconnected",
                         reason = %e,
                         "adapter stop failed"
@@ -1074,6 +1133,23 @@ impl ChannelManager {
             zeus_core::Error::Channel(format!("No adapter for channel: {}", to.channel_type()))
         })?;
         adapter.send_file(to, filename, data, caption).await
+    }
+
+    /// Send one or more media attachments as a single message to a channel.
+    ///
+    /// Routes to the adapter matching `to.channel_type()` and calls
+    /// [`ChannelAdapter::send_media`]. Files must already be read into memory.
+    pub async fn send_media(
+        &self,
+        to: &ChannelSource,
+        files: &[MediaFile],
+        caption: Option<&str>,
+        alt_text: Option<&str>,
+    ) -> Result<()> {
+        let adapter = self.find_adapter(to).ok_or_else(|| {
+            zeus_core::Error::Channel(format!("No adapter for channel: {}", to.channel_type()))
+        })?;
+        adapter.send_media(to, files, caption, alt_text).await
     }
 
     /// Send a typing indicator to a channel target

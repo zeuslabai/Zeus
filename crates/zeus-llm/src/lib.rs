@@ -7,6 +7,10 @@ pub mod codex;
 pub mod cost;
 pub mod fallback;
 pub mod json_healing;
+pub mod kimi_code;
+pub mod glm_coding;
+pub mod minimax_coding;
+pub mod qwen_coding;
 pub mod middle_out;
 pub mod model_variants;
 pub mod pipeline;
@@ -820,8 +824,12 @@ impl LlmClient {
             Provider::XAI => "https://api.x.ai".to_string(),
             Provider::Cerebras => "https://api.cerebras.ai".to_string(),
             Provider::Moonshot => "https://api.moonshot.ai".to_string(),
+            Provider::KimiCode => kimi_code::KIMI_CODE_BASE_URL.to_string(),
+            Provider::GlmCoding => glm_coding::GLM_CODING_BASE_URL.to_string(),
+            Provider::MinimaxCoding => minimax_coding::MINIMAX_CODING_BASE_URL.to_string(),
             Provider::Zai => resolve_zai_base_url(),
             Provider::Qwen => resolve_qwen_base_url(),
+            Provider::QwenCoding => qwen_coding::QWEN_CODING_BASE_URL.to_string(),
             Provider::Minimax => minimax::MINIMAX_INFERENCE_BASE_GLOBAL.to_string(),
             Provider::XiaomiMimo => "https://api.xiaomimimo.com/v1".to_string(),
             Provider::Sakana => "https://api.sakana.ai/v1".to_string(),
@@ -913,8 +921,12 @@ impl LlmClient {
             Provider::XAI => "https://api.x.ai".to_string(),
             Provider::Cerebras => "https://api.cerebras.ai".to_string(),
             Provider::Moonshot => "https://api.moonshot.ai".to_string(),
+            Provider::KimiCode => kimi_code::KIMI_CODE_BASE_URL.to_string(),
+            Provider::GlmCoding => glm_coding::GLM_CODING_BASE_URL.to_string(),
+            Provider::MinimaxCoding => minimax_coding::MINIMAX_CODING_BASE_URL.to_string(),
             Provider::Zai => resolve_zai_base_url(),
             Provider::Qwen => resolve_qwen_base_url(),
+            Provider::QwenCoding => qwen_coding::QWEN_CODING_BASE_URL.to_string(),
             Provider::Minimax => minimax::MINIMAX_INFERENCE_BASE_GLOBAL.to_string(),
             Provider::XiaomiMimo => "https://api.xiaomimimo.com/v1".to_string(),
             Provider::Sakana => "https://api.sakana.ai/v1".to_string(),
@@ -970,7 +982,11 @@ impl LlmClient {
                 Provider::Google => config.provider_credentials.google.as_ref(),
                 Provider::GoogleGeminiCli => config.provider_credentials.google_gemini_cli.as_ref(),
                 Provider::Qwen => config.provider_credentials.qwen.as_ref(),
+                Provider::QwenCoding => config.provider_credentials.qwen_coding.as_ref(),
                 Provider::Minimax => config.provider_credentials.minimax.as_ref(),
+                Provider::MinimaxCoding => config.provider_credentials.minimax_coding.as_ref(),
+                Provider::KimiCode => config.provider_credentials.kimi_code.as_ref(),
+                Provider::GlmCoding => config.provider_credentials.glm_coding.as_ref(),
                 Provider::XiaomiMimo => config.provider_credentials.xiaomimimo.as_ref(),
                 _ => None,
             };
@@ -1076,8 +1092,12 @@ impl LlmClient {
             Provider::XAI => "https://api.x.ai".to_string(),
             Provider::Cerebras => "https://api.cerebras.ai".to_string(),
             Provider::Moonshot => "https://api.moonshot.ai".to_string(),
+            Provider::KimiCode => kimi_code::KIMI_CODE_BASE_URL.to_string(),
+            Provider::GlmCoding => glm_coding::GLM_CODING_BASE_URL.to_string(),
+            Provider::MinimaxCoding => minimax_coding::MINIMAX_CODING_BASE_URL.to_string(),
             Provider::Zai => resolve_zai_base_url(),
             Provider::Qwen => resolve_qwen_base_url(),
+            Provider::QwenCoding => qwen_coding::QWEN_CODING_BASE_URL.to_string(),
             Provider::Minimax => minimax::MINIMAX_INFERENCE_BASE_GLOBAL.to_string(),
             Provider::XiaomiMimo => "https://api.xiaomimimo.com/v1".to_string(),
             Provider::Sakana => "https://api.sakana.ai/v1".to_string(),
@@ -1222,7 +1242,7 @@ impl LlmClient {
         // model) reject the `temperature` param outright → `400 invalid arguments`.
         let skip_temperature = capabilities::capabilities(&self.provider).skip_temperature;
 
-        if !is_reasoning && !gpt55_with_tools && !skip_temperature && self.provider != Provider::Moonshot {
+        if !is_reasoning && !gpt55_with_tools && !skip_temperature && self.provider != Provider::Moonshot && self.provider != Provider::KimiCode && self.provider != Provider::GlmCoding {
             body["temperature"] = serde_json::json!(0.3);
         } else if is_reasoning && !gpt55_with_tools {
             // o1/o3/o4 always supports reasoning_effort; GPT-5.5 only without tools.
@@ -1415,8 +1435,12 @@ impl LlmClient {
                 Provider::XAI => self.complete_openai(messages, tools, system).await,
                 Provider::Cerebras => self.complete_openai(messages, tools, system).await,
                 Provider::Moonshot => self.complete_openai(messages, tools, system).await,
+                Provider::KimiCode => self.complete_openai(messages, tools, system).await,
+                Provider::GlmCoding => self.complete_openai(messages, tools, system).await,
+            Provider::MinimaxCoding => self.complete_minimax_coding(messages, tools, system).await,
                 Provider::Zai => self.complete_openai(messages, tools, system).await,
                 Provider::Qwen => self.complete_openai(messages, tools, system).await,
+                Provider::QwenCoding => self.complete_openai(messages, tools, system).await,
                 Provider::XiaomiMimo => self.complete_openai(messages, tools, system).await,
                 Provider::Sakana => self.complete_openai(messages, tools, system).await,
                 Provider::Minimax => {
@@ -1501,8 +1525,12 @@ impl LlmClient {
             Provider::XAI => self.complete_openai(messages, tools, system).await,
             Provider::Cerebras => self.complete_openai(messages, tools, system).await,
                 Provider::Moonshot => self.complete_openai(messages, tools, system).await,
+                Provider::KimiCode => self.complete_openai(messages, tools, system).await,
+                Provider::GlmCoding => self.complete_openai(messages, tools, system).await,
+            Provider::MinimaxCoding => self.complete_minimax_coding(messages, tools, system).await,
                 Provider::Zai => self.complete_openai(messages, tools, system).await,
                 Provider::Qwen => self.complete_openai(messages, tools, system).await,
+                Provider::QwenCoding => self.complete_openai(messages, tools, system).await,
                 Provider::XiaomiMimo => self.complete_openai(messages, tools, system).await,
                 Provider::Sakana => self.complete_openai(messages, tools, system).await,
                 Provider::Minimax => {
@@ -1558,8 +1586,12 @@ impl LlmClient {
             Provider::XAI => "https://api.x.ai".to_string(),
             Provider::Cerebras => "https://api.cerebras.ai".to_string(),
             Provider::Moonshot => "https://api.moonshot.ai".to_string(),
+            Provider::KimiCode => kimi_code::KIMI_CODE_BASE_URL.to_string(),
+            Provider::GlmCoding => glm_coding::GLM_CODING_BASE_URL.to_string(),
+            Provider::MinimaxCoding => minimax_coding::MINIMAX_CODING_BASE_URL.to_string(),
             Provider::Zai => resolve_zai_base_url(),
             Provider::Qwen => resolve_qwen_base_url(),
+            Provider::QwenCoding => qwen_coding::QWEN_CODING_BASE_URL.to_string(),
             Provider::Minimax => minimax::MINIMAX_INFERENCE_BASE_GLOBAL.to_string(),
             Provider::XiaomiMimo => "https://api.xiaomimimo.com/v1".to_string(),
             Provider::Sakana => "https://api.sakana.ai/v1".to_string(),
@@ -1669,8 +1701,12 @@ impl LlmClient {
                 Provider::XAI => self.stream_openai(messages, tools, system).await,
                 Provider::Cerebras => self.stream_openai(messages, tools, system).await,
                 Provider::Moonshot => self.stream_openai(messages, tools, system).await,
+                Provider::KimiCode => self.stream_openai(messages, tools, system).await,
+                Provider::GlmCoding => self.stream_openai(messages, tools, system).await,
+                Provider::MinimaxCoding => self.stream_minimax_coding(messages, tools, system).await,
                 Provider::Zai => self.stream_openai(messages, tools, system).await,
                 Provider::Qwen => self.stream_openai(messages, tools, system).await,
+                Provider::QwenCoding => self.stream_openai(messages, tools, system).await,
                 Provider::XiaomiMimo => self.stream_openai(messages, tools, system).await,
                 Provider::Sakana => self.stream_openai(messages, tools, system).await,
                 Provider::Minimax => {
@@ -1754,8 +1790,12 @@ impl LlmClient {
             Provider::XAI => self.stream_openai(messages, tools, system).await,
             Provider::Cerebras => self.stream_openai(messages, tools, system).await,
                 Provider::Moonshot => self.stream_openai(messages, tools, system).await,
+                Provider::KimiCode => self.stream_openai(messages, tools, system).await,
+                Provider::GlmCoding => self.stream_openai(messages, tools, system).await,
+                Provider::MinimaxCoding => self.stream_minimax_coding(messages, tools, system).await,
                 Provider::Zai => self.stream_openai(messages, tools, system).await,
                 Provider::Qwen => self.stream_openai(messages, tools, system).await,
+                Provider::QwenCoding => self.stream_openai(messages, tools, system).await,
                 Provider::XiaomiMimo => self.stream_openai(messages, tools, system).await,
                 Provider::Sakana => self.stream_openai(messages, tools, system).await,
                 Provider::Minimax => {
@@ -1786,7 +1826,7 @@ impl LlmClient {
             // Providers with OpenAI-compatible embedding endpoints
             Provider::Together | Provider::Fireworks | Provider::Groq | Provider::Mistral
             | Provider::DeepSeek | Provider::XAI | Provider::Cerebras
-            | Provider::Moonshot | Provider::Zai | Provider::Qwen => {
+            | Provider::Moonshot | Provider::KimiCode | Provider::GlmCoding | Provider::Zai | Provider::Qwen | Provider::QwenCoding => {
                 self.embed_openai_compat(input, model).await
             }
             _ => Err(Error::Llm(format!(
@@ -1998,6 +2038,52 @@ impl LlmClient {
                 total_tokens,
             },
         })
+    }
+
+    async fn complete_minimax_coding(
+        &self,
+        messages: &[Message],
+        tools: &[ToolSchema],
+        system: Option<&str>,
+    ) -> Result<LlmResponse> {
+        let AuthMethod::ApiKey(api_key) = &self.auth else {
+            return Err(Error::Llm("MINIMAX_CODING_API_KEY not set".to_string()));
+        };
+
+        minimax::complete_minimax(
+            &self.client,
+            &self.model,
+            messages,
+            tools,
+            system,
+            api_key,
+            None,
+            "global",
+        )
+        .await
+    }
+
+    async fn stream_minimax_coding(
+        &self,
+        messages: &[Message],
+        tools: &[ToolSchema],
+        system: Option<&str>,
+    ) -> Result<(mpsc::Receiver<String>, tokio::task::JoinHandle<LlmResponse>)> {
+        let AuthMethod::ApiKey(api_key) = &self.auth else {
+            return Err(Error::Llm("MINIMAX_CODING_API_KEY not set".to_string()));
+        };
+
+        minimax::stream_minimax(
+            &self.client,
+            &self.model,
+            messages,
+            tools,
+            system,
+            api_key,
+            None,
+            "global",
+        )
+        .await
     }
 
     // ========================================================================
@@ -2810,10 +2896,11 @@ impl LlmClient {
                 let truncated: Vec<_> = non_system.into_iter().map(|mut m| {
                     if let Some(content) = m.get("content").and_then(|c| c.as_str()) {
                         if content.len() > 50_000 {
+                            let end = zeus_core::floor_char_boundary(content, 500);
                             m["content"] = serde_json::json!(format!(
                                 "[Content truncated: {} chars → 500 char summary]\n{}",
                                 content.len(),
-                                &content[..500.min(content.len())]
+                                &content[..end]
                             ));
                         }
                     }
@@ -2880,12 +2967,59 @@ impl LlmClient {
 
         // #44-c static gate: skip tool injection for providers that don't support tools.
         let static_tools_supported = capabilities::capabilities(&self.provider).supports_tools;
-        if !tools.is_empty() && static_tools_supported {
+
+        // #357: For Ollama, consult per-model capabilities from /api/show.
+        // This overrides the provider-wide static defaults with the model's
+        // actual metadata — a model that doesn't declare "tools" in its
+        // capabilities array won't get tool injection, and parallel_tool_calls
+        // is only set when the model is known to handle it.
+        let ollama_dynamic_tools_supported = if self.provider == Provider::Ollama {
+            let resolver = ollama::OllamaResolver::new(
+                self.client.clone(),
+                self.base_url.clone(),
+            );
+            match crate::capabilities::ModelCapabilityResolver::resolve(&resolver, &self.model).await {
+                Some(caps) => {
+                    if !caps.supports_tools && !tools.is_empty() {
+                        tracing::debug!(
+                            model = %self.model,
+                            "ollama dynamic caps: supports_tools=false — tools stripped from request"
+                        );
+                    }
+                    Some(caps)
+                }
+                None => None, // probe failed — fall back to static defaults
+            }
+        } else {
+            None
+        };
+
+        let tools_effectively_supported = if self.provider == Provider::Ollama {
+            ollama_dynamic_tools_supported
+                .as_ref()
+                .map(|c| c.supports_tools)
+                .unwrap_or(static_tools_supported)
+        } else {
+            static_tools_supported
+        };
+
+        if !tools.is_empty() && tools_effectively_supported {
             body["tools"] = openai_tools;
             body["tool_choice"] = serde_json::json!("auto");
-            // GLM/ZAI doesn't support parallel_tool_calls
+            // parallel_tool_calls: skip for ZAI (doesn't support it) and for
+            // Ollama models that don't declare parallel tool support (#357).
             if self.provider != Provider::Zai {
-                body["parallel_tool_calls"] = serde_json::json!(true);
+                let allow_parallel = if self.provider == Provider::Ollama {
+                    ollama_dynamic_tools_supported
+                        .as_ref()
+                        .map(|c| c.supports_parallel_tools)
+                        .unwrap_or(false) // conservative default for Ollama
+                } else {
+                    true
+                };
+                if allow_parallel {
+                    body["parallel_tool_calls"] = serde_json::json!(true);
+                }
             }
         }
         self.inject_response_format(&mut body);
@@ -2969,9 +3103,10 @@ impl LlmClient {
                 let truncated: Vec<_> = non_system.into_iter().map(|mut m| {
                     if let Some(content) = m.get("content").and_then(|c| c.as_str()) {
                         if content.len() > 50_000 {
+                            let end = zeus_core::floor_char_boundary(content, 500);
                             m["content"] = serde_json::json!(format!(
                                 "[Content truncated: {} chars → 500 char summary]\n{}",
-                                content.len(), &content[..500.min(content.len())]
+                                content.len(), &content[..end]
                             ));
                         }
                     }
@@ -3034,11 +3169,53 @@ impl LlmClient {
 
         // #44-c static gate: skip tool injection for providers that don't support tools.
         let static_tools_supported = capabilities::capabilities(&self.provider).supports_tools;
-        if !tools.is_empty() && static_tools_supported {
+
+        // #357: For Ollama, consult per-model capabilities from /api/show.
+        let ollama_dynamic_tools_supported = if self.provider == Provider::Ollama {
+            let resolver = ollama::OllamaResolver::new(
+                self.client.clone(),
+                self.base_url.clone(),
+            );
+            match crate::capabilities::ModelCapabilityResolver::resolve(&resolver, &self.model).await {
+                Some(caps) => {
+                    if !caps.supports_tools && !tools.is_empty() {
+                        tracing::debug!(
+                            model = %self.model,
+                            "ollama dynamic caps: supports_tools=false — tools stripped from stream request"
+                        );
+                    }
+                    Some(caps)
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+
+        let tools_effectively_supported = if self.provider == Provider::Ollama {
+            ollama_dynamic_tools_supported
+                .as_ref()
+                .map(|c| c.supports_tools)
+                .unwrap_or(static_tools_supported)
+        } else {
+            static_tools_supported
+        };
+
+        if !tools.is_empty() && tools_effectively_supported {
             body["tools"] = openai_tools;
             body["tool_choice"] = serde_json::json!("auto");
             if self.provider != Provider::Zai {
-                body["parallel_tool_calls"] = serde_json::json!(true);
+                let allow_parallel = if self.provider == Provider::Ollama {
+                    ollama_dynamic_tools_supported
+                        .as_ref()
+                        .map(|c| c.supports_parallel_tools)
+                        .unwrap_or(false)
+                } else {
+                    true
+                };
+                if allow_parallel {
+                    body["parallel_tool_calls"] = serde_json::json!(true);
+                }
             }
         }
         self.inject_response_format(&mut body);
@@ -3343,7 +3520,7 @@ impl LlmClient {
     }
 
     fn sanitize_tool_pairs_for_provider(messages: &[Message], provider: &Provider) -> Vec<Message> {
-        let strip_orphans = *provider == Provider::Moonshot || *provider == Provider::Minimax;
+        let strip_orphans = *provider == Provider::Moonshot || *provider == Provider::Minimax || *provider == Provider::MinimaxCoding;
 
         // Phase 1: Collect all valid tool_call IDs from assistant messages
         let mut all_tool_call_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -4599,7 +4776,7 @@ impl LlmClient {
             }
         }
         // Fallback: raw body (truncated to avoid filling the chat window)
-        let truncated = if body.len() > 200 { &body[..200] } else { body };
+        let truncated = if body.len() > 200 { &body[..zeus_core::floor_char_boundary(body, 200)] } else { body };
         format!("Gemini API error {}: {}", status, truncated)
     }
 
@@ -6827,6 +7004,7 @@ pub(crate) fn map_openrouter_entry(
         supports_tools,
         supports_embeddings: false,
         supports_system_prompt: true,
+        supports_parallel_tools: false, // OpenRouter doesn't expose this signal
         context_length,
         family,
         thinking_mode_temperature_lock,

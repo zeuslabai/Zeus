@@ -1,0 +1,13 @@
+[Unit]
+Description=Poll origin/main every 60s and redeploy PRISM on change
+
+[Timer]
+# First run 60s after boot, then every 60s after each run completes.
+OnBootSec=60
+OnUnitActiveSec=60
+# Don't stack runs if a deploy is still in flight.
+AccuracySec=5s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

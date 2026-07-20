@@ -177,6 +177,57 @@ pub fn capabilities(provider: &Provider) -> ProviderCapabilities {
             context_window: 262_144,
             max_output_tokens: 4096,
         },
+        Provider::KimiCode => ProviderCapabilities {
+            api_format: ApiFormat::OpenAI,
+            auth_methods: &[AuthType::ApiKey],
+            supports_tools: true,
+            supports_vision: false,
+            supports_thinking: true,
+            supports_streaming: true,
+            supports_parallel_tools: true,
+            supports_audit_logging: false,
+            supports_mid_loop_interrupt: false,
+            bot_sender_min_iterations: 5,
+            skip_temperature: false,
+            skip_v1_prefix: false,
+            skip_parallel_tool_calls: false,
+            context_window: 1_000_000,
+            max_output_tokens: 8192,
+        },
+        Provider::GlmCoding => ProviderCapabilities {
+            api_format: ApiFormat::OpenAI,
+            auth_methods: &[AuthType::ApiKey],
+            supports_tools: true,
+            supports_vision: false,
+            supports_thinking: true,
+            supports_streaming: true,
+            supports_parallel_tools: true,
+            supports_audit_logging: false,
+            supports_mid_loop_interrupt: false,
+            bot_sender_min_iterations: 5,
+            skip_temperature: false,
+            skip_v1_prefix: false,
+            skip_parallel_tool_calls: false,
+            context_window: 1_000_000,
+            max_output_tokens: 8192,
+        },
+        Provider::MinimaxCoding => ProviderCapabilities {
+            api_format: ApiFormat::Anthropic,
+            auth_methods: &[AuthType::ApiKey],
+            supports_tools: true,
+            supports_vision: false,
+            supports_thinking: false,
+            supports_streaming: true,
+            supports_parallel_tools: true,
+            supports_audit_logging: false,
+            supports_mid_loop_interrupt: false,
+            bot_sender_min_iterations: 5,
+            skip_temperature: false,
+            skip_v1_prefix: false,
+            skip_parallel_tool_calls: false,
+            context_window: 1_000_000,
+            max_output_tokens: 8192,
+        },
         Provider::Zai => ProviderCapabilities {
             api_format: ApiFormat::OpenAI,
             auth_methods: &[AuthType::ApiKey],
@@ -210,6 +261,23 @@ pub fn capabilities(provider: &Provider) -> ProviderCapabilities {
             skip_parallel_tool_calls: false,
             context_window: 1_000_000,
             max_output_tokens: 4096,
+        },
+        Provider::QwenCoding => ProviderCapabilities {
+            api_format: ApiFormat::OpenAI,
+            auth_methods: &[AuthType::ApiKey],
+            supports_tools: true,
+            supports_vision: false,
+            supports_thinking: true,
+            supports_streaming: true,
+            supports_parallel_tools: true,
+            supports_audit_logging: false,
+            supports_mid_loop_interrupt: false,
+            bot_sender_min_iterations: 5,
+            skip_temperature: false,
+            skip_v1_prefix: false,
+            skip_parallel_tool_calls: false,
+            context_window: 1_000_000,
+            max_output_tokens: 8192,
         },
         Provider::Minimax => ProviderCapabilities {
             api_format: ApiFormat::Anthropic, // uses Anthropic Messages API
@@ -456,7 +524,7 @@ pub fn supports_image_input(provider: &Provider, model: &str) -> Result<bool, St
     // GLM model family (Zai provider) does not support vision.
     // The catalog lists "glm-5" and "glm-4.7" but variants like "glm-5.1"
     // won't match — catch them by prefix.
-    if provider == &Provider::Zai && model.starts_with("glm") {
+    if (*provider == Provider::Zai || *provider == Provider::GlmCoding) && model.starts_with("glm") {
         return Err(format!(
             "Model {} does not support image input — GLM models are text-only. Use a vision-capable variant or switch providers",
             model
@@ -502,6 +570,10 @@ pub struct DynamicModelCapabilities {
     pub supports_embeddings: bool,
     /// Model accepts a system prompt role
     pub supports_system_prompt: bool,
+    /// Model supports parallel tool calls (multiple tools in one response).
+    /// When `false`, callers should omit `parallel_tool_calls` from the
+    /// request body. Defaults `false` — opt-in per model.
+    pub supports_parallel_tools: bool,
     /// Native context window length, if discoverable
     pub context_length: Option<usize>,
     /// Model family string (e.g. "llama3.2", "gemma4", "nomic-embed")
@@ -519,6 +591,7 @@ impl Default for DynamicModelCapabilities {
             supports_tools: false,
             supports_embeddings: false,
             supports_system_prompt: true,
+            supports_parallel_tools: false,
             context_length: None,
             family: String::new(),
             thinking_mode_temperature_lock: None,
@@ -726,7 +799,9 @@ mod tests {
             Provider::Moonshot,
             Provider::Zai,
             Provider::Qwen,
+            Provider::QwenCoding,
             Provider::Minimax,
+            Provider::MinimaxCoding,
             Provider::OpenRouter,
             Provider::Groq,
             Provider::Mistral,

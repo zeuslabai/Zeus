@@ -8,10 +8,21 @@ use reqwest::{header::RETRY_AFTER, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+pub const TUI_CHAT_SESSION_ID: &str = "agent:main:main";
+
 const CHAT_RATE_LIMIT_MAX_RETRIES: usize = 3;
 const CHAT_RATE_LIMIT_DEFAULT_DELAY: Duration = Duration::from_secs(1);
 const CHAT_RATE_LIMIT_MAX_DELAY: Duration = Duration::from_secs(5);
 
+fn normalize_session_chat_role(role: &str) -> Option<&'static str> {
+    match role.trim().to_ascii_lowercase().as_str() {
+        "system" => Some("system"),
+        "user" => Some("user"),
+        "assistant" => Some("assistant"),
+        "tool" | "toolcall" | "tool_call" => Some("tool"),
+        _ => None,
+    }
+}
 
 /// Typed SSE events emitted by `chat_stream`.
 ///
@@ -1104,7 +1115,6 @@ impl ApiClient {
     {
         use futures_util::StreamExt;
 
-        const TUI_CHAT_SESSION_ID: &str = "agent:main:main";
         const MAX_STREAM_HISTORY_MESSAGES: usize = 24;
 
         #[derive(serde::Serialize)]
@@ -1118,22 +1128,22 @@ impl ApiClient {
         struct OaiMsg { role: String, content: String }
 
         let session_id = TUI_CHAT_SESSION_ID.to_string();
-        let mut messages = self
+        let mut messages: Vec<OaiMsg> = self
             .session_messages(&session_id)
             .await
             .unwrap_or_default()
             .into_iter()
-            .filter(|m| !m.content.trim().is_empty())
-            .filter(|m| matches!(m.role.as_str(), "system" | "user" | "assistant" | "tool"))
+            .filter_map(|m| {
+                let role = normalize_session_chat_role(&m.role)?;
+                if m.content.trim().is_empty() {
+                    return None;
+                }
+                Some(OaiMsg { role: role.to_string(), content: m.content })
+            })
             .rev()
             .take(MAX_STREAM_HISTORY_MESSAGES)
             .collect::<Vec<_>>();
         messages.reverse();
-
-        let mut messages: Vec<OaiMsg> = messages
-            .into_iter()
-            .map(|m| OaiMsg { role: m.role, content: m.content })
-            .collect();
         messages.push(OaiMsg { role: "user".to_string(), content: message.to_string() });
 
         let req = OaiReq {
@@ -1648,7 +1658,7 @@ mod chat_error_tests {
                     req.starts_with("GET /v1/sessions/agent:main:main "),
                     "expected session history fetch first, got: {req}"
                 );
-                let body = r#"{"messages":[{"role":"user","content":"remember lightdm"},{"role":"assistant","content":"noted"}]}"#;
+                let body = r#"{"messages":[{"role":"User","content":"remember lightdm"},{"role":"Assistant","content":"noted"}]}"#;
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     body.len(), body

@@ -143,7 +143,13 @@ impl ToolHandler {
         let tools: Vec<ToolDefinition> =
             schemas.iter().map(|s| self.schema_to_tool_def(s)).collect();
 
-        McpResponse::success(request.id, json!({ "tools": tools }))
+        McpResponse::success(
+            request.id,
+            json!({
+                "tools": tools,
+                "_meta": zeus_core::BuildInfo::meta_json(),
+            }),
+        )
     }
 
     /// Handle tools/call request

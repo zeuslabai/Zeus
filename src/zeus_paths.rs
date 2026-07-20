@@ -31,10 +31,7 @@ pub fn zeus_home() -> PathBuf {
     // No $ZEUS_HOME, no $HOME, no passwd entry (chroot/jail edge case):
     // fall back to a per-uid dir that this uid can always create — never a
     // path potentially owned by root or another user.
-    #[cfg(unix)]
-    let uid = unsafe { libc::getuid() };
-    #[cfg(not(unix))]
-    let uid = 0u32;
+    let uid = current_uid();
     PathBuf::from(format!("/var/tmp/zeus-uid{uid}")).join(".zeus")
 }
 
@@ -44,4 +41,15 @@ pub fn zeus_home() -> PathBuf {
 /// Used by both the writer (`gateway_lock.rs`) and readers (`daemon.rs`).
 pub fn zeus_pid_path() -> PathBuf {
     zeus_home().join("gateway.pid")
+}
+
+/// Current numeric uid — 0 on non-unix targets (#308: Windows has no uid;
+/// the value is only used for diagnostics and fallback path naming).
+pub fn current_uid() -> u32 {
+    #[cfg(unix)]
+    unsafe {
+        libc::getuid()
+    }
+    #[cfg(not(unix))]
+    0u32
 }

@@ -302,6 +302,83 @@ pub async fn onchain_transfer(
 }
 
 // ---------------------------------------------------------------------------
+// POST /v1/wallet/onchain/transfer/preview
+// ---------------------------------------------------------------------------
+
+/// Preview an on-chain SPL token transfer — runs `build_transfer_plan` only.
+///
+/// Returns the plan (from/to/amount/fee estimate/balance-after) without
+/// executing any transaction. The UI renders this plan, then the user
+/// confirms via `POST /v1/wallet/onchain/transfer`.
+///
+/// Same devnet guard and validation as `onchain_transfer`, but never
+/// submits a transaction (keypair is loaded read-only for plan derivation).
+pub async fn onchain_transfer_preview(
+    Json(req): Json<OnchainTransferRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let rpc_url = require_env("ZEUS_SOLANA_RPC_URL")?;
+
+    // ── Devnet guard ──────────────────────────────────────────────────
+    if !rpc_url.contains("devnet") {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "On-chain transfers are only allowed on devnet. \
+             Refusing to execute against non-devnet RPC."
+                .to_string(),
+        ));
+    }
+
+    let mint_str = require_env("ZEUS_SOLANA_MINT")?;
+    let decimals: u8 = optional_env("ZEUS_SOLANA_DECIMALS", "6")
+        .parse()
+        .unwrap_or(6);
+
+    // Validate recipient address
+    let _recipient_pubkey = parse_pubkey(&req.recipient)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid recipient: {e}")))?;
+
+    if req.amount == 0 {
+        return Err((StatusCode::BAD_REQUEST, "Amount must be > 0".to_string()));
+    }
+
+    // Load keypair for plan derivation (read-only — no submission)
+    let keypair_bytes = load_keypair_bytes()?;
+    // Validate keypair bytes are well-formed (unused beyond this check)
+    let _sender = Keypair::try_from(&keypair_bytes[..])
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Bad keypair: {e}")))?;
+
+    let params = TransferParams {
+        sender_keypair_bytes: keypair_bytes.clone(),
+        recipient: req.recipient.clone(),
+        mint: mint_str,
+        amount: req.amount,
+        decimals,
+        rpc_url: rpc_url.clone(),
+    };
+
+    let plan = build_transfer_plan(&params)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Preflight failed: {e}")))?;
+
+    let cluster = cluster_from_rpc_url(&rpc_url);
+
+    Ok(Json(json!({
+        "sender": plan.sender,
+        "recipient": plan.recipient,
+        "amount": plan.amount,
+        "mint": plan.mint,
+        "decimals": plan.decimals,
+        "sender_sol_lamports": plan.sender_sol_lamports,
+        "sender_token_balance": plan.sender_token_balance,
+        "token_balance_sufficient": plan.token_balance_sufficient,
+        "recipient_ata_exists": plan.recipient_ata_exists,
+        "ata_create_required": plan.ata_create_required,
+        "fee_estimate_lamports": 5000u64,  // base tx fee
+        "balance_after": plan.sender_token_balance.saturating_sub(plan.amount),
+        "cluster": cluster,
+    })))
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

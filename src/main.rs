@@ -7,6 +7,7 @@ mod agent_executor;
 mod benchmark;
 mod zeus_paths;
 
+#[cfg(any(unix, windows))]
 mod daemon;
 mod gateway;
 mod clock_sanity;
@@ -457,6 +458,17 @@ fn config_has_oauth_token(content: &str) -> bool {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // #434: Initialize build-info store so all crates (gateway, MCP, API)
+    // can report the running process's build SHA/version via BuildInfo::get().
+    // Must run before any subsystem that may surface build metadata.
+    // env!() resolves here because this crate owns build.rs; the values are
+    // then workspace-visible via the OnceLock (subcrates cannot read env!()).
+    zeus_core::BuildInfo::init(
+        env!("GIT_SHA"),
+        env!("ZEUS_BUILD_EPOCH").parse().unwrap_or(0),
+        env!("CARGO_PKG_VERSION"),
+    );
+
     // ── Credential loading: config.toml is the SOLE source of truth.
     // No .env file. No credentials.json generation.
     // credentials.json is only written by OAuthManager::login_with_token() during onboarding.
@@ -739,6 +751,7 @@ async fn main() -> Result<()> {
                 channel_prompt: existing_gw.channel_prompt.clone(),
                 fleet_channel_id: existing_gw.fleet_channel_id.clone(),
                 api_token: existing_gw.api_token.clone(),
+                service_id: existing_gw.service_id.clone(),
                 cors_origins: existing_gw.cors_origins.clone(),
                 allow_peer_tagging: existing_gw.allow_peer_tagging,
             };
@@ -850,15 +863,23 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Some(Commands::Daemon { action }) => {
-            let da = match action {
-                DaemonCommand::Install => daemon::DaemonAction::Install,
-                DaemonCommand::Uninstall => daemon::DaemonAction::Uninstall,
-                DaemonCommand::Start => daemon::DaemonAction::Start,
-                DaemonCommand::Stop => daemon::DaemonAction::Stop,
-                DaemonCommand::Restart { fresh } => daemon::DaemonAction::Restart { fresh },
-                DaemonCommand::Status => daemon::DaemonAction::Status,
-            };
-            daemon::run_daemon(da).await
+            #[cfg(any(unix, windows))]
+            {
+                let da = match action {
+                    DaemonCommand::Install => daemon::DaemonAction::Install,
+                    DaemonCommand::Uninstall => daemon::DaemonAction::Uninstall,
+                    DaemonCommand::Start => daemon::DaemonAction::Start,
+                    DaemonCommand::Stop => daemon::DaemonAction::Stop,
+                    DaemonCommand::Restart { fresh } => daemon::DaemonAction::Restart { fresh },
+                    DaemonCommand::Status => daemon::DaemonAction::Status,
+                };
+                daemon::run_daemon(da).await
+            }
+            #[cfg(not(any(unix, windows)))]
+            {
+                let _ = action;
+                anyhow::bail!("Daemon management is not supported on this platform. Use 'zeus serve' instead.")
+            }
         }
         Some(Commands::Completion { shell }) => {
             use clap::CommandFactory;
@@ -967,6 +988,7 @@ async fn run_tui(
     // stderr destination (same file launchd points StandardErrorPath at).
     let log_dir = zeus_paths::zeus_home().join("logs");
     std::fs::create_dir_all(&log_dir).ok();
+    #[cfg(unix)]
     if let Ok(log_file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -977,6 +999,27 @@ async fn run_tui(
         unsafe {
             libc::dup2(fd, 2); // redirect stderr (fd 2) to log file
             libc::close(fd);
+        }
+    }
+    // Windows equivalent (#308): retarget the process STD_ERROR_HANDLE at the
+    // same consolidated error.log. Rust's std::io::stderr resolves the handle
+    // via GetStdHandle per write, and child processes inherit it, so this
+    // covers eprintln!, dependency output, and subprocess stderr just like the
+    // dup2 path above. The raw handle is intentionally leaked — it must stay
+    // valid for the life of the process.
+    #[cfg(windows)]
+    if let Ok(log_file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("error.log"))
+    {
+        use std::os::windows::io::IntoRawHandle;
+        let handle = log_file.into_raw_handle();
+        unsafe {
+            windows_sys::Win32::System::Console::SetStdHandle(
+                windows_sys::Win32::System::Console::STD_ERROR_HANDLE,
+                handle as _,
+            );
         }
     }
 
@@ -1138,6 +1181,18 @@ fn spawn_gateway_detached() {
             }
             Ok(())
         });
+    }
+    // Windows equivalent (#308): CREATE_NEW_PROCESS_GROUP detaches the child
+    // from this console's Ctrl+C group (the setsid analog for signal
+    // delivery) and CREATE_NO_WINDOW prevents a console window from
+    // flashing up — stdout/stderr are already redirected to the log files
+    // above, and stdin is null, so the child needs no console at all.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
     }
 
     match cmd.spawn() {
@@ -1904,6 +1959,36 @@ async fn run_doctor(config: Config, repair: bool) -> Result<()> {
             );
         } else {
             println!("[WARN] Rate limiting: DISABLED — gateway is unprotected");
+        }
+    }
+
+    // 7. #434: Running-process vs disk-repo staleness check
+    // Compares the embedded build SHA against `git rev-parse --short HEAD`
+    // resolved from the current working directory. Divergence means the disk
+    // binary was updated (or the repo advanced) after the running process
+    // started — a stale process won't see new tool registrations / fixes.
+    {
+        let running_sha = env!("GIT_SHA");
+        let disk_sha = std::process::Command::new("git")
+            .args(["rev-parse", "--short", "HEAD"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+        match disk_sha {
+            Some(disk) if disk == running_sha => {
+                println!("[OK] Build SHA: {} (disk matches running process)", running_sha);
+            }
+            Some(disk) => {
+                println!(
+                    "[WARN] Build SHA drift: running process built from {}, disk repo at {} — restart to pick up new code",
+                    running_sha, disk
+                );
+                println!("       (binary swap ≠ process restart; see `zeus help update`)");
+            }
+            None => {
+                println!("[INFO] Build SHA: {} (could not resolve disk repo — not in a git worktree?)", running_sha);
+            }
         }
     }
 

@@ -25,6 +25,7 @@
 
 pub mod ai_agent;
 pub mod cdp;
+pub mod meet;
 pub mod page_cache;
 pub mod stealth;
 pub mod tools;
@@ -66,13 +67,13 @@ mod tests {
     #[test]
     fn test_create_browser_tools() {
         let (schemas, _browser) = create_browser_tools("http://localhost:9222");
-        assert_eq!(schemas.len(), 12);
+        assert_eq!(schemas.len(), 13);
     }
 
     #[test]
     fn test_create_browser_tools_custom_url() {
         let (schemas, _browser) = create_browser_tools("http://127.0.0.1:9333");
-        assert_eq!(schemas.len(), 12);
+        assert_eq!(schemas.len(), 13);
     }
 
     #[test]

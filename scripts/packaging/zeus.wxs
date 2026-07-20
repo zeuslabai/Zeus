@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Zeus — Windows MSI installer source (#396 P4).
+
+  Built with wixl (msitools), NOT the real WiX toolset: wixl only supports a
+  subset of WiX syntax (verified directly: `Directory` is not a valid
+  CustomAction attribute in wixl 0.106, unlike real WiX; use `FileKey`
+  instead, see build-msi.sh for the substrate-walk notes). This file is kept
+  wixl-compatible on purpose so it builds cross-platform from macOS/Linux with
+  no Windows box required.
+
+  Placeholders (VERSION, UPGRADE_CODE, COMPONENT_GUID) are substituted by
+  build-msi.sh via sed before invoking wixl: wixl's -D define only reaches
+  preprocessor vars, not attribute values directly in all wixl releases, so
+  templating via sed keeps this working across wixl versions (same pattern
+  P2's nfpm.yaml templating used for the same reason: don't assume templating
+  reaches every field, verify then work around it).
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="Zeus"
+           Language="1033"
+           Version="__VERSION__"
+           Manufacturer="Zeus Labs"
+           UpgradeCode="__UPGRADE_CODE__">
+
+    <Package InstallerVersion="200"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Description="Zeus Agent Platform"
+             Comments="Installs the Zeus CLI/gateway and registers the ZeusGateway Task Scheduler task" />
+
+    <Media Id="1" Cabinet="zeus.cab" EmbedCab="yes" />
+
+    <!-- Upgrade handling: a newer version replaces an older one in place. -->
+    <Upgrade Id="__UPGRADE_CODE__">
+      <UpgradeVersion Minimum="0.0.0.0" Maximum="__VERSION__" IncludeMinimum="yes" IncludeMaximum="no"
+                       Property="PREVIOUSVERSIONSINSTALLED" />
+    </Upgrade>
+    <InstallExecuteSequence>
+      <RemoveExistingProducts After="InstallInitialize" />
+    </InstallExecuteSequence>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFilesFolder">
+        <Directory Id="INSTALLDIR" Name="Zeus">
+          <Component Id="MainExecutable" Guid="__COMPONENT_GUID__">
+            <File Id="ZeusExe" Name="zeus.exe" Source="zeus.exe" KeyPath="yes" />
+            <Environment Id="PATH" Name="PATH" Value="[INSTALLDIR]" Permanent="no"
+                         Part="last" Action="set" System="yes" />
+          </Component>
+          <Component Id="LicenseFile" Guid="__LICENSE_GUID__">
+            <File Id="LicenseTxt" Name="LICENSE.txt" Source="LICENSE.txt" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <Feature Id="MainFeature" Title="Zeus" Level="1">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="LicenseFile" />
+    </Feature>
+
+    <!--
+      Custom action: registers the Task Scheduler service the same way #308's
+      windows daemon.rs `zeus daemon install` does natively (schtasks /Create
+      /TN ZeusGateway /TR "zeus.exe gateway" /SC ONLOGON /F) — the installer
+      just invokes the already-shipped binary's own install path instead of
+      re-implementing schtasks logic in WiX/XML. Deferred + impersonate=no so
+      it runs with the installer's elevated context (schtasks task creation
+      needs admin for ONLOGON scope in some configs).
+
+      FileKey (not a Directory attribute — verified: wixl 0.106 rejects
+      Directory on CustomAction with a GObject property error) resolves the
+      working exe path from the File element above.
+    -->
+    <CustomAction Id="InstallDaemonService" FileKey="ZeusExe"
+                  ExeCommand="daemon install"
+                  Execute="deferred" Return="ignore" Impersonate="no" />
+
+    <!--
+      Uninstall parity: best-effort daemon uninstall before files are removed.
+      Return="ignore" — if the task was never registered (e.g. install-only
+      run, service never started) this must not fail the uninstall.
+    -->
+    <CustomAction Id="UninstallDaemonService" FileKey="ZeusExe"
+                  ExeCommand="daemon uninstall"
+                  Execute="deferred" Return="ignore" Impersonate="no" />
+
+    <InstallExecuteSequence>
+      <Custom Action="InstallDaemonService" After="InstallFiles">NOT Installed</Custom>
+      <Custom Action="UninstallDaemonService" Before="RemoveFiles">Installed AND NOT UPGRADINGPRODUCTCODE</Custom>
+    </InstallExecuteSequence>
+
+  </Product>
+</Wix>

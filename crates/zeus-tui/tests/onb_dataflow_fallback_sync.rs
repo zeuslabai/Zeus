@@ -13,11 +13,11 @@
 //! Separate file = conflict-free with the other onb_*.rs files.
 
 use crossterm::event::KeyCode;
-use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use zeus_tui::App;
+use ratatui::Terminal;
 use zeus_tui::app::frame;
-use zeus_tui::screens::FallbackScreen;
+use zeus_tui::screens::{providers::PROVIDERS, FallbackScreen};
+use zeus_tui::App;
 
 fn render(app: &mut App) -> String {
     let backend = TestBackend::new(140, 44);
@@ -34,6 +34,13 @@ fn render(app: &mut App) -> String {
         out.push('\n');
     }
     out
+}
+
+fn provider_down_presses_for(id: &str) -> usize {
+    PROVIDERS
+        .iter()
+        .position(|p| p.id == id)
+        .unwrap_or_else(|| panic!("provider `{id}` must be present in canonical registry"))
 }
 
 /// Drive Welcome → Mode → Instance → Provider, pick the Nth provider, advance through
@@ -109,8 +116,9 @@ fn set_primary_is_case_insensitive() {
 
 #[test]
 fn fallback_candidates_exclude_glm_include_anthropic_when_glm_picked() {
-    // glm is provider index 6 in the canonical registry → 6 Down presses.
-    let mut app = walk_to_fallback_with_provider(6);
+    // Pick GLM by canonical provider id so this dataflow proof survives unrelated
+    // display-order changes, including adjacent PAYG/subscription card grouping.
+    let mut app = walk_to_fallback_with_provider(provider_down_presses_for("glm"));
     let s = render(&mut app).to_lowercase();
 
     // anthropic is no longer the primary, so it must be OFFERED as a candidate.

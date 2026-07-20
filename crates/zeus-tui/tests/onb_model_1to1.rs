@@ -126,6 +126,21 @@ fn minimax_catalog_current() {
 }
 
 #[test]
+fn minimax_coding_catalog_current() {
+    let s = render_model("minimax-coding");
+    for model in ["MiniMax-M2.5", "MiniMax-M3", "MiniMax-M2.7"] {
+        assert!(
+            s.contains(model),
+            "minimax-coding catalog must include {model}; got:\n{s}"
+        );
+    }
+    assert!(
+        s.contains("Subscription"),
+        "minimax-coding catalog must be labeled as subscription-priced; got:\n{s}"
+    );
+}
+
+#[test]
 fn kimi_catalog_dispatches() {
     let s = render_model("kimi");
     assert!(

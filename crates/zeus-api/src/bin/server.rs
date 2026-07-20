@@ -69,6 +69,18 @@ async fn main() -> anyhow::Result<()> {
     // Load Zeus config
     let config = Config::load().unwrap_or_default();
 
+    // #385: Read API auth token from config (set during onboarding).
+    // This replaces the old ZEUS_API_TOKEN env var — the token is generated
+    // during onboarding and persisted in config.toml under [gateway] api_token.
+    if api_config.auth_token.is_none() {
+        if let Some(ref gateway) = config.gateway {
+            if let Some(ref token) = gateway.api_token {
+                api_config.auth_token = Some(token.clone());
+                tracing::info!("#385: Using API auth token from config.toml");
+            }
+        }
+    }
+
     // Initialize workspace
     let workspace = Workspace::from_config(&config);
     workspace.init().await?;

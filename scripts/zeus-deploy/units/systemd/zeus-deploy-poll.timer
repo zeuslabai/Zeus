@@ -1,0 +1,12 @@
+[Unit]
+Description=Poll origin/main and deploy Zeus when main moves
+Documentation=file:/home/zeus/Zeus/scripts/zeus-deploy/README.md
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=60s
+AccuracySec=10s
+Unit=zeus-deploy-poll.service
+
+[Install]
+WantedBy=timers.target

@@ -17,14 +17,14 @@ pulldown-cmark = { workspace = true }
 crossterm = "0.28"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
-reqwest = { version = "0.12", features = ["json", "stream", "blocking"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "blocking", "rustls-tls"] }
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
 unicode-width = "0.2"
 dirs = "6"
-tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 zeus-pantheon-server = { path = "../zeus-pantheon-server" }
 hmac = "0.12"
 sha2 = "0.10"

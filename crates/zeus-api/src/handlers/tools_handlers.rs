@@ -27,7 +27,10 @@ pub async fn list_tools(State(state): State<SharedState>) -> Json<Value> {
         })
         .collect();
 
-    Json(json!({ "tools": tools }))
+    Json(json!({
+        "tools": tools,
+        "_meta": zeus_core::BuildInfo::meta_json(),
+    }))
 }
 
 pub async fn execute_tool(

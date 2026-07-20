@@ -570,6 +570,7 @@ impl BrowserRegistry {
         registry.register(Box::new(BrowserEnableStealthTool {
             browser: browser.clone(),
         }));
+        registry.register(Box::new(crate::meet::GoogleMeetTool::new(browser.clone())));
 
         registry
     }
@@ -815,21 +816,21 @@ mod tests {
     #[test]
     fn test_registry_creation() {
         let registry = BrowserRegistry::with_tools(make_browser());
-        assert_eq!(registry.len(), 12);
+        assert_eq!(registry.len(), 13);
         assert!(!registry.is_empty());
     }
 
     #[test]
     fn test_registry_default() {
         let registry = BrowserRegistry::default();
-        assert_eq!(registry.len(), 12);
+        assert_eq!(registry.len(), 13);
     }
 
     #[test]
     fn test_registry_schemas() {
         let registry = BrowserRegistry::with_tools(make_browser());
         let schemas = registry.schemas();
-        assert_eq!(schemas.len(), 12);
+        assert_eq!(schemas.len(), 13);
 
         // Verify all expected tool names are present
         let names: Vec<&str> = schemas.iter().map(|s| s.name.as_str()).collect();
@@ -851,7 +852,7 @@ mod tests {
     fn test_registry_list() {
         let registry = BrowserRegistry::with_tools(make_browser());
         let names = registry.list();
-        assert_eq!(names.len(), 12);
+        assert_eq!(names.len(), 13);
     }
 
     #[test]

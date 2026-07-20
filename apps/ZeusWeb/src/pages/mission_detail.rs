@@ -148,11 +148,11 @@ pub fn MissionDetailPage() -> impl IntoView {
                                                 </div>
                                             </div>
                                             <div style="font-size: 12px; color: rgba(255,245,240,0.5); white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto;">
-                                                {if turn.content.len() > 800 { format!("{}...", &turn.content[..800]) } else { turn.content.clone() }}
+                                                {if turn.content.len() > 800 { format!("{}...", api::truncate_str(&turn.content, 800)) } else { turn.content.clone() }}
                                             </div>
                                             {(!turn.tool_results.is_empty()).then(|| view! {
                                                 <div style="margin-top: 6px; padding: 6px 10px; background: rgba(255,255,255,0.03); border-radius: 4px; font-size: 10px; color: rgba(255,245,240,0.4); font-family: 'Orbitron', monospace; max-height: 100px; overflow-y: auto;">
-                                                    {if turn.tool_results.len() > 500 { format!("{}...", &turn.tool_results[..500]) } else { turn.tool_results.clone() }}
+                                                    {if turn.tool_results.len() > 500 { format!("{}...", api::truncate_str(&turn.tool_results, 500)) } else { turn.tool_results.clone() }}
                                                 </div>
                                             })}
                                         </div>
@@ -182,7 +182,7 @@ pub fn MissionDetailPage() -> impl IntoView {
                                             <div style={format!("width: 6px; height: 6px; border-radius: 50%; background: {}; flex-shrink: 0;", status_color)} />
                                             <span style="font-family: 'Orbitron', monospace; font-size: 11px; color: rgba(255,245,240,0.9); min-width: 120px;">{t.name.clone()}</span>
                                             <span style="flex: 1; font-size: 11px; color: rgba(255,245,240,0.4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                                                {if t.output.len() > 120 { format!("{}...", &t.output[..120]) } else { t.output.clone() }}
+                                                {if t.output.len() > 120 { format!("{}...", api::truncate_str(&t.output, 120)) } else { t.output.clone() }}
                                             </span>
                                             {(t.duration_ms > 0).then(|| view! {
                                                 <span style="font-size: 9px; color: rgba(255,245,240,0.2); white-space: nowrap;">{format!("{}ms", t.duration_ms)}</span>

@@ -63,8 +63,25 @@ const SERVICES: &[Service] = &[
     Service { id: "launchd", name: "launchd", glyph: "MAC", color: theme::FIRE_ORANGE, sub: "macOS native (recommended)", path: Some("~/Library/LaunchAgents/ai.zeuslab.gateway.plist") },
     Service { id: "systemd", name: "systemd", glyph: "LIN", color: theme::GREEN, sub: "Linux native", path: Some("/etc/systemd/system/zeus-gateway.service") },
     Service { id: "rcd", name: "rc.d", glyph: "BSD", color: theme::CYAN, sub: "FreeBSD native", path: Some("/usr/local/etc/rc.d/zeus_gateway") },
+    Service { id: "schtasks", name: "Task Scheduler", glyph: "WIN", color: theme::BLUE, sub: "Windows native", path: Some("Task Scheduler: ZeusGateway") },
     Service { id: "manual", name: "Manual start", glyph: "—", color: theme::DIM, sub: "I'll start zeus manually", path: None },
 ];
+
+#[cfg(target_os = "macos")]
+const DEFAULT_SERVICE_MODE: usize = 0;
+#[cfg(target_os = "linux")]
+const DEFAULT_SERVICE_MODE: usize = 1;
+#[cfg(target_os = "freebsd")]
+const DEFAULT_SERVICE_MODE: usize = 2;
+#[cfg(target_os = "windows")]
+const DEFAULT_SERVICE_MODE: usize = 3;
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "windows"
+)))]
+const DEFAULT_SERVICE_MODE: usize = 4;
 
 /// Feature toggle entry.
 struct Feature {
@@ -93,7 +110,7 @@ pub struct GatewayScreen {
     pub focused_field: usize,
     /// Feature toggles (agent_processing, webui, mcp)
     pub features: [bool; 3],
-    /// Selected service mode index (0=launchd, 1=systemd, 2=rcd, 3=manual)
+    /// Selected service mode index (0=launchd, 1=systemd, 2=rc.d, 3=Task Scheduler, 4=manual)
     pub service_mode: usize,
     /// Whether port 8080 is detected in use
     pub port_in_use: bool,
@@ -109,6 +126,18 @@ impl Default for GatewayScreen {
 }
 
 impl GatewayScreen {
+    pub fn service_mode_for_id(id: &str) -> Option<usize> {
+        SERVICES.iter().position(|service| service.id == id)
+    }
+
+    pub fn service_path_for_id(id: &str) -> Option<&'static str> {
+        SERVICES.iter().find(|service| service.id == id).and_then(|service| service.path)
+    }
+
+    pub fn default_service_mode() -> usize {
+        DEFAULT_SERVICE_MODE
+    }
+
     pub fn new() -> Self {
         Self {
             host: "127.0.0.1".to_string(),
@@ -116,7 +145,7 @@ impl GatewayScreen {
             focused_field: 0,
             cursor_on: false,
             features: [true, true, false],
-            service_mode: 0,
+            service_mode: DEFAULT_SERVICE_MODE,
             port_in_use: false,
         }
     }
@@ -288,7 +317,9 @@ impl Widget for &GatewayScreen {
 
         // Service cards in a row
         let gap = 2;
-        let card_width = inner.width.saturating_sub(gap * 3) / 4;
+        let service_count = SERVICES.len() as u16;
+        let total_gap = gap * service_count.saturating_sub(1);
+        let card_width = inner.width.saturating_sub(total_gap) / service_count;
         for (idx, service) in SERVICES.iter().enumerate() {
             let x = inner.x + (idx as u16 * (card_width + gap));
             if card_width < 4 || x >= inner.x.saturating_add(inner.width) {
@@ -426,8 +457,18 @@ mod cursor_tests {
         );
         assert!(
             dump.contains("launchd") && dump.contains("systemd") && dump.contains("rc.d"),
-            "service card names must render at {width}x{height}:\n{dump}"
+            "unix service card names must render at {width}x{height}:\n{dump}"
         );
+        assert!(
+            dump.contains("WIN"),
+            "windows service card glyph must render at {width}x{height}:\n{dump}"
+        );
+        if width >= 100 {
+            assert!(
+                dump.contains("Task Scheduler"),
+                "windows service card name must render at {width}x{height}:\n{dump}"
+            );
+        }
         assert!(
             dump.contains("WILL INSTALL ~/Library/LaunchAgents/ai.zeuslab")
                 && (dump.contains("ai.zeuslab.gateway.plist") || dump.contains("…")),

@@ -619,11 +619,19 @@ impl ToolRegistry {
             ToolSchema::new("collect_spawns", "Wait for all spawned background subagents to complete and return their collected results. Call this after spawning multiple agents to gather their outputs for synthesis. Returns a JSON array of subagent results with id, success, output, and iterations.")
                 .with_param("timeout_seconds", "integer", "Maximum seconds to wait for all subagents (default: 300)", false),
 
-            ToolSchema::new("message", "Send a message or file through a channel. NOTE: you do NOT need this to reply in a channel that already addressed you — your normal response text is automatically delivered back to that channel. Use this only to reach a DIFFERENT channel or target than the one you're in. Platform channels (require config): 'telegram', 'discord', 'slack', 'email', 'imessage', 'irc', 'matrix', 'whatsapp', 'signal', 'mattermost', 'x_twitter'. Simple channels: 'file' (writes to ~/.zeus/notifications.md), 'file:/path' (custom file), 'webhook:URL' (POST to URL), 'console' (print). To send a file attachment, provide 'attachment' with the file path. To post to X (Twitter): use channel 'x_twitter' with the tweet text as content — this is the ONLY way to post to X. It uses the X API v2 create_tweet endpoint (POST /2/tweets) internally. Do NOT call the X API yourself via shell/curl, and never use the retired v1.1 statuses/update.json endpoint.")
+            ToolSchema::new("message", "Send a message or file through a channel. NOTE: you do NOT need this to reply in a channel that already addressed you — your normal response text is automatically delivered back to that channel. Use this only to reach a DIFFERENT channel or target than the one you're in. Platform channels (require config): 'telegram', 'discord', 'slack', 'email', 'imessage', 'irc', 'matrix', 'whatsapp', 'signal', 'mattermost', 'x_twitter'. Simple channels: 'file' (writes to ~/.zeus/notifications.md), 'file:/path' (custom file), 'webhook:URL' (POST to URL), 'console' (print). To send a file attachment, provide 'attachment' with the file path. To post to X (Twitter): use channel 'x_twitter' with the tweet text as content — this is the ONLY way to post to X. It uses the X API v2 create_tweet endpoint (POST /2/tweets) internally. Attach images/video by passing 'media' (array of local file paths) and optional 'alt_text'; pass 'target' as a tweet ID to post an illustrated reply/thread. Do NOT call the X API yourself via shell/curl, and never use the retired v1.1 statuses/update.json endpoint.")
                 .with_param("channel", "string", "Channel: 'telegram', 'discord', 'slack', 'email', 'imessage', 'file', 'file:/path', 'webhook:URL', 'x_twitter', or 'console'", true)
                 .with_param("content", "string", "Message content (or caption when sending a file). For 'x_twitter' this is the tweet text (posted via API v2 create_tweet).", true)
                 .with_param("target", "string", "Target: chat_id (telegram/discord/slack), email address, phone number, etc. Not required for 'x_twitter' (posts to the configured account's timeline; pass a tweet ID to reply).", false)
-                .with_param("attachment", "string", "Path to a file to send as attachment (audio, image, document, etc.)", false),
+                .with_param("attachment", "string", "Path to a file to send as attachment (audio, image, document, etc.)", false)
+                .with_param("media", "array", "x_twitter only: array of local image/video file paths to attach to the tweet (png/jpg/gif/webp/mp4, max 4). When present the tweet posts with media via the X API v2 upload + create_tweet flow.", false)
+                .with_param("alt_text", "string", "x_twitter only: optional accessibility (alt) text for the attached media.", false),
+
+            ToolSchema::new("x_twitter", "Post to X (Twitter) using the configured x_twitter channel adapter. This is the first-class tool form of message(channel='x_twitter'); pass target to reply to an existing tweet. Supports attaching media via the media param (an illustrated tweet), and threads via target reply-to.")
+                .with_param("content", "string", "Tweet text to post via the X API v2 create_tweet endpoint.", true)
+                .with_param("target", "string", "Optional tweet ID to reply to. Omit to post to the configured account's timeline.", false)
+                .with_param("media", "array", "Optional array of local image/video file paths to attach to the tweet (png/jpg/gif/webp/mp4, max 4). Files are uploaded via the X API v2 media endpoint and attached to the tweet.", false)
+                .with_param("alt_text", "string", "Optional accessibility (alt) text for the attached media.", false),
 
             ToolSchema::new("send_file", "Send a file (audio, image, document) to a channel. Audio files (.aiff, .wav, .mp3) sent to Discord are auto-converted to OGG/Opus voice messages. Use this tool to send attachments — do NOT use spawn for this.")
                 .with_param("path", "string", "Path to the file to send", true)
@@ -743,6 +751,78 @@ impl ToolRegistry {
         ]
     }
 
+    /// Extract `media` (array of local file paths) and `alt_text` from tool
+    /// args, read each file into memory, and post to X with media attached.
+    ///
+    /// Returns `Ok(Some(reply_suffix_note))` when media was present and the
+    /// tweet posted, `Ok(None)` when no `media` key was supplied (caller should
+    /// fall back to the text-only path), and `Err` on any read/upload/post
+    /// failure — media posts are all-or-nothing, never a silent text-only
+    /// fallback after the caller asked for media.
+    async fn x_twitter_post_with_media(
+        channels: &zeus_channels::ChannelManager,
+        args: &Value,
+        content: &str,
+        target: Option<&str>,
+    ) -> Result<Option<String>> {
+        let media_val = match args.get("media") {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let paths: Vec<&str> = media_val
+            .as_array()
+            .ok_or_else(|| {
+                zeus_core::Error::Tool("'media' must be an array of file paths".to_string())
+            })?
+            .iter()
+            .map(|p| {
+                p.as_str().ok_or_else(|| {
+                    zeus_core::Error::Tool("'media' entries must be path strings".to_string())
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if paths.is_empty() {
+            return Ok(None);
+        }
+
+        let alt_text = args.get("alt_text").and_then(|a| a.as_str());
+
+        // Read each file; filename is used for MIME inference in the adapter.
+        let mut files: Vec<zeus_channels::MediaFile> = Vec::with_capacity(paths.len());
+        for path in paths {
+            let data = tokio::fs::read(path).await.map_err(|e| {
+                zeus_core::Error::Tool(format!("Failed to read media file '{path}': {e}"))
+            })?;
+            let filename = std::path::Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(path)
+                .to_string();
+            // MIME is inferred from the filename in the adapter; pass empty to
+            // signal inference.
+            files.push((filename, data, String::new()));
+        }
+
+        let mut source = zeus_channels::ChannelSource::new("x_twitter", "agent");
+        if let Some(t) = target.filter(|t| !t.is_empty()) {
+            source.reply_to_message_id = Some(t.to_string());
+        }
+        channels
+            .send_media(&source, &files, Some(content), alt_text)
+            .await
+            .map_err(|e| zeus_core::Error::Tool(format!("Failed to post media to x_twitter: {e}")))?;
+
+        let reply_suffix = target
+            .filter(|t| !t.is_empty())
+            .map(|t| format!(" in reply to {t}"))
+            .unwrap_or_default();
+        Ok(Some(format!(
+            "Message sent via x_twitter with {} media item(s){}",
+            files.len(),
+            reply_suffix
+        )))
+    }
+
     #[instrument(skip(self, args))]
     pub async fn execute(&self, name: &str, args: Value) -> Result<String> {
         // Try core tools first
@@ -832,6 +912,14 @@ impl ToolRegistry {
                     | "irc" | "matrix" | "whatsapp" | "signal" | "mattermost" | "mqtt"
                     | "x_twitter" => {
                         if let Some(ref channels) = self.channels {
+                            // Media present (X only)? upload + attach via send_media.
+                            if channel_spec == "x_twitter"
+                                && let Some(msg) =
+                                    Self::x_twitter_post_with_media(channels, &args, content, target)
+                                        .await?
+                            {
+                                return Ok(msg);
+                            }
                             // X has no chat concept — an optional target is a
                             // tweet ID to reply to.
                             let source = if channel_spec == "x_twitter" {
@@ -878,6 +966,40 @@ impl ToolRegistry {
                     }
                 }
             }
+            "twitter" | "x_twitter" => {
+                let content = args
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .ok_or_else(|| tool_err!(validation, "Missing 'content' argument"))?;
+                let target = args.get("target").and_then(|t| t.as_str());
+
+                if let Some(ref channels) = self.channels {
+                    // Media present? upload + attach via send_media (all-or-nothing).
+                    if let Some(msg) =
+                        Self::x_twitter_post_with_media(channels, &args, content, target).await?
+                    {
+                        return Ok(msg);
+                    }
+                    let mut source = zeus_channels::ChannelSource::new("x_twitter", "agent");
+                    if let Some(t) = target.filter(|t| !t.is_empty()) {
+                        source.reply_to_message_id = Some(t.to_string());
+                    }
+                    channels
+                        .send(&source, content)
+                        .await
+                        .map_err(|e| tool_err!(tool, "Failed to post to x_twitter: {}", e))?;
+                    let reply_suffix = target
+                        .filter(|t| !t.is_empty())
+                        .map(|t| format!(" in reply to {t}"))
+                        .unwrap_or_default();
+                    return Ok(format!("Message sent via x_twitter{reply_suffix}"));
+                }
+
+                return Err(zeus_core::Error::Tool(
+                    "x_twitter requires the configured x_twitter channel adapter                     (API v2 create_tweet); configure [channels.x_twitter] credentials                     in config.toml and restart."
+                        .to_string(),
+                ));
+            }
             "send_file" => {
                 // send_file is intercepted upstream in Agent::execute_tools() before
                 // reaching this registry. If we get here, it means send_file was called
@@ -886,6 +1008,17 @@ impl ToolRegistry {
                 return Ok("send_file: no channel context available in this execution scope. \
                     File uploads must go through the agent loop (not subagents or skills). \
                     Write the file to disk and report its path instead.".to_string());
+            }
+            "send_rich" => {
+                let Some(ref channels) = self.channels else {
+                    return Ok("send_rich: no channel manager configured in this execution scope. \
+                        Use through the agent loop, or configure channels and restart.".to_string());
+                };
+                let result = send_rich_to_channel(&args, channels).await;
+                if result.success {
+                    return Ok(result.output);
+                }
+                return Err(tool_err!(tool, "{}", result.output));
             }
             "link_understanding" => return link_understanding(args).await,
             "media_understanding" => return media_understanding(args).await,
@@ -1737,7 +1870,40 @@ async fn python_exec(args: Value) -> Result<String> {
 
 /// Find the system python3 binary. Returns a graceful error if not installed.
 async fn which_python3() -> Result<String> {
+    // On Windows, `which` doesn't exist and `python3` usually isn't on PATH —
+    // the realistic candidates are `py` (the official launcher) and `python`.
+    // `where` is the Windows equivalent of `which` but can print multiple
+    // matches (one per line); take the first. Fall back to a direct
+    // `--version` probe per candidate in case `where` itself is unavailable
+    // or misbehaves in a given shell context.
+    #[cfg(target_os = "windows")]
+    {
+        for candidate in &["py", "python", "python3"] {
+            if let Ok(out) = Command::new("where").arg(candidate).output().await
+                && out.status.success()
+            {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if let Some(first_line) = stdout.lines().next() {
+                    let path = first_line.trim().to_string();
+                    if !path.is_empty() {
+                        return Ok(path);
+                    }
+                }
+            }
+        }
+        // `where` failed or found nothing — probe candidates directly.
+        for candidate in &["py", "python", "python3"] {
+            if let Ok(out) = Command::new(candidate).arg("--version").output().await
+                && out.status.success()
+            {
+                return Ok(candidate.to_string());
+            }
+        }
+        return Err(tool_err!(tool, "python is not installed on this system (checked py/python/python3). Install it to use python_exec."));
+    }
+
     // Try common locations in order
+    #[cfg(not(target_os = "windows"))]
     for candidate in &["python3", "python"] {
         if let Ok(out) = Command::new("which").arg(candidate).output().await
             && out.status.success()
@@ -1748,6 +1914,7 @@ async fn which_python3() -> Result<String> {
             }
         }
     }
+    #[cfg(not(target_os = "windows"))]
     Err(tool_err!(tool, "python3 is not installed on this system. Install it to use python_exec."))
 }
 
@@ -1769,9 +1936,21 @@ async fn shell(args: Value) -> Result<String> {
     );
 
     // Use login shell (-l) so PATH includes ~/.cargo/bin, homebrew, etc.
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
-    let mut cmd = Command::new(&shell);
-    cmd.arg("-lc").arg(command);
+    // On Windows there is no $SHELL / -lc convention — use cmd.exe /C instead.
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+        let mut c = Command::new(&shell);
+        c.arg("/C").arg(command);
+        c
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
+        let mut c = Command::new(&shell);
+        c.arg("-lc").arg(command);
+        c
+    };
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.kill_on_drop(true);
@@ -2577,7 +2756,7 @@ async fn link_understanding(args: Value) -> Result<String> {
         } else {
             result.push_str(&format!(
                 "## Raw Content\n{}\n",
-                &body[..body.len().min(5000)]
+                &body[..zeus_core::floor_char_boundary(&body, 5000)]
             ));
         }
     } else {
@@ -4434,6 +4613,7 @@ mod tests {
     // aliases) through the ChannelManager to the adapter — no live post.
     struct RecordingXAdapter {
         sent: Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>,
+        media: Arc<std::sync::Mutex<Vec<(usize, String, Option<String>)>>>,
     }
 
     #[async_trait::async_trait]
@@ -4467,13 +4647,31 @@ mod tests {
                 .push((content.to_string(), to.reply_to_message_id.clone()));
             Ok(())
         }
+        async fn send_media(
+            &self,
+            to: &zeus_channels::ChannelSource,
+            files: &[zeus_channels::MediaFile],
+            caption: Option<&str>,
+            _alt_text: Option<&str>,
+        ) -> zeus_core::Result<()> {
+            self.media.lock().unwrap().push((
+                files.len(),
+                caption.unwrap_or("").to_string(),
+                to.reply_to_message_id.clone(),
+            ));
+            Ok(())
+        }
     }
 
     fn registry_with_x_recorder(
     ) -> (ToolRegistry, Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>) {
         let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let media = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut manager = ChannelManager::new(8);
-        manager.add_adapter(Box::new(RecordingXAdapter { sent: sent.clone() }));
+        manager.add_adapter(Box::new(RecordingXAdapter {
+            sent: sent.clone(),
+            media,
+        }));
         let mut reg = ToolRegistry::with_defaults();
         reg.set_channels(Arc::new(manager));
         (reg, sent)
@@ -4535,6 +4733,97 @@ mod tests {
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].0, "reply text");
         assert_eq!(recorded[0].1.as_deref(), Some("1234567890"));
+    }
+
+    // ── #420 message/x_twitter media: routes files → send_media ──
+
+    fn registry_with_x_media_recorder(
+    ) -> (ToolRegistry, Arc<std::sync::Mutex<Vec<(usize, String, Option<String>)>>>) {
+        let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let media = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut manager = ChannelManager::new(8);
+        manager.add_adapter(Box::new(RecordingXAdapter {
+            sent,
+            media: media.clone(),
+        }));
+        let mut reg = ToolRegistry::with_defaults();
+        reg.set_channels(Arc::new(manager));
+        (reg, media)
+    }
+
+    #[tokio::test]
+    async fn test_message_x_twitter_media_routes_to_send_media() {
+        let (reg, media) = registry_with_x_media_recorder();
+
+        // Real files on disk so the tool reads bytes before send_media.
+        let dir = TempDir::new().unwrap();
+        let img = dir.path().join("pic.png");
+        std::fs::write(&img, b"\x89PNG\r\n\x1a\n").unwrap();
+
+        let out = reg
+            .execute(
+                "message",
+                serde_json::json!({
+                    "channel": "x_twitter",
+                    "content": "illustrated tweet",
+                    "media": [img.to_str().unwrap()],
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(
+            out.contains("media item"),
+            "output should report the media post: {out}"
+        );
+
+        let recorded = media.lock().unwrap();
+        assert_eq!(recorded.len(), 1, "media should route to send_media");
+        assert_eq!(recorded[0].0, 1, "one file attached");
+        assert_eq!(recorded[0].1, "illustrated tweet");
+    }
+
+    #[tokio::test]
+    async fn test_x_twitter_tool_media_with_reply() {
+        let (reg, media) = registry_with_x_media_recorder();
+
+        let dir = TempDir::new().unwrap();
+        let img = dir.path().join("shot.png");
+        std::fs::write(&img, b"\x89PNG\r\n\x1a\n").unwrap();
+
+        let out = reg
+            .execute(
+                "x_twitter",
+                serde_json::json!({
+                    "content": "thread reply with image",
+                    "target": "4242424242",
+                    "media": [img.to_str().unwrap()],
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(out.contains("in reply to 4242424242"), "out: {out}");
+
+        let recorded = media.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].2.as_deref(), Some("4242424242"), "reply id carried");
+    }
+
+    #[tokio::test]
+    async fn test_x_twitter_media_missing_file_errors_not_silent() {
+        let (reg, media) = registry_with_x_media_recorder();
+        // A nonexistent media path must error (never silently post text-only
+        // after the caller explicitly asked for media).
+        let res = reg
+            .execute(
+                "x_twitter",
+                serde_json::json!({
+                    "content": "should fail",
+                    "media": ["/nonexistent/definitely-not-here.png"],
+                }),
+            )
+            .await;
+        assert!(res.is_err(), "missing media file must error");
+        assert!(media.lock().unwrap().is_empty(), "no send_media on failure");
     }
 
     // ── #165 capability self-audit: manifest tests ──
@@ -4911,6 +5200,54 @@ mod tests {
         ];
         for name in &expected {
             assert!(names.contains(name), "Missing tool: {}", name);
+        }
+    }
+
+    #[derive(Default)]
+    struct NoopTriggerExecutor;
+
+    #[async_trait::async_trait]
+    impl zeus_core::TriggerExecutor for NoopTriggerExecutor {
+        async fn execute(&self, _tool_name: &str, _input: &serde_json::Value) -> Result<String> {
+            Ok("noop trigger executor".to_string())
+        }
+    }
+
+    async fn assert_core_tool_has_dispatch(tool_name: &str) {
+        let mut registry = ToolRegistry::with_defaults();
+        registry.set_trigger(Arc::new(NoopTriggerExecutor));
+        let args = match tool_name {
+            "apply_patch" => serde_json::json!({ "patch": "", "dry_run": true }),
+            _ => serde_json::json!({}),
+        };
+
+        let err = registry
+            .execute(tool_name, args)
+            .await
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(
+            !err.contains("Unknown tool"),
+            "advertised core tool {tool_name} must resolve to a ToolRegistry handler"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_advertised_core_tools_resolve_to_registry_handlers() {
+        let registry = ToolRegistry::with_defaults();
+        let names: Vec<String> = registry.core_schemas().into_iter().map(|s| s.name).collect();
+        assert!(
+            names.iter().any(|name| name == "send_rich"),
+            "send_rich must stay advertised"
+        );
+        assert!(
+            names.iter().any(|name| name == "x_twitter"),
+            "x_twitter must be in the default tool list"
+        );
+
+        for name in names {
+            assert_core_tool_has_dispatch(&name).await;
         }
     }
 

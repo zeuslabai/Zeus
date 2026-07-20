@@ -269,7 +269,7 @@ timeout = 30
                     timestamp: chrono::Utc::now(),
                     metadata: Some(serde_json::json!({
                         "expected": r.expected,
-                        "output_preview": if r.output.len() > 500 { &r.output[..500] } else { &r.output },
+                        "output_preview": if r.output.len() > 500 { &r.output[..zeus_core::floor_char_boundary(&r.output, 500)] } else { &r.output },
                     }).to_string()),
                 })
                 .collect();

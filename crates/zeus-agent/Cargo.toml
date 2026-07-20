@@ -7,7 +7,8 @@ license.workspace = true
 description = "Agent loop and tools for Zeus"
 
 [features]
-default = ["audio"]
+default = ["audio", "voice"]
+voice = ["zeus-channels/voice"]
 audio = ["zeus-channels/audio", "zeus-talos/audio"]
 matrix = ["zeus-channels/matrix"]
 

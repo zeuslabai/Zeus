@@ -20,6 +20,7 @@ mod db;
 pub mod docs;
 pub mod extensions;
 pub mod ide_bridge;
+pub mod identity;
 pub mod handlers;
 pub mod inbound;
 pub mod mdns;
@@ -343,6 +344,9 @@ pub struct AppState {
     pub workflow_states: Arc<DashMap<String, WorkflowState>>,
     /// Key rotation state for auth middleware
     pub key_rotation: Option<middleware::KeyRotation>,
+    /// Multi-identity auth store (#432) — token → principal → scope.
+    /// None = single-token legacy mode (backward compatible).
+    pub identity_store: Option<identity::IdentityStore>,
     /// Shared channel manager for inbound message routing
     pub channel_manager: Arc<ChannelManager>,
     /// Credential vault for skill API key injection (never exposed to LLM)
@@ -696,6 +700,18 @@ impl AppState {
                 tracing::warn!("Failed to init TOTP SQLite: {e}, using in-memory");
                 handlers::TotpStore::in_memory().expect("in-memory TOTP store should work")
             });
+        // #432: multi-identity auth store. Failure to open is NOT fatal — the
+        // gateway falls back to legacy single-token mode (identity_store: None).
+        let identity_store = match identity::IdentityStore::open(&config.workspace.join("identity.db")) {
+            Ok(store) => {
+                tracing::info!("multi-identity auth store ready (identity.db)");
+                Some(store)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to init identity SQLite: {e} — running in single-token legacy mode");
+                None
+            }
+        };
         let task_store = handlers::TaskStore::new(&config.workspace.join("tasks.db"))
             .unwrap_or_else(|e| {
                 tracing::warn!("Failed to init task SQLite: {e}, using in-memory");
@@ -755,6 +771,7 @@ impl AppState {
             orchestration_broadcast: OrchestrationBroadcast::new(256),
             workflow_states: Arc::new(DashMap::new()),
             key_rotation: None,
+            identity_store,
             channel_manager,
             trigger_engine,
             pairing_manager: pairing_mgr,

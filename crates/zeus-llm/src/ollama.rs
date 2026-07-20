@@ -485,6 +485,11 @@ pub struct ModelCapabilities {
     pub supports_embeddings: bool,
     /// Model accepts a system prompt role
     pub supports_system_prompt: bool,
+    /// Model supports parallel tool calls (multiple tools in one response).
+    /// Most Ollama models don't — only set true when the `capabilities`
+    /// array explicitly lists `"tools"` and the family is known to handle
+    /// parallel calls correctly.
+    pub supports_parallel_tools: bool,
     /// Native context window length, if discoverable
     pub context_length: Option<usize>,
     /// Model family string (e.g. "llama3.2", "gemma4", "nomic-embed")
@@ -498,6 +503,7 @@ impl Default for ModelCapabilities {
             supports_tools: false,
             supports_embeddings: false,
             supports_system_prompt: true, // most chat models support system prompts
+            supports_parallel_tools: false,
             context_length: None,
             family: String::new(),
         }
@@ -581,22 +587,48 @@ pub async fn query_model_capabilities(
         }
     }
 
-    // --- Vision: known multimodal model families ---
-    let supports_vision = model_lower.starts_with("llava")
+    // --- Primary signal: top-level `capabilities` array from /api/show ---
+    //
+    // Ollama exposes a `capabilities` array on every model, e.g.:
+    //   ["completion", "tools", "vision", "thinking"]
+    //   ["embedding"]
+    // This is the authoritative per-model signal — far more reliable than
+    // family-name heuristics. We parse it first and use it as the primary
+    // source of truth, falling back to the heuristics below only when the
+    // field is absent (older Ollama versions or custom modelfiles).
+    let declared_caps: Vec<String> = json
+        .get("capabilities")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let has_declared = |cap: &str| declared_caps.iter().any(|c| c == cap);
+
+    // --- Vision: declared capability OR known multimodal family fallback ---
+    let supports_vision = has_declared("vision")
+        || model_lower.starts_with("llava")
         || model_lower.starts_with("bakllava")
         || model_lower.starts_with("moondream")
         || model_lower.starts_with("llama3.2-vision")
         || model_lower.starts_with("minicpm-v");
 
-    // --- Embeddings: model_info signal OR known embedding families ---
+    // --- Embeddings: declared capability OR model_info signal OR known family ---
     let is_known_embedding_family = model_lower.starts_with("nomic-embed")
         || model_lower.starts_with("mxbai-embed")
         || model_lower.starts_with("all-minilm")
         || model_lower.starts_with("snowflake-arctic-embed");
-    let supports_embeddings = has_embedding_length || is_known_embedding_family;
+    let supports_embeddings =
+        has_declared("embedding") || has_embedding_length || is_known_embedding_family;
 
-    // --- Tools: modern chat model families that support function calling ---
-    let supports_tools = family == "llama3"
+    // --- Tools: declared capability OR known tool-capable family fallback ---
+    // When the `capabilities` array is present and lists "tools", that's
+    // authoritative. When it's absent (older Ollama), fall back to the
+    // family-name heuristic — preserving prior behavior exactly.
+    let supports_tools = has_declared("tools")
+        || family == "llama3"
         || family == "llama3.1"
         || family == "llama3.2"
         || family == "llama3.3"
@@ -612,13 +644,25 @@ pub async fn query_model_capabilities(
         || family == "phi"
         || family == "trading-gpt";
 
+    // --- Parallel tools: conservative — only when tools are declared AND
+    // the model family is known to handle parallel function calls well.
+    // Most Ollama models accept the param but produce poor results with
+    // parallel calls, so we default false and only opt in for families
+    // that have been verified to work. ---
+    let supports_parallel_tools = supports_tools
+        && has_declared("tools")
+        && (family == "qwen2.5"
+            || family == "qwen3.5"
+            || family == "gemma4"
+            || family == "glm-4");
+
     // --- System prompt: embedding models typically don't use system prompts ---
     let supports_system_prompt = !supports_embeddings;
 
     debug!(
-        "Ollama capabilities for {}: vision={}, tools={}, embeddings={}, system_prompt={}, ctx={:?}, family={}",
-        model, supports_vision, supports_tools, supports_embeddings, supports_system_prompt,
-        context_length, family
+        "Ollama capabilities for {}: vision={}, tools={}, parallel_tools={}, embeddings={}, system_prompt={}, ctx={:?}, family={}, declared={:?}",
+        model, supports_vision, supports_tools, supports_parallel_tools,
+        supports_embeddings, supports_system_prompt, context_length, family, declared_caps
     );
 
     Some(ModelCapabilities {
@@ -626,6 +670,7 @@ pub async fn query_model_capabilities(
         supports_tools,
         supports_embeddings,
         supports_system_prompt,
+        supports_parallel_tools,
         context_length,
         family,
     })
@@ -714,6 +759,7 @@ impl crate::capabilities::ModelCapabilityResolver for OllamaResolver {
             supports_tools: caps.supports_tools,
             supports_embeddings: caps.supports_embeddings,
             supports_system_prompt: caps.supports_system_prompt,
+            supports_parallel_tools: caps.supports_parallel_tools,
             context_length: caps.context_length,
             family: caps.family,
             // Ollama doesn't expose thinking-mode temperature locking via
@@ -1261,6 +1307,110 @@ mod tests {
         assert!(second.is_none(), "negative cache entry should survive");
     }
 
+    #[tokio::test]
+    async fn test_capabilities_array_tools_vision() {
+        // #357: The top-level `capabilities` array is the primary signal.
+        // A model declaring ["completion", "tools", "vision"] should get
+        // both tools and vision — even if its family isn't in the hardcoded
+        // fallback lists.
+        clear_capabilities_cache();
+        let url = spawn_show_mock_once(
+            "HTTP/1.1 200 OK",
+            r#"{"capabilities":["completion","tools","vision","thinking"],"model_info":{"some.context_length":131072}}"#,
+        )
+        .await;
+
+        let client = Client::new();
+        let caps = query_model_capabilities(&client, &url, "unknown-new-model:7b")
+            .await
+            .expect("should parse capabilities");
+
+        assert!(caps.supports_tools, "declared 'tools' capability should enable tools");
+        assert!(caps.supports_vision, "declared 'vision' capability should enable vision");
+        assert!(!caps.supports_embeddings, "no 'embedding' capability");
+        assert_eq!(caps.context_length, Some(131072));
+    }
+
+    #[tokio::test]
+    async fn test_capabilities_array_embedding_model() {
+        // A model declaring only ["embedding"] should not get tools or vision.
+        clear_capabilities_cache();
+        let url = spawn_show_mock_once(
+            "HTTP/1.1 200 OK",
+            r#"{"capabilities":["embedding"],"model_info":{"bert.context_length":2048,"bert.embedding_length":768}}"#,
+        )
+        .await;
+
+        let client = Client::new();
+        let caps = query_model_capabilities(&client, &url, "custom-embed:latest")
+            .await
+            .expect("should parse capabilities");
+
+        assert!(caps.supports_embeddings, "declared 'embedding' capability");
+        assert!(!caps.supports_tools, "embedding models don't support tools");
+        assert!(!caps.supports_vision, "embedding models don't support vision");
+        assert!(!caps.supports_system_prompt, "embedding models don't use system prompts");
+    }
+
+    #[tokio::test]
+    async fn test_capabilities_array_no_tools_field_falls_back() {
+        // When `capabilities` is absent (older Ollama), fall back to family
+        // heuristics. llama3.1 family should still get tools.
+        clear_capabilities_cache();
+        let url = spawn_show_mock_once(
+            "HTTP/1.1 200 OK",
+            r#"{"model_info":{"llama.context_length":8192}}"#,
+        )
+        .await;
+
+        let client = Client::new();
+        let caps = query_model_capabilities(&client, &url, "llama3.1:8b")
+            .await
+            .expect("should parse capabilities");
+
+        assert!(caps.supports_tools, "family fallback should enable tools for llama3.1");
+        assert!(!caps.supports_parallel_tools, "fallback should not enable parallel tools");
+    }
+
+    #[tokio::test]
+    async fn test_capabilities_parallel_tools_only_for_known_families() {
+        // qwen2.5 with declared "tools" should get parallel_tools=true.
+        clear_capabilities_cache();
+        let url = spawn_show_mock_once(
+            "HTTP/1.1 200 OK",
+            r#"{"capabilities":["completion","tools"],"model_info":{"qwen2.context_length":131072}}"#,
+        )
+        .await;
+
+        let client = Client::new();
+        let caps = query_model_capabilities(&client, &url, "qwen2.5:32b")
+            .await
+            .expect("should parse capabilities");
+
+        assert!(caps.supports_tools);
+        assert!(caps.supports_parallel_tools, "qwen2.5 with declared tools should get parallel");
+    }
+
+    #[tokio::test]
+    async fn test_capabilities_parallel_tools_false_for_llama() {
+        // llama3.1 declares "tools" but isn't in the parallel-tools family
+        // list — should get tools=true, parallel=false.
+        clear_capabilities_cache();
+        let url = spawn_show_mock_once(
+            "HTTP/1.1 200 OK",
+            r#"{"capabilities":["completion","tools"],"model_info":{"llama.context_length":8192}}"#,
+        )
+        .await;
+
+        let client = Client::new();
+        let caps = query_model_capabilities(&client, &url, "llama3.1:8b")
+            .await
+            .expect("should parse capabilities");
+
+        assert!(caps.supports_tools);
+        assert!(!caps.supports_parallel_tools, "llama3.1 should not get parallel tools");
+    }
+
     #[test]
     fn test_model_capabilities_default() {
         let caps = ModelCapabilities::default();
@@ -1268,6 +1418,7 @@ mod tests {
         assert!(!caps.supports_tools);
         assert!(!caps.supports_embeddings);
         assert!(caps.supports_system_prompt, "default should support system prompt");
+        assert!(!caps.supports_parallel_tools, "default should not support parallel tools");
         assert_eq!(caps.context_length, None);
         assert_eq!(caps.family, "");
     }

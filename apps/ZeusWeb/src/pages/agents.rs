@@ -161,7 +161,7 @@ pub fn AgentsPage() -> impl IntoView {
             };
             match api::dispatch_mission(&req).await {
                 Ok(r) => {
-                    dispatch_result.set(format!("Dispatched. Response: {}", &r.response[..120.min(r.response.len())]));
+                    dispatch_result.set(format!("Dispatched. Response: {}", api::truncate_str(&r.response, 120)));
                     task_msg.set(String::new());
                 }
                 Err(e) => dispatch_result.set(format!("Error: {}", e)),

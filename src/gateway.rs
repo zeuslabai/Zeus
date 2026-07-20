@@ -15,6 +15,14 @@ use zeus_llm::LlmClient;
 use zeus_memory::Workspace;
 use zeus_wallet::WalletKeypair;
 
+/// #407: char-safe truncation for log/queue previews. Naive byte-slicing
+/// (`&s[..n]`) panics when byte `n` lands mid-multibyte-char (e.g. an
+/// em-dash `—`, which is 3 UTF-8 bytes). This truncates on char boundaries
+/// instead, which is always safe regardless of where multibyte chars fall.
+fn char_safe_truncate(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect()
+}
+
 /// RAII guard that cancels its token on drop. Used by the typing-indicator
 /// helper so that any early return / `?` / panic path stops the heartbeat.
 pub struct TypingHeartbeatGuard(tokio_util::sync::CancellationToken);
@@ -139,7 +147,7 @@ async fn detect_task_with_llm(
                 debug!("LLM task detection: not a task assignment");
                 None
             } else {
-                info!("LLM detected task assignment: {}", &text[..text.len().min(80)]);
+                info!("LLM detected task assignment: {}", char_safe_truncate(text, 80));
                 Some(text.to_string())
             }
         }
@@ -679,6 +687,13 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
                     if let Some(mn) = agent_guard.mnemosyne() {
                         registry.set_memory(mn.clone(), agent_guard.session().id.clone());
                     }
+                    // Wire ChannelManager into the cook-path registry itself so
+                    // x_twitter / message tools work inside cooks. Sibling of #181's
+                    // memory fix: ToolRegistry::execute() checks the registry's own
+                    // `channels`, not just the executor wrapper's (used by send_file).
+                    if let Some(cm) = agent_guard.channel_manager() {
+                        registry.set_channels(cm);
+                    }
                     let mut ex = AgentToolExecutor::new(registry, None);
                     if let Some(cm) = agent_guard.channel_manager() {
                         ex = ex.with_channels(cm);
@@ -704,6 +719,11 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
                     // #181: same Mnemosyne wiring for the mission executor registry.
                     if let Some(mn) = agent_guard.mnemosyne() {
                         mission_registry.set_memory(mn.clone(), agent_guard.session().id.clone());
+                    }
+                    // Sibling of #181: wire channels into the mission registry itself
+                    // so cook/mission x_twitter & message tools reach the adapters.
+                    if let Some(cm) = agent_guard.channel_manager() {
+                        mission_registry.set_channels(cm);
                     }
                     let mut ex = AgentToolExecutor::new(mission_registry, None);
                     if let Some(cm) = agent_guard.channel_manager() {
@@ -1023,6 +1043,11 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
             // #181: wire Mnemosyne so Pantheon-mission tool calls can memory_store.
             if let Some(mn) = agent_guard.mnemosyne() {
                 registry.set_memory(mn.clone(), agent_guard.session().id.clone());
+            }
+            // Sibling of #181: wire channels into the Pantheon-mission registry itself
+            // so mission-dispatched x_twitter & message tools reach the adapters.
+            if let Some(cm) = agent_guard.channel_manager() {
+                registry.set_channels(cm);
             }
             let mut ex = AgentToolExecutor::new(registry, None);
             if let Some(cm) = agent_guard.channel_manager() {
@@ -3201,12 +3226,12 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
                                     match ws.get_current_task().await {
                                         Ok(None) => {
                                             // CURRENT TASK is empty — persist the detected task
-                                            let task_summary = if task_desc.len() > 200 {
-                                                format!("{}...", &task_desc[..200])
+                                            let task_summary = if task_desc.chars().count() > 200 {
+                                                format!("{}...", char_safe_truncate(&task_desc, 200))
                                             } else {
                                                 task_desc.clone()
                                             };
-                                            info!("Auto-detected task assignment: {}", &task_summary[..task_summary.len().min(80)]);
+                                            info!("Auto-detected task assignment: {}", char_safe_truncate(&task_summary, 80));
                                             // Write to HEARTBEAT.md — use set_current_task to preserve
                                             // all other sections (## tasks, ## Daily, ## Weekly, etc.)
                                             if let Err(e) = ws.set_current_task(&task_summary).await {
@@ -3245,12 +3270,12 @@ pub async fn run_gateway(mut config: Config, gateway: GatewayConfig) -> Result<(
                                         }
                                         Ok(Some(_existing)) => {
                                             // CURRENT TASK occupied — append to TASK QUEUE
-                                            let task_summary = if task_desc.len() > 200 {
-                                                format!("{}...", &task_desc[..200])
+                                            let task_summary = if task_desc.chars().count() > 200 {
+                                                format!("{}...", char_safe_truncate(&task_desc, 200))
                                             } else {
                                                 task_desc.clone()
                                             };
-                                            info!("CURRENT TASK occupied — queuing detected task: {}", &task_summary[..task_summary.len().min(80)]);
+                                            info!("CURRENT TASK occupied — queuing detected task: {}", char_safe_truncate(&task_summary, 80));
                                             if let Err(e) = ws.append_to_task_queue(&task_summary).await {
                                                 warn!("Failed to append task to TASK QUEUE: {}", e);
                                             } else {
@@ -4441,6 +4466,44 @@ fn classify_mid_loop_interrupt(content: &str) -> Option<MidLoopInterruptKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_char_safe_truncate_em_dash_at_80_boundary() {
+        // #407: em-dash `—` is 3 UTF-8 bytes. Naive `&s[..80]` panics when
+        // byte 80 lands mid-char. Construct a string where the em-dash's
+        // 3 bytes span exactly bytes 79/80/81, so byte offset 80 (the old
+        // `.min(80)` slice point) is a continuation byte, not a boundary.
+        let s = format!("{}—{}", "a".repeat(79), "b".repeat(20));
+        // Confirm byte 80 really is NOT a char boundary (proves the panic
+        // trigger is real, not a no-op test).
+        assert!(!s.is_char_boundary(80));
+        // Must not panic, and must not include a half-formed em-dash.
+        let truncated = char_safe_truncate(&s, 80);
+        assert!(truncated.chars().count() <= 80);
+        // The em-dash is the 80th char (0-indexed 79), so it must survive
+        // whole (not split into a lone continuation byte).
+        assert!(truncated.ends_with('—'));
+    }
+
+    #[test]
+    fn test_char_safe_truncate_em_dash_at_200_boundary() {
+        // #407: same case at the 200-byte boundary used by task_desc
+        // truncation (`&task_desc[..200]`). Em-dash bytes span 199/200/201.
+        let s = format!("{}—{}", "a".repeat(199), "b".repeat(20));
+        assert!(!s.is_char_boundary(200));
+        let truncated = char_safe_truncate(&s, 200);
+        assert!(truncated.chars().count() <= 200);
+        // The em-dash is the 200th char (0-indexed 199), so it must survive
+        // whole (not split into a lone continuation byte).
+        assert!(truncated.ends_with('—'));
+    }
+
+    #[test]
+    fn test_char_safe_truncate_short_string_unaffected() {
+        // Strings shorter than max_chars pass through unchanged.
+        let s = "short—string";
+        assert_eq!(char_safe_truncate(s, 80), s);
+    }
 
     #[test]
     fn test_config_nuke_debris_detection() {

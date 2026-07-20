@@ -1247,7 +1247,7 @@ impl PantheonStore {
         let room_id = format!("{}-room", mission_id);
         let room = super::pantheon::Room {
             id: room_id.clone(),
-            name: format!("Mission: {}", &goal[..goal.len().min(50)]),
+            name: format!("Mission: {}", &goal[..zeus_core::floor_char_boundary(goal, 50)]),
             description: Some(goal.to_string()),
             room_type: super::pantheon::RoomType::Public,
             mission_id: Some(mission_id.to_string()),
@@ -1810,6 +1810,22 @@ mod tests {
     async fn test_get_nonexistent() {
         let store = make_test_store();
         assert!(store.get("nope").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_create_mission_room_goal_truncation_multibyte_safe() {
+        // #408: &goal[..goal.len().min(50)] panics if byte 50 lands mid-char.
+        // Construct a goal string where an em-dash (3 UTF-8 bytes) straddles
+        // byte offset 50 exactly (bytes 49/50/51), so the old `.min(50)` byte
+        // slice would panic on a non-char-boundary.
+        let store = make_test_store();
+        let goal = format!("{}—{}", "a".repeat(49), "rest of the goal text");
+        assert!(!goal.is_char_boundary(50), "test setup must straddle byte 50");
+        // Must not panic.
+        let room_id = store.create_mission_room("m-utf8", &goal).await;
+        let room = store.get_room(&room_id).await.expect("room should exist");
+        assert!(room.name.starts_with("Mission: "));
+        assert!(std::str::from_utf8(room.name.as_bytes()).is_ok());
     }
 
     #[tokio::test]

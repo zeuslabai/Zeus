@@ -8,6 +8,7 @@ license.workspace = true
 
 [features]
 default = ["audio"]
+voice = ["dep:songbird"]
 audio = ["zeus-voice/audio"]
 matrix = ["dep:matrix-sdk"]
 
@@ -38,7 +39,7 @@ tracing = { workspace = true }
 grammers-client = { workspace = true }
 grammers-session = { workspace = true }
 serenity = { workspace = true }
-songbird = { workspace = true }
+songbird = { workspace = true, optional = true }
 lettre = { workspace = true }
 async-imap = { workspace = true }
 tokio-tungstenite = { workspace = true }

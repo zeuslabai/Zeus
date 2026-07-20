@@ -985,30 +985,234 @@ async fn show_status() -> Result<()> {
 }
 
 // ============================================================================
+// Windows (Task Scheduler)
+// ============================================================================
+//
+// Windows has no launchd/systemd analogue that can adopt a plain console exe
+// as a supervised service: `sc.exe` services must implement the SCM control
+// handshake (ServiceMain/SetServiceStatus), which the zeus binary does not.
+// Task Scheduler is the standard mechanism for auto-starting user-level
+// background processes, and mirrors the legacy macOS user-agent plist
+// semantics: start at logon, run as the installing user. Unlike launchd
+// KeepAlive there is no crash re-spawn supervision — acceptable for tier-1.
+//
+// NOTE (#308): this code is compile-gated via the x86_64-pc-windows-gnu
+// type-check; runtime behaviour still needs validation on real Windows
+// (schtasks argument quoting, exit codes, taskkill semantics).
+
+/// Task Scheduler task name for the gateway on Windows.
+#[cfg(target_os = "windows")]
+const WINDOWS_TASK_NAME: &str = "ZeusGateway";
+
+#[cfg(target_os = "windows")]
+async fn install_daemon() -> Result<()> {
+    let zeus_path = zeus_binary_path()?;
+    // /TR value carries its own embedded quotes so paths with spaces survive.
+    let task_run = format!("\"{}\" gateway", zeus_path.display());
+    let output = tokio::process::Command::new("schtasks")
+        .args([
+            "/Create",
+            "/TN",
+            WINDOWS_TASK_NAME,
+            "/TR",
+            &task_run,
+            "/SC",
+            "ONLOGON",
+            "/F",
+        ])
+        .output()
+        .await?;
+
+    if output.status.success() {
+        println!("Installed Task Scheduler task: {}", WINDOWS_TASK_NAME);
+        println!("The gateway will start automatically at logon.");
+        println!("Start it now with: zeus daemon start");
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Failed to create scheduled task: {}", stderr.trim());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+async fn uninstall_daemon() -> Result<()> {
+    // Best-effort stop first so the task isn't deleted out from under a
+    // running gateway.
+    let _ = stop_daemon().await;
+
+    let output = tokio::process::Command::new("schtasks")
+        .args(["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"])
+        .output()
+        .await?;
+
+    if output.status.success() {
+        println!("Removed Task Scheduler task: {}", WINDOWS_TASK_NAME);
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Failed to delete scheduled task: {}", stderr.trim());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+async fn start_daemon() -> Result<()> {
+    let output = tokio::process::Command::new("schtasks")
+        .args(["/Run", "/TN", WINDOWS_TASK_NAME])
+        .output()
+        .await?;
+
+    if output.status.success() {
+        println!("Daemon started via Task Scheduler ({})", WINDOWS_TASK_NAME);
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "Failed to start daemon (is the task installed? run `zeus daemon install`): {}",
+            stderr.trim()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+async fn stop_daemon() -> Result<()> {
+    // Step 1: End the scheduled task (stops task tracking; may not kill the
+    // spawned process tree on all Windows versions).
+    let _ = tokio::process::Command::new("schtasks")
+        .args(["/End", "/TN", WINDOWS_TASK_NAME])
+        .output()
+        .await;
+
+    // Step 2: Kill via PID file if present — /T takes the child tree, /F forces.
+    let pid_file = zeus_paths::zeus_pid_path();
+    if pid_file.exists() {
+        if let Ok(pid_str) = tokio::fs::read_to_string(&pid_file).await {
+            if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                let _ = tokio::process::Command::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .output()
+                    .await;
+            }
+        }
+        let _ = tokio::fs::remove_file(&pid_file).await;
+    }
+
+    // Step 3: Sweep any remaining `zeus gateway` processes by command line,
+    // excluding this CLI process itself (mirror of unix
+    // pkill_gateway_excluding_self). CIM CommandLine match is the only way to
+    // distinguish `zeus gateway` from other zeus.exe invocations.
+    let self_pid = std::process::id();
+    let ps_script = format!(
+        "Get-CimInstance Win32_Process -Filter \"Name = 'zeus.exe'\" | \
+         Where-Object {{ $_.CommandLine -match 'gateway' -and $_.ProcessId -ne {} }} | \
+         ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
+        self_pid
+    );
+    let _ = tokio::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
+        .output()
+        .await;
+
+    println!("Daemon stopped");
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+async fn show_status() -> Result<()> {
+    let output = tokio::process::Command::new("schtasks")
+        .args(["/Query", "/TN", WINDOWS_TASK_NAME, "/V", "/FO", "LIST"])
+        .output()
+        .await;
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for line in stdout.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("TaskName")
+                    || trimmed.starts_with("Status")
+                    || trimmed.starts_with("Last Run Time")
+                    || trimmed.starts_with("Task To Run")
+                {
+                    println!("  {}", trimmed);
+                }
+            }
+        }
+        _ => println!("Task: not installed ({})", WINDOWS_TASK_NAME),
+    }
+
+    // Live process check via the PID file.
+    let pid_file = zeus_paths::zeus_pid_path();
+    if let Ok(pid_str) = tokio::fs::read_to_string(&pid_file).await {
+        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+            let check = tokio::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"])
+                .output()
+                .await;
+            let running = check
+                .map(|o| String::from_utf8_lossy(&o.stdout).contains("zeus"))
+                .unwrap_or(false);
+            if running {
+                println!("Daemon status: RUNNING (pid {})", pid);
+            } else {
+                println!("Daemon status: NOT RUNNING (stale pid file: {})", pid);
+            }
+            return Ok(());
+        }
+    }
+    println!("Daemon status: NOT RUNNING");
+    Ok(())
+}
+
+// ============================================================================
 // Unsupported platforms
 // ============================================================================
 
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "windows"
+)))]
 async fn install_daemon() -> Result<()> {
     anyhow::bail!("Daemon management is not supported on this platform")
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "windows"
+)))]
 async fn uninstall_daemon() -> Result<()> {
     anyhow::bail!("Daemon management is not supported on this platform")
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "windows"
+)))]
 async fn start_daemon() -> Result<()> {
     anyhow::bail!("Daemon management is not supported on this platform")
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "windows"
+)))]
 async fn stop_daemon() -> Result<()> {
     anyhow::bail!("Daemon management is not supported on this platform")
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "windows"
+)))]
 async fn show_status() -> Result<()> {
     anyhow::bail!("Daemon management is not supported on this platform")
 }

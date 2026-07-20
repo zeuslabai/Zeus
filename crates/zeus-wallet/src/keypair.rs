@@ -142,7 +142,18 @@ impl WalletKeypair {
             plaintext.zeroize();
             key
         } else {
-            // Legacy plaintext base64 format
+            // Legacy plaintext base64 format. Rejected by default: a plaintext
+            // key on disk is a downgrade risk (e.g. an attacker swapping in an
+            // unencrypted key). Opt in explicitly via ZEUS_ALLOW_PLAINTEXT_WALLET=1
+            // only to migrate an old wallet — then re-generate encrypted.
+            if std::env::var("ZEUS_ALLOW_PLAINTEXT_WALLET").as_deref() != Ok("1") {
+                return Err(WalletError::Key(
+                    "Refusing to load unencrypted wallet key. Re-generate an encrypted \
+                     wallet, or set ZEUS_ALLOW_PLAINTEXT_WALLET=1 to allow this legacy \
+                     plaintext load (migration only)."
+                        .into(),
+                ));
+            }
             warn!("Loading wallet with unencrypted key — consider re-generating");
             let mut decoded = BASE64
                 .decode(&key_file)
@@ -373,7 +384,9 @@ impl WalletKeypair {
         file_content.extend_from_slice(encoded.as_bytes());
         encoded.zeroize();
 
-        fs::write(&key_path, &file_content)?;
+        // L1: atomic write — tempfile + rename, so a crash mid-write
+        // can't leave a truncated/corrupt secret.key.
+        atomic_write(&key_path, &file_content)?;
         file_content.zeroize();
 
         // Restrict permissions on Unix
@@ -392,16 +405,32 @@ impl WalletKeypair {
         };
         let json = serde_json::to_string_pretty(&metadata)
             .map_err(|e| WalletError::Serialization(e.to_string()))?;
-        fs::write(&meta_path, json)?;
+        atomic_write(&meta_path, json.as_bytes())?;
 
         Ok(())
     }
 }
 
+/// Atomically write `contents` to `path` by writing to a sibling tempfile
+/// and renaming it over `path`. A crash mid-write leaves either the old
+/// file or no file — never a truncated one.
+fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), WalletError> {
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, contents)?;
+    fs::rename(&tmp_path, path)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    /// Serializes tests that mutate `ZEUS_ALLOW_PLAINTEXT_WALLET`.
+    /// Without this, parallel `cargo test` can interleave set_var/remove_var
+    /// across tests and flake (same class as #334).
+    static PLAINTEXT_TEST_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_generate_and_load() {
@@ -416,6 +445,50 @@ mod tests {
         // Load
         let kp2 = WalletKeypair::load(&dir).unwrap();
         assert_eq!(kp2.public_key_hex(), pubkey);
+    }
+
+    /// Write a legacy plaintext (unencrypted base64) secret.key into `dir`.
+    fn write_plaintext_key(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        let secret = [7u8; 32];
+        let encoded = BASE64.encode(secret);
+        std::fs::write(dir.join("secret.key"), encoded).unwrap();
+    }
+
+    #[test]
+    fn test_load_plaintext_rejected_by_default() {
+        let _guard = PLAINTEXT_TEST_MUTEX.lock().unwrap();
+        // M3: a plaintext secret.key is a downgrade risk and must be refused
+        // unless explicitly opted in via ZEUS_ALLOW_PLAINTEXT_WALLET=1.
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("wallet");
+        write_plaintext_key(&dir);
+
+        // Safety: ensure the gate is closed for this test.
+        unsafe { std::env::remove_var("ZEUS_ALLOW_PLAINTEXT_WALLET") };
+        let err = match WalletKeypair::load(&dir) {
+            Ok(_) => panic!("plaintext load must be rejected by default"),
+            Err(e) => e,
+        };
+        assert!(
+            matches!(err, WalletError::Key(ref m) if m.contains("unencrypted")),
+            "expected plaintext-refusal error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_load_plaintext_allowed_with_env_gate() {
+        let _guard = PLAINTEXT_TEST_MUTEX.lock().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("wallet");
+        write_plaintext_key(&dir);
+
+        // Safety: test-only env mutation; restored immediately after.
+        unsafe { std::env::set_var("ZEUS_ALLOW_PLAINTEXT_WALLET", "1") };
+        let result = WalletKeypair::load(&dir);
+        unsafe { std::env::remove_var("ZEUS_ALLOW_PLAINTEXT_WALLET") };
+        let kp = result.expect("gated plaintext load should succeed");
+        assert_eq!(kp.public_key_hex().len(), 64);
     }
 
     #[test]
@@ -587,6 +660,7 @@ mod tests {
 
     #[test]
     fn test_legacy_plaintext_load() {
+        let _guard = PLAINTEXT_TEST_MUTEX.lock().unwrap();
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path().join("wallet");
         fs::create_dir_all(&dir).unwrap();
@@ -597,8 +671,15 @@ mod tests {
         let encoded = BASE64.encode(key_bytes);
         fs::write(dir.join("secret.key"), encoded.as_bytes()).unwrap();
 
-        // Should load successfully without encryption.key
-        let kp = WalletKeypair::load(&dir).unwrap();
+        // M3: plaintext load is refused by default...
+        unsafe { std::env::remove_var("ZEUS_ALLOW_PLAINTEXT_WALLET") };
+        assert!(WalletKeypair::load(&dir).is_err());
+
+        // ...but succeeds under the explicit migration gate.
+        unsafe { std::env::set_var("ZEUS_ALLOW_PLAINTEXT_WALLET", "1") };
+        let result = WalletKeypair::load(&dir);
+        unsafe { std::env::remove_var("ZEUS_ALLOW_PLAINTEXT_WALLET") };
+        let kp = result.unwrap();
         assert_eq!(
             kp.public_key_bytes(),
             signing_key.verifying_key().to_bytes()
@@ -615,5 +696,32 @@ mod tests {
         fs::remove_file(dir.join("encryption.key")).unwrap();
         let result = WalletKeypair::load(&dir);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_atomic_write_no_tmp_left_behind() {
+        // L1: after a successful save, no `*.tmp` sibling should remain —
+        // the tempfile must have been renamed over the target.
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("wallet");
+        WalletKeypair::generate(&dir, "test", "devnet").unwrap();
+
+        for entry in fs::read_dir(&dir).unwrap() {
+            let name = entry.unwrap().file_name();
+            assert!(
+                !name.to_string_lossy().ends_with(".tmp"),
+                "atomic_write leaked tempfile: {name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_atomic_write_overwrites_existing() {
+        // L1: atomic_write must replace an existing file, not append or fail.
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("data.bin");
+        atomic_write(&target, b"first").unwrap();
+        atomic_write(&target, b"second").unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"second");
     }
 }

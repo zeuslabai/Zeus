@@ -1,0 +1,43 @@
+#!/bin/sh
+
+# PROVIDE: zeus_deploy_poll
+# REQUIRE: LOGIN NETWORKING
+# KEYWORD: shutdown
+#
+# Add to /etc/rc.conf:
+#   zeus_deploy_poll_enable="YES"
+#   zeus_deploy_poll_user="zeus"
+#   zeus_deploy_poll_home="/home/zeus"
+#   zeus_deploy_poll_repo="/home/zeus/Zeus"
+#   zeus_deploy_poll_interval="60"
+
+. /etc/rc.subr
+
+name="zeus_deploy_poll"
+rcvar="${name}_enable"
+
+load_rc_config $name
+
+: ${zeus_deploy_poll_enable:="NO"}
+: ${zeus_deploy_poll_user:="zeus"}
+: ${zeus_deploy_poll_home:="/home/${zeus_deploy_poll_user}"}
+: ${zeus_deploy_poll_repo:="${zeus_deploy_poll_home}/Zeus"}
+: ${zeus_deploy_poll_zeus_home:="${zeus_deploy_poll_home}/.zeus"}
+: ${zeus_deploy_poll_interval:="60"}
+: ${zeus_deploy_poll_logfile:="${zeus_deploy_poll_zeus_home}/logs/deploy-poll.log"}
+: ${zeus_deploy_poll_pidfile:="/var/run/${name}.pid"}
+
+pidfile="${zeus_deploy_poll_pidfile}"
+command="/usr/sbin/daemon"
+procname="/bin/sh"
+start_precmd="zeus_deploy_poll_precmd"
+
+zeus_deploy_poll_precmd()
+{
+    install -d -o "${zeus_deploy_poll_user}" -m 0755 "${zeus_deploy_poll_zeus_home}/logs" 2>/dev/null || \
+        mkdir -p "${zeus_deploy_poll_zeus_home}/logs"
+}
+
+command_args="-f -P ${pidfile} -o ${zeus_deploy_poll_logfile} -u ${zeus_deploy_poll_user} /usr/bin/env HOME=${zeus_deploy_poll_home} ZEUS_HOME=${zeus_deploy_poll_zeus_home} ZEUS_REPO=${zeus_deploy_poll_repo} ZEUS_DEPLOY_POLL_INTERVAL=${zeus_deploy_poll_interval} PATH=/usr/local/bin:/usr/bin:/bin:${PATH} ${zeus_deploy_poll_repo}/scripts/zeus-deploy/deploy-poll-loop.sh"
+
+run_rc_command "$1"

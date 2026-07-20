@@ -64,7 +64,7 @@ impl GatewayLock {
                      explicitly (the rc.d script does this via /usr/bin/env) or \
                      fix ownership: chown -R <user> {}",
                     parent.display(),
-                    unsafe { libc::getuid() },
+                    zeus_paths::current_uid(),
                     e,
                     parent.display()
                 )
@@ -76,7 +76,7 @@ impl GatewayLock {
                  Check ownership of the directory, or set ZEUS_HOME to a \
                  writable location before starting the gateway.",
                 pid_path.display(),
-                unsafe { libc::getuid() },
+                zeus_paths::current_uid(),
                 e
             )
         })?;
@@ -93,12 +93,44 @@ impl GatewayLock {
         // PID recycling (unrelated process holding the slot after gateway death).
 
         // kill(pid, 0) checks if process exists without sending a signal
-        let kill_rc = unsafe { libc::kill(pid as i32, 0) };
-        if kill_rc != 0 {
-            warn!(target: "gateway_lock", "process_is_alive(pid={}) → false (kill -0 rc={}, errno suggests dead)", pid, kill_rc);
-            return false;
+        #[cfg(unix)]
+        {
+            let kill_rc = unsafe { libc::kill(pid as i32, 0) };
+            if kill_rc != 0 {
+                warn!(target: "gateway_lock", "process_is_alive(pid={}) → false (kill -0 rc={}, errno suggests dead)", pid, kill_rc);
+                return false;
+            }
+            warn!(target: "gateway_lock", "process_is_alive(pid={}) kill -0 → alive; verifying it's a zeus binary", pid);
         }
-        warn!(target: "gateway_lock", "process_is_alive(pid={}) kill -0 → alive; verifying it's a zeus binary", pid);
+        #[cfg(not(unix))]
+        {
+            // On Windows, use tasklist to check if process exists
+            if let Ok(output) = std::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {}", pid), "/NH"])
+                .output()
+            {
+                let out = String::from_utf8_lossy(&output.stdout);
+                if !out.contains(&pid.to_string()) {
+                    warn!(target: "gateway_lock", "process_is_alive(pid={}) → false (tasklist: not found)", pid);
+                    return false;
+                }
+                // PID-recycling guard (#308): mirror the unix zeus-binary
+                // verification. The matched tasklist row starts with the
+                // image name, so an unrelated process holding a recycled
+                // PID (no "zeus" in the row) must not count as a live
+                // gateway — that's the false-positive "already running"
+                // bail this function exists to prevent.
+                let is_zeus = out.to_ascii_lowercase().contains("zeus");
+                warn!(target: "gateway_lock",
+                    "process_is_alive(pid={}) tasklist row matched (contains 'zeus'={}); returning {}",
+                    pid, is_zeus, is_zeus
+                );
+                return is_zeus;
+            } else {
+                warn!(target: "gateway_lock", "process_is_alive(pid={}) → false (tasklist command failed)", pid);
+                return false;
+            }
+        }
 
         // Diagnostic: capture full ps output so we can see what process actually has this PID
         if let Ok(diag) = std::process::Command::new("ps")

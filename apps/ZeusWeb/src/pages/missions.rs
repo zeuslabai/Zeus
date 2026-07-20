@@ -149,11 +149,11 @@ pub fn MissionsPage() -> impl IntoView {
                                                 </div>
                                             </div>
                                             <div style="font-size: 12px; color: rgba(255,245,240,0.5); white-space: pre-wrap; word-break: break-word; max-height: 150px; overflow-y: auto;">
-                                                {if turn.content.len() > 500 { format!("{}...", &turn.content[..500]) } else { turn.content.clone() }}
+                                                {if turn.content.len() > 500 { format!("{}...", api::truncate_str(&turn.content, 500)) } else { turn.content.clone() }}
                                             </div>
                                             {(!turn.tool_results.is_empty()).then(|| view! {
                                                 <div style="margin-top: 6px; padding: 6px 10px; background: rgba(255,255,255,0.03); border-radius: 4px; font-size: 10px; color: rgba(255,245,240,0.6); font-family: 'Orbitron', monospace; max-height: 80px; overflow-y: auto;">
-                                                    {if turn.tool_results.len() > 300 { format!("{}...", &turn.tool_results[..300]) } else { turn.tool_results.clone() }}
+                                                    {if turn.tool_results.len() > 300 { format!("{}...", api::truncate_str(&turn.tool_results, 300)) } else { turn.tool_results.clone() }}
                                                 </div>
                                             })}
                                         </div>

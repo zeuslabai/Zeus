@@ -20,6 +20,15 @@ use std::path::PathBuf;
 #[derive(Debug, Deserialize)]
 pub struct RememberRequest {
     pub fact: String,
+    /// Optional scope: "global" (default) | "workspace" | "user" (#433).
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// Scope target for "workspace" scope; ignored otherwise.
+    #[serde(default)]
+    pub workspace_id: Option<String>,
+    /// Scope target for "user" scope; ignored otherwise.
+    #[serde(default)]
+    pub user_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,6 +46,14 @@ pub struct SearchMemoryRequest {
     pub query: String,
     #[serde(default = "default_search_limit")]
     pub limit: usize,
+    /// Optional scope filter: "global" | "workspace" | "user" (#433).
+    /// Absent = unfiltered (legacy behavior).
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
+    #[serde(default)]
+    pub user_id: Option<String>,
 }
 
 fn default_search_limit() -> usize {
@@ -74,16 +91,68 @@ pub async fn remember(
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let state = state.read().await;
 
+    // Resolve the requested scope (#433). Fail-closed: an unknown scope or a
+    // non-global scope missing its id is a 400, never a silent global write.
+    let scope = parse_memory_scope(
+        req.scope.as_deref(),
+        req.workspace_id.as_deref(),
+        req.user_id.as_deref(),
+    )?;
+
     state
         .workspace
-        .remember(&req.fact)
+        .remember_scoped(&req.fact, scope.clone())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(json!({
         "success": true,
+        "scope": scope_label(&scope),
         "message": format!("Remembered: {}", req.fact)
     })))
+}
+
+/// Parse the optional scope triple from a remember request into a
+/// `zeus_memory::MemoryScope`. Defaults to Global when `scope` is absent.
+fn parse_memory_scope(
+    scope: Option<&str>,
+    workspace_id: Option<&str>,
+    user_id: Option<&str>,
+) -> Result<zeus_memory::MemoryScope, (StatusCode, String)> {
+    let bad = |msg: &str| (StatusCode::BAD_REQUEST, msg.to_string());
+    match scope.unwrap_or("global") {
+        "global" => Ok(zeus_memory::MemoryScope::Global),
+        "workspace" => workspace_id
+            .filter(|s| !s.is_empty())
+            .map(|s| zeus_memory::MemoryScope::Workspace(s.to_string()))
+            .ok_or_else(|| bad("workspace scope requires workspace_id")),
+        "user" => user_id
+            .filter(|s| !s.is_empty())
+            .map(|s| zeus_memory::MemoryScope::User(s.to_string()))
+            .ok_or_else(|| bad("user scope requires user_id")),
+        other => Err(bad(&format!(
+            "unknown scope '{}' (expected global|workspace|user)",
+            other
+        ))),
+    }
+}
+
+fn scope_label(scope: &zeus_memory::MemoryScope) -> &'static str {
+    match scope {
+        zeus_memory::MemoryScope::Global => "global",
+        zeus_memory::MemoryScope::Workspace(_) => "workspace",
+        zeus_memory::MemoryScope::User(_) => "user",
+    }
+}
+
+/// Flatten a `MemoryScope` into the (scope, scope_id) pair the Mnemosyne
+/// scoped search expects (#433).
+fn scope_parts(scope: &zeus_memory::MemoryScope) -> (&'static str, Option<&str>) {
+    match scope {
+        zeus_memory::MemoryScope::Global => ("global", None),
+        zeus_memory::MemoryScope::Workspace(id) => ("workspace", Some(id.as_str())),
+        zeus_memory::MemoryScope::User(id) => ("user", Some(id.as_str())),
+    }
 }
 
 pub async fn add_note(
@@ -396,11 +465,26 @@ pub async fn search_memory(
     let root = state.workspace.root().to_path_buf();
     let limit = req.limit.min(zeus_core::MAX_PAGE_LIMIT_SMALL);
 
+    // Resolve the optional scope filter (#433). Absent scope = unfiltered
+    // legacy behavior; present-but-invalid scope = 400, never silent.
+    let scope = parse_memory_scope(
+        req.scope.as_deref(),
+        req.workspace_id.as_deref(),
+        req.user_id.as_deref(),
+    )?;
+    let scoped = req.scope.is_some();
+
     // Use Mnemosyne hybrid search when available
     if let Some(ref mnemosyne) = state.mnemosyne {
         let mn = mnemosyne.clone();
         drop(state);
-        match mn.semantic_search(&req.query, limit).await {
+        let result = if scoped {
+            let (s, id) = scope_parts(&scope);
+            mn.semantic_search_scoped(&req.query, limit, Some((s, id))).await
+        } else {
+            mn.semantic_search(&req.query, limit).await
+        };
+        match result {
             Ok(hits) => {
                 let results: Vec<Value> = hits
                     .iter()

@@ -13,6 +13,9 @@ access_token = "access"
 access_token_secret = "access-secret"
 client_id = "client-id"
 client_secret = "client-secret"
+oauth2_access_token = "oauth2-access"
+oauth2_refresh_token = "oauth2-refresh"
+oauth2_expires_at = 1735689600
 "#;
 
     let cfg: Config = toml::from_str(toml).expect("official x_twitter TOML parses");
@@ -29,6 +32,9 @@ client_secret = "client-secret"
     assert_eq!(x.access_token_secret, "access-secret");
     assert_eq!(x.client_id, "client-id");
     assert_eq!(x.client_secret, "client-secret");
+    assert_eq!(x.oauth2_access_token, "oauth2-access");
+    assert_eq!(x.oauth2_refresh_token, "oauth2-refresh");
+    assert_eq!(x.oauth2_expires_at, 1_735_689_600);
 }
 
 #[test]
@@ -52,4 +58,7 @@ access_token_secret = "access-secret"
 
     assert_eq!(x.consumer_key, "legacy-consumer");
     assert_eq!(x.consumer_key_secret, "legacy-consumer-secret");
+    assert!(x.oauth2_access_token.is_empty());
+    assert!(x.oauth2_refresh_token.is_empty());
+    assert_eq!(x.oauth2_expires_at, 0);
 }

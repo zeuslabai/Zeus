@@ -8,13 +8,14 @@ use zeus_core::ToolSchema;
 // ============================================================================
 
 #[test]
-fn core_schemas_returns_33_tools() {
+fn core_schemas_returns_34_tools() {
     let registry = ToolRegistry::new();
     let schemas = registry.schemas();
 
-    // 33 core tools — 24 base (memory_store #164, send_rich #88, collect_spawns, send_file,
+    // 34 core tools — 24 base (memory_store #164, send_rich #88, collect_spawns, send_file,
     // trigger tools) + 8 agora economy tools (3 wallet + 5 marketplace) + 1 python_exec (#340)
-    assert_eq!(schemas.len(), 33);
+    // + x_twitter (#376) as the first-class X/Twitter channel tool.
+    assert_eq!(schemas.len(), 34);
 }
 
 #[test]
@@ -60,6 +61,7 @@ fn expected_tool_names_present() {
         "web_fetch",
         "spawn",
         "message",
+        "x_twitter",
         "link_understanding",
         "media_understanding",
         "auto_reply",

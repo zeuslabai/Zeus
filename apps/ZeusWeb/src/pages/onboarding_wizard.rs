@@ -63,7 +63,7 @@ fn TypeWriter(
 ) -> impl IntoView {
     let displayed = RwSignal::new(0usize);
     let started = RwSignal::new(false);
-    let len = text.len();
+    let len = text.chars().count();
 
     // Delay before starting
     Effect::new(move || {
@@ -104,7 +104,7 @@ fn TypeWriter(
 
     view! {
         <span style=style>
-            {move || &text[..displayed.get().min(len)]}
+            {move || text.chars().take(displayed.get().min(len)).collect::<String>()}
             <span style={move || format!("opacity: {}; transition: opacity 0.3s; font-weight: 400;",
                 if displayed.get() < len { "1" } else { "0" }
             )}>
@@ -295,6 +295,38 @@ const FEATURES: &[Feature] = &[
     Feature { id: "mcp", name: "MCP Server", desc: "Model Context Protocol for Claude Code/Desktop", default: false },
 ];
 
+/// #383: Service install options — parity with TUI's 5-card service picker
+/// (crates/zeus-tui/src/screens/gateway.rs:62-67)
+struct ServiceOption {
+    id: &'static str,
+    name: &'static str,
+    glyph: &'static str,
+    color: &'static str,
+    sub: &'static str,
+    path: Option<&'static str>,
+}
+
+const SERVICES: &[ServiceOption] = &[
+    ServiceOption { id: "launchd", name: "launchd", glyph: "MAC", color: "#ff6b35", sub: "macOS native (recommended)", path: Some("~/Library/LaunchAgents/ai.zeuslab.gateway.plist") },
+    ServiceOption { id: "systemd", name: "systemd", glyph: "LIN", color: "#22c55e", sub: "Linux native", path: Some("/etc/systemd/system/zeus-gateway.service") },
+    ServiceOption { id: "rcd", name: "rc.d", glyph: "BSD", color: "#06b6d4", sub: "FreeBSD native", path: Some("/usr/local/etc/rc.d/zeus_gateway") },
+    ServiceOption { id: "schtasks", name: "Task Scheduler", glyph: "WIN", color: "#3b82f6", sub: "Windows native", path: Some("Task Scheduler: ZeusGateway") },
+    ServiceOption { id: "manual", name: "Manual start", glyph: "—", color: "#6b7280", sub: "I'll start zeus manually", path: None },
+];
+
+/// #383: Gateway feature toggles — parity with TUI gateway screen
+struct GatewayFeature {
+    id: &'static str,
+    label: &'static str,
+    desc: &'static str,
+}
+
+const GATEWAY_FEATURES: &[GatewayFeature] = &[
+    GatewayFeature { id: "agent_processing", label: "Agent Processing Loop", desc: "Background heartbeat + cron + watchdog" },
+    GatewayFeature { id: "webui", label: "WebUI Co-host", desc: "Serves Leptos frontend on the same port (or 8081 if 8080 is taken)" },
+    GatewayFeature { id: "mcp", label: "MCP Server", desc: "Model Context Protocol endpoint for Claude Desktop / cursor" },
+];
+
 struct SecurityLevel {
     id: &'static str,
     name: &'static str,
@@ -304,10 +336,17 @@ struct SecurityLevel {
     features: &'static [&'static str],
 }
 
+// #401: expanded from 3 UI-only levels (minimal/standard/strict) to all 5
+// real `zeus_aegis::sandbox::SandboxLevel` values, in the enum's own
+// ascending-strictness order (none < basic < standard < strict < paranoid —
+// see crates/zeus-aegis/src/sandbox.rs). `id` is now the canonical aegis
+// string directly — no translation layer needed downstream.
 const SECURITY_LEVELS: &[SecurityLevel] = &[
-    SecurityLevel { id: "minimal", name: "MINIMAL", desc: "No restrictions — full access to file system, shell, and network. Best for development and testing.", risk: "Low security", color: "#eab308", features: &["No sandboxing", "No command filtering", "No URL restrictions", "No approval workflow"] },
+    SecurityLevel { id: "none", name: "NONE", desc: "No restrictions — full access to file system, shell, and network. Best for development and testing.", risk: "Low security", color: "#eab308", features: &["No sandboxing", "No command filtering", "No URL restrictions", "No approval workflow"] },
+    SecurityLevel { id: "basic", name: "BASIC", desc: "Blocks known-destructive shell operations. Filesystem and network otherwise unrestricted.", risk: "Light security", color: "#eab308", features: &["Destructive-command blocklist", "No URL restrictions", "No path restrictions"] },
     SecurityLevel { id: "standard", name: "STANDARD", desc: "Command filtering, URL allowlisting, and path restrictions. Good balance of security and usability.", risk: "Recommended", color: "#22c55e", features: &["Command allowlist", "URL filtering", "Path restrictions", "Audit logging"] },
     SecurityLevel { id: "strict", name: "STRICT", desc: "Full Seatbelt sandbox, mandatory approvals for all shell and web operations. Maximum security.", risk: "Maximum security", color: "rgba(255,60,20,1)", features: &["macOS Seatbelt", "Mandatory approvals", "Process isolation", "Complete audit trail"] },
+    SecurityLevel { id: "paranoid", name: "PARANOID", desc: "Minimal permissions — network allowlist only, no shell, no file writes outside workspace. For untrusted or shared-machine agents.", risk: "Maximum security", color: "rgba(255,60,20,1)", features: &["Network allowlist only", "No shell", "No apply_patch", "No web_fetch"] },
 ];
 
 // ─── CONFIG STATE ────────────────────────────────────────
@@ -377,6 +416,11 @@ struct OnboardConfig {
     // Gateway config
     gateway_timeout: String,
     gateway_mentions_only: bool,
+    // #383: Service install mode + gateway feature toggles (TUI parity)
+    service_id: String,              // "launchd" | "systemd" | "rcd" | "schtasks" | "manual"
+    gw_agent_processing: bool,       // enable heartbeat + cron
+    gw_webui: bool,                  // enable API server
+    gw_mcp: bool,                    // enable MCP server
 }
 
 impl Default for OnboardConfig {
@@ -434,7 +478,30 @@ impl Default for OnboardConfig {
             allow_bots_mode: "mentions".to_string(),
             gateway_timeout: "1800".to_string(),
             gateway_mentions_only: false,
+            service_id: default_service_id(),
+            gw_agent_processing: true,
+            gw_webui: true,
+            gw_mcp: false,
         }
+    }
+}
+
+/// #383: Detect the platform's native service manager for the default
+/// service picker selection. In WASM we can't read the OS, so we use
+/// the `navigator.platform` heuristic.
+fn default_service_id() -> String {
+    let platform = web_sys::window()
+        .and_then(|w| w.navigator().platform().ok())
+        .unwrap_or_default()
+        .to_lowercase();
+    if platform.contains("mac") {
+        "launchd".to_string()
+    } else if platform.contains("win") {
+        "schtasks".to_string()
+    } else if platform.contains("freebsd") {
+        "rcd".to_string()
+    } else {
+        "systemd".to_string() // Linux default
     }
 }
 
@@ -810,8 +877,11 @@ pub fn OnboardingWizardPage() -> impl IntoView {
                             >
                                 "← Back"
                             </button>
-                            <div style="font-family: 'Orbitron', monospace; font-size: 9px; letter-spacing: 3px; color: rgba(255,245,240,0.2);">
-                                {move || format!("STEP {} OF 19", step.get())}
+                            <div style="font-family: 'Orbitron', monospace; font-size: 9px; letter-spacing: 3px; color: rgba(255,245,240,0.2); display: flex; flex-direction: column; align-items: center; gap: 2px;">
+                                {move || format!("STEP {} OF {}", step.get(), STEPS.len())}
+                                <span style="font-size: 7px; letter-spacing: 1px; opacity: 0.5;">
+                                    {format!("{} {}", env!("GIT_SHA", "dev"), env!("BUILD_TIME", "unknown"))}
+                                </span>
                             </div>
                             <button
                                 style=move || {
@@ -1596,7 +1666,7 @@ fn StepIntelligence(config: RwSignal<OnboardConfig>, providers_data: RwSignal<Ve
                                                 let pid = pid_auth6.clone();
                                                 move |_| config.update(|c| { c.auth_types.insert(pid.clone(), "oauth_token".to_string()); })
                                             }
-                                        >"CLAUDE TOKEN"</button>
+                                        >{{let n = name_c2.clone(); move || format!("{} TOKEN", n)}}</button>
                                         // #216b: browser OAuth — anthropic only (gateway PKCE flow)
                                         {(pid_browser1 == "anthropic").then(|| {
                                             let pid_b = pid_browser2.clone();
@@ -1999,22 +2069,21 @@ fn StepIntelligence(config: RwSignal<OnboardConfig>, providers_data: RwSignal<Ve
                                                 key_status.update(|m| { m.remove(&pid); });
                                                 return;
                                             }
+                                            // Providers that support full key validation via /v1/config/test
                                             let validatable = ["anthropic", "openai"];
-                                            if !validatable.contains(&pid.as_str()) {
-                                                key_status.update(|m| { m.insert(pid, KeyTestStatus::InfoOnly); });
-                                                return;
-                                            }
-                                            key_status.update(|m| { m.insert(pid.clone(), KeyTestStatus::Testing); });
-                                            let pid2 = pid.clone();
-                                            spawn_local(async move {
-                                                match api::test_provider_connection(&pid2, Some(&key), None).await {
-                                                    Ok(r) if r.success => {
-                                                        // Inject fetched models into providers_data so StepModel has them
-                                                        if !r.models.is_empty() {
-                                                            let fetched_models = r.models.clone();
-                                                            let pid_for_models = pid2.clone();
-                                                            providers_data.update(|provs| {
-                                                                if let Some(p) = provs.iter_mut().find(|p| p.id == pid_for_models) {
+                                            if validatable.contains(&pid.as_str()) {
+                                                // Full validation path: test connection + fetch models
+                                                key_status.update(|m| { m.insert(pid.clone(), KeyTestStatus::Testing); });
+                                                let pid2 = pid.clone();
+                                                spawn_local(async move {
+                                                    match api::test_provider_connection(&pid2, Some(&key), None).await {
+                                                        Ok(r) if r.success => {
+                                                            // Inject fetched models into providers_data so StepModel has them
+                                                            if !r.models.is_empty() {
+                                                                let fetched_models = r.models.clone();
+                                                                let pid_for_models = pid2.clone();
+                                                                providers_data.update(|provs| {
+                                                                    if let Some(p) = provs.iter_mut().find(|p| p.id == pid_for_models) {
                                                                     p.models = fetched_models;
                                                                 }
                                                             });
@@ -2030,6 +2099,35 @@ fn StepIntelligence(config: RwSignal<OnboardConfig>, providers_data: RwSignal<Ve
                                                     }
                                                 }
                                             });
+                                            } else {
+                                                // Non-validatable providers: fetch models via /v1/config/models
+                                                key_status.update(|m| { m.insert(pid.clone(), KeyTestStatus::Testing); });
+                                                let pid2 = pid.clone();
+                                                spawn_local(async move {
+                                                    match api::fetch_provider_models(&pid2, &key).await {
+                                                        Ok(r) if !r.models.is_empty() => {
+                                                            let fetched_models: Vec<String> = r.models.iter()
+                                                                .map(|m| m.id.clone())
+                                                                .collect();
+                                                            let pid_for_models = pid2.clone();
+                                                            providers_data.update(|provs| {
+                                                                if let Some(p) = provs.iter_mut().find(|p| p.id == pid_for_models) {
+                                                                    p.models = fetched_models;
+                                                                }
+                                                            });
+                                                            key_status.update(|m| { m.insert(pid2, KeyTestStatus::Valid); });
+                                                        }
+                                                        Ok(_) => {
+                                                            // Empty model list — key saved but no models fetched
+                                                            key_status.update(|m| { m.insert(pid2, KeyTestStatus::InfoOnly); });
+                                                        }
+                                                        Err(_) => {
+                                                            // Fetch failed — key saved, models will use static defaults
+                                                            key_status.update(|m| { m.insert(pid2, KeyTestStatus::InfoOnly); });
+                                                        }
+                                                    }
+                                                });
+                                            }
                                         }
                                     />
                                     // Validation indicator
@@ -2130,48 +2228,40 @@ fn StepIntelligence(config: RwSignal<OnboardConfig>, providers_data: RwSignal<Ve
 
 #[component]
 fn StepModel(config: RwSignal<OnboardConfig>, providers_data: RwSignal<Vec<DynProvider>>) -> impl IntoView {
-    // If Anthropic is selected but no models loaded yet, fetch directly from Anthropic API
-    // using the key the user just entered — bypasses the gateway entirely.
+    // Fetch models for ALL selected providers that have API keys but no models loaded yet.
+    // Uses the gateway's /v1/config/models endpoint (server-side fetch, no CORS issues).
     leptos::prelude::Effect::new(move |_| {
         let cfg = config.get();
-        let has_anthropic = cfg.providers.contains(&"anthropic".to_string());
-        let api_key = cfg.api_keys.get("anthropic").cloned().unwrap_or_default();
-        if !has_anthropic || api_key.is_empty() { return; }
-
-        let already_loaded = providers_data.get()
+        // Collect providers that need model fetching: selected, have a key, but no models yet
+        let needs_fetch: Vec<(String, String)> = providers_data.get()
             .iter()
-            .find(|p| p.id == "anthropic")
-            .map(|p| !p.models.is_empty())
-            .unwrap_or(false);
-        if already_loaded { return; }
+            .filter(|p| cfg.providers.contains(&p.id))
+            .filter(|p| p.models.is_empty())
+            .filter_map(|p| {
+                let key = cfg.api_keys.get(&p.id).cloned().unwrap_or_default();
+                if key.trim().is_empty() { None } else { Some((p.id.clone(), key)) }
+            })
+            .collect();
+        if needs_fetch.is_empty() { return; }
 
-        leptos::task::spawn_local(async move {
-            use gloo_net::http::Request;
-            let result = Request::get("https://api.anthropic.com/v1/models")
-                .header("x-api-key", &api_key)
-                .header("anthropic-version", "2023-06-01")
-                .send()
-                .await;
-            if let Ok(resp) = result {
-                if resp.ok() {
-                    if let Ok(body) = resp.json::<serde_json::Value>().await {
-                        let models: Vec<String> = body["data"]
-                            .as_array()
-                            .unwrap_or(&vec![])
-                            .iter()
-                            .filter_map(|m| m["id"].as_str().map(|s| s.to_string()))
+        for (pid, key) in needs_fetch {
+            let providers_data = providers_data;
+            leptos::task::spawn_local(async move {
+                match api::fetch_provider_models(&pid, &key).await {
+                    Ok(r) if !r.models.is_empty() => {
+                        let fetched_models: Vec<String> = r.models.iter()
+                            .map(|m| m.id.clone())
                             .collect();
-                        if !models.is_empty() {
-                            providers_data.update(|provs| {
-                                if let Some(p) = provs.iter_mut().find(|p| p.id == "anthropic") {
-                                    p.models = models;
-                                }
-                            });
-                        }
+                        providers_data.update(|provs| {
+                            if let Some(p) = provs.iter_mut().find(|p| p.id == pid) {
+                                p.models = fetched_models;
+                            }
+                        });
                     }
+                    _ => {} // Empty or error — static defaults will be used
                 }
-            }
-        });
+            });
+        }
     });
 
     view! {
@@ -3712,15 +3802,17 @@ fn StepChannelConfig(config: RwSignal<OnboardConfig>, channels_data: RwSignal<Ve
 }
 
 // ─── STEP 9: GATEWAY ─────────────────────────────────────
-// TUI parity: configure gateway host/port.
+// #383: TUI parity — host/port + 5-card service picker + feature toggles + install path.
 #[component]
 fn StepGateway(config: RwSignal<OnboardConfig>) -> impl IntoView {
     view! {
         <div style="display: flex; flex-direction: column; gap: 24px;">
             <div style="text-align: center; margin-bottom: 8px;">
                 <h2 style="font-family: 'Orbitron', monospace; font-size: 14px; letter-spacing: 4px; color: rgba(255,245,240,0.9); font-weight: 900; margin-bottom: 8px;">"GATEWAY"</h2>
-                <p style="font-size: 12px; color: rgba(255,245,240,0.55); font-family: 'Orbitron', monospace; letter-spacing: 0.5px; line-height: 1.6;">"Configure the Zeus gateway connection."</p>
+                <p style="font-size: 12px; color: rgba(255,245,240,0.55); font-family: 'Orbitron', monospace; letter-spacing: 0.5px; line-height: 1.6;">"Configure the Zeus gateway connection and service installation."</p>
             </div>
+
+            // ── BIND section ──
             <div>
                 <label style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px; color: rgba(255,245,240,0.7); display: block; margin-bottom: 8px;">"HOST"</label>
                 <input
@@ -3742,9 +3834,139 @@ fn StepGateway(config: RwSignal<OnboardConfig>) -> impl IntoView {
                     style="width: 100%; padding: 12px 16px; background: rgba(255,245,240,0.05); border: 1px solid rgba(255,245,240,0.15); border-radius: 8px; color: rgba(255,245,240,0.9); font-family: 'JetBrains Mono', monospace; font-size: 13px; outline: none;"
                 />
             </div>
+
+            // ── FEATURE TOGGLES section ──
+            <div>
+                <label style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px; color: rgba(255,245,240,0.5); display: block; margin-bottom: 12px; font-weight: 700;">"FEATURES"</label>
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                    {GATEWAY_FEATURES.iter().map(|f| {
+                        let fid = f.id;
+                        let fid_c = fid.to_string();
+                        let config_c = config;
+                        view! {
+                            <div
+                                style=move || {
+                                    let on = match fid {
+                                        "agent_processing" => config_c.get().gw_agent_processing,
+                                        "webui" => config_c.get().gw_webui,
+                                        "mcp" => config_c.get().gw_mcp,
+                                        _ => false,
+                                    };
+                                    let base = "display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 8px; cursor: pointer; transition: background 0.15s; ";
+                                    if on { format!("{}{}", base, "background: rgba(255,60,20,0.1); border: 1px solid rgba(255,60,20,0.2);") }
+                                    else { format!("{}{}", base, "background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);") }
+                                }
+                                on:click=move |_| {
+                                    let fid_owned = fid_c.clone();
+                                    config_c.update(|c| {
+                                        match fid_owned.as_str() {
+                                            "agent_processing" => c.gw_agent_processing = !c.gw_agent_processing,
+                                            "webui" => c.gw_webui = !c.gw_webui,
+                                            "mcp" => c.gw_mcp = !c.gw_mcp,
+                                            _ => {}
+                                        }
+                                    });
+                                }
+                            >
+                                <div style=move || {
+                                    let on = match fid {
+                                        "agent_processing" => config_c.get().gw_agent_processing,
+                                        "webui" => config_c.get().gw_webui,
+                                        "mcp" => config_c.get().gw_mcp,
+                                        _ => false,
+                                    };
+                                    let base = "width: 18px; height: 18px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; ";
+                                    if on { format!("{}{}", base, "background: rgba(255,60,20,1); color: white;") }
+                                    else { format!("{}{}", base, "background: rgba(255,60,20,0.2); color: transparent;") }
+                                }>
+                                    {move || {
+                                        let on = match fid {
+                                            "agent_processing" => config_c.get().gw_agent_processing,
+                                            "webui" => config_c.get().gw_webui,
+                                            "mcp" => config_c.get().gw_mcp,
+                                            _ => false,
+                                        };
+                                        if on { "✓" } else { "" }
+                                    }}
+                                </div>
+                                <div style="flex: 1;">
+                                    <div style="font-size: 12px; color: rgba(255,245,240,0.9); font-family: 'JetBrains Mono', monospace; font-weight: 600;">{f.label}</div>
+                                    <div style="font-size: 10px; color: rgba(255,245,240,0.4); margin-top: 2px;">{f.desc}</div>
+                                </div>
+                            </div>
+                        }
+                    }).collect::<Vec<_>>()}
+                </div>
+            </div>
+
+            // ── INSTALL AS SERVICE section ──
+            <div>
+                <label style="font-family: 'Orbitron', monospace; font-size: 10px; letter-spacing: 3px; color: rgba(255,245,240,0.5); display: block; margin-bottom: 12px; font-weight: 700;">"INSTALL AS SERVICE"</label>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    {SERVICES.iter().map(|svc| {
+                        let sid = svc.id;
+                        let sid_c1 = sid.to_string();
+                        let sid_c2 = sid_c1.clone();
+                        let sid_c3 = sid_c1.clone();
+                        let sid_c4 = sid_c1.clone();
+                        let config_c = config;
+                        view! {
+                            <div
+                                style=move || {
+                                    let selected = config_c.get().service_id == sid_c1;
+                                    let base = "flex: 1; min-width: 100px; padding: 12px 8px; border-radius: 8px; cursor: pointer; transition: all 0.15s; text-align: center; border: 1px solid ";
+                                    if selected {
+                                        format!("{}{}{}", base, svc.color, "; background: rgba(255,60,20,0.08);")
+                                    } else {
+                                        format!("{}{}", base, "rgba(255,255,255,0.1); background: rgba(255,255,255,0.03);")
+                                    }
+                                }
+                                on:click=move |_| {
+                                    config_c.update(|c| c.service_id = sid_c2.clone());
+                                }
+                            >
+                                <div style=move || {
+                                    let selected = config_c.get().service_id == sid_c3;
+                                    format!("font-size: 16px; font-weight: 900; font-family: 'Orbitron', monospace; color: {}; margin-bottom: 4px;", if selected { svc.color } else { "rgba(255,245,240,0.5)" })
+                                }>
+                                    {svc.glyph}
+                                </div>
+                                <div style=move || {
+                                    let selected = config_c.get().service_id == sid_c4;
+                                    format!("font-size: 11px; font-family: 'JetBrains Mono', monospace; font-weight: 600; color: {}; margin-bottom: 2px;", if selected { "rgba(255,245,240,0.9)" } else { "rgba(255,245,240,0.5)" })
+                                }>
+                                    {svc.name}
+                                </div>
+                                <div style="font-size: 9px; color: rgba(255,245,240,0.35); font-family: 'JetBrains Mono', monospace; line-height: 1.3;">
+                                    {svc.sub}
+                                </div>
+                            </div>
+                        }
+                    }).collect::<Vec<_>>()}
+                </div>
+                // Install path display for selected service
+                <Show when=move || {
+                    let sid = config.get().service_id.clone();
+                    SERVICES.iter().find(|s| s.id == sid).and_then(|s| s.path).is_some()
+                }>
+                    <div style="margin-top: 10px; padding: 8px 12px; background: rgba(255,245,240,0.03); border-radius: 6px; border: 1px solid rgba(255,245,240,0.08);">
+                        <span style="font-size: 10px; color: rgba(255,245,240,0.5); font-family: 'Orbitron', monospace; letter-spacing: 1px; font-weight: 700;">"WILL INSTALL TO: "</span>
+                        <span style="font-size: 11px; color: rgba(100,200,255,0.9); font-family: 'JetBrains Mono', monospace;">
+                            {move || {
+                                let sid = config.get().service_id.clone();
+                                SERVICES.iter()
+                                    .find(|s| s.id == sid)
+                                    .and_then(|s| s.path)
+                                    .unwrap_or("")
+                            }}
+                        </span>
+                    </div>
+                </Show>
+            </div>
         </div>
     }
 }
+
 
 // ─── STEP 11: WORKSPACE ──────────────────────────────────
 // TUI parity: configure workspace/sessions/mnemosyne paths.
@@ -4224,10 +4446,22 @@ fn StepLaunch(config: RwSignal<OnboardConfig>) -> impl IntoView {
 
                                         // Step 4: Apply security permissions
                                         save_detail.set("Security...".to_string());
+                                        // #401: expanded from 3 levels (minimal/standard/strict) to
+                                        // all 5 real aegis SandboxLevel values. `level` is now an
+                                        // identity passthrough of the canonical id — no translation —
+                                        // matching the same fix applied to the TUI's
+                                        // config_level_value() and the backend's
+                                        // security_level_to_sandbox(). shell/file/web booleans here
+                                        // drive the separate runtime GlobalPerms gate (permissions.json),
+                                        // not aegis itself; strict/paranoid lock all three down since
+                                        // both levels block shell/web_fetch/apply_patch per the aegis
+                                        // SandboxLevel semantics (see zeus-aegis/src/sandbox.rs).
                                         let perms = match c.security_level.as_str() {
-                                            "minimal" => api::GlobalPerms { shell_access: true, file_write: true, web_access: true, level: "minimal".to_string() },
+                                            "none" => api::GlobalPerms { shell_access: true, file_write: true, web_access: true, level: "none".to_string() },
+                                            "basic" => api::GlobalPerms { shell_access: true, file_write: true, web_access: true, level: "basic".to_string() },
                                             "standard" => api::GlobalPerms { shell_access: true, file_write: true, web_access: true, level: "standard".to_string() },
                                             "strict" => api::GlobalPerms { shell_access: false, file_write: false, web_access: false, level: "strict".to_string() },
+                                            "paranoid" => api::GlobalPerms { shell_access: false, file_write: false, web_access: false, level: "paranoid".to_string() },
                                             _ => api::GlobalPerms { shell_access: true, file_write: true, web_access: true, level: "standard".to_string() },
                                         };
                                         if let Err(e) = api::update_permissions(&perms).await {
@@ -4279,7 +4513,18 @@ fn StepLaunch(config: RwSignal<OnboardConfig>) -> impl IntoView {
                                         } else {
                                             Some(c.qs_workspace.as_str())
                                         };
-                                        if let Err(e) = api::onboarding_setup(
+                                        // #383: build gateway config with service_id + feature toggles
+                                        let gw_config = serde_json::json!({
+                                            "host": c.qs_bind,
+                                            "port": c.qs_port.parse::<u16>().unwrap_or(8080),
+                                            "timeout_secs": c.gateway_timeout.parse::<u64>().unwrap_or(1800),
+                                            "mentions_only": c.gateway_mentions_only,
+                                            "service_id": c.service_id,
+                                            "enable_agent_processing": c.gw_agent_processing,
+                                            "enable_webui": c.gw_webui,
+                                            "enable_mcp": c.gw_mcp,
+                                        });
+                                        match api::onboarding_setup(
                                             &provider,
                                             &model,
                                             &plain_keys,
@@ -4294,10 +4539,22 @@ fn StepLaunch(config: RwSignal<OnboardConfig>) -> impl IntoView {
                                             emb_prov,
                                             ws_path,
                                             Some(&c.personality),
+                                            Some(gw_config),
                                         ).await {
-                                            web_sys::console::warn_1(&format!("Zeus: onboarding setup failed: {}", e).into());
-                                            save_status.set(SaveStatus::Error(format!("Onboarding save failed: {}", e)));
-                                            return;
+                                            Ok(resp) => {
+                                                // #385: Store the auth token returned by the backend.
+                                                // All subsequent API calls will include it as Bearer.
+                                                if let Some(token) = resp.get("auth_token").and_then(|v| v.as_str()) {
+                                                    if !token.is_empty() {
+                                                        api::set_auth_token(token);
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                web_sys::console::warn_1(&format!("Zeus: onboarding setup failed: {}", e).into());
+                                                save_status.set(SaveStatus::Error(format!("Onboarding save failed: {}", e)));
+                                                return;
+                                            }
                                         }
 
                                         // Step 6: localStorage fallback + show success
@@ -4306,6 +4563,11 @@ fn StepLaunch(config: RwSignal<OnboardConfig>) -> impl IntoView {
                                                 let _ = storage.set_item("zeus_onboarding_complete", "true");
                                                 let _ = storage.set_item("zeus_gateway_url", &c.gateway_url);
                                             }
+                                        // #383: Install system service (fire-and-forget, non-blocking)
+                                        let svc_id = c.service_id.clone();
+                                        spawn_local(async move {
+                                            let _ = api::daemon_install(&svc_id).await;
+                                        });
                                         // Step 7: Trigger gateway restart (fire-and-forget — don't block redirect)
                                         let port = c.qs_port.parse::<u16>().unwrap_or(8080);
                                         let bind = c.qs_bind.clone();
@@ -4332,10 +4594,25 @@ fn StepLaunch(config: RwSignal<OnboardConfig>) -> impl IntoView {
                                         save_status.set(SaveStatus::Success);
                                         save_detail.set("Redirecting to dashboard...".to_string());
 
-                                        // Redirect after 1.5s — use js eval so closure lifetime isn't an issue
-                                        let _ = js_sys::eval(&format!(
-                                            "setTimeout(function(){{ window.location.href = '/'; }}, 1500);"
-                                        ));
+                                        // Wait for gateway to be ready before redirecting.
+                                        // The gateway restarts after onboarding save; redirecting too soon
+                                        // loads the SPA before the API is available → black dashboard page.
+                                        // Poll /health every 500ms, redirect on success, give up after 15s.
+                                        let _ = js_sys::eval(
+                                            "var attempts = 0;\
+                                             function checkGw() {\
+                                                attempts++;\
+                                                fetch('/health').then(function(r) {\
+                                                    if (r.ok) { window.location.href = '/'; }\
+                                                    else if (attempts < 30) { setTimeout(checkGw, 500); }\
+                                                    else { window.location.href = '/'; }\
+                                                }).catch(function() {\
+                                                    if (attempts < 30) { setTimeout(checkGw, 500); }\
+                                                    else { window.location.href = '/'; }\
+                                                });\
+                                             }\
+                                             setTimeout(checkGw, 1000);"
+                                        );
                                     });
                                 }
                             >

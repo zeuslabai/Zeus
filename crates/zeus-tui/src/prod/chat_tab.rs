@@ -2,6 +2,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Widget};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::theme;
 use crate::widgets::{FaceState, face_frame};
@@ -53,6 +54,13 @@ pub struct ChatTab<'a> {
     pub stream_state: StreamState,
     pub scroll_offset: usize,
     pub slash_open: bool,
+    /// Active multiline-key hint supplied by the app. Includes Shift+Enter only
+    /// when keyboard enhancement is enabled; Alt+Enter/Ctrl+J always work.
+    pub newline_hint: &'a str,
+    /// Whether terminal mouse capture is currently active. It defaults off so
+    /// native terminal mouse/trackpad selection and copy are available; F6
+    /// toggles capture on when mouse scrolling is wanted.
+    pub mouse_capture_enabled: bool,
     /// Blink phase from `App::cursor_visible()` — drives the composer's
     /// insertion caret (set by the caller each frame).
     pub cursor_on: bool,
@@ -151,10 +159,56 @@ fn line_text(line: Line<'static>) -> String {
         .collect::<String>()
 }
 
+fn wrap_input_lines(text: &str, width: u16, style: Style) -> Vec<Line<'static>> {
+    let width = width.max(1) as usize;
+    let mut lines = Vec::new();
+    let mut line_buf = String::new();
+    let mut line_width = 0usize;
+
+    for ch in text.chars() {
+        if ch == '\n' {
+            lines.push(Line::from(Span::styled(
+                std::mem::take(&mut line_buf),
+                style,
+            )));
+            line_width = 0;
+            continue;
+        }
+
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if line_width + ch_width > width && !line_buf.is_empty() {
+            lines.push(Line::from(Span::styled(
+                std::mem::take(&mut line_buf),
+                style,
+            )));
+            line_width = 0;
+        }
+
+        line_buf.push(ch);
+        line_width += ch_width;
+
+        if line_width >= width {
+            lines.push(Line::from(Span::styled(
+                std::mem::take(&mut line_buf),
+                style,
+            )));
+            line_width = 0;
+        }
+    }
+
+    if !line_buf.is_empty() || text.ends_with('\n') {
+        lines.push(Line::from(Span::styled(line_buf, style)));
+    }
+    if lines.is_empty() {
+        lines.push(Line::default());
+    }
+    lines
+}
+
 fn line_cell_width(line: &Line<'static>) -> usize {
     line.spans
         .iter()
-        .map(|span| span.content.chars().count())
+        .map(|span| span.content.as_ref().width())
         .sum()
 }
 
@@ -360,12 +414,14 @@ impl<'a> Widget for ChatTab<'a> {
         let composer_prefix_width = face_width + 3; // face + ` │ ` separator
         let input_text_width = area.width.saturating_sub(composer_prefix_width + 1).max(1);
         let mut input_lines = if self.input.is_empty() {
-            vec![Line::from(Span::styled(
-                placeholder,
-                Style::default().fg(theme::DIM),
-            ))]
+            let mut spans = Vec::new();
+            if self.cursor_on {
+                spans.push(Span::styled("▏", Style::default().fg(theme::AMBER)));
+            }
+            spans.push(Span::styled(placeholder, Style::default().fg(theme::DIM)));
+            vec![Line::from(spans)]
         } else {
-            wrap_plain_lines(
+            wrap_input_lines(
                 self.input,
                 input_text_width,
                 Style::default().fg(theme::TEXT),
@@ -755,7 +811,15 @@ impl<'a> Widget for ChatTab<'a> {
                 input_area.x + 2,
                 hint_y,
                 &Line::from(Span::styled(
-                    "↵ send  / commands",
+                    format!(
+                        "↵ send  {} newline  F6 {} mouse capture  / commands",
+                        self.newline_hint,
+                        if self.mouse_capture_enabled {
+                            "release"
+                        } else {
+                            "enable"
+                        }
+                    ),
                     Style::default().fg(theme::DIM),
                 )),
                 hint_width,
@@ -777,6 +841,14 @@ mod cursor_tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     fn render(input: &str, cursor_on: bool) -> String {
+        render_with_mouse_capture(input, cursor_on, false)
+    }
+
+    fn render_with_mouse_capture(
+        input: &str,
+        cursor_on: bool,
+        mouse_capture_enabled: bool,
+    ) -> String {
         let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
         term.draw(|f| {
             let chat = ChatTab {
@@ -785,6 +857,8 @@ mod cursor_tests {
                 stream_state: StreamState::Idle,
                 scroll_offset: 0,
                 slash_open: false,
+                newline_hint: "⌥↵/Ctrl+J",
+                mouse_capture_enabled,
                 cursor_on,
                 anim_tick: 0,
                 tool_feed: &[],
@@ -821,6 +895,8 @@ mod cursor_tests {
                 stream_state,
                 scroll_offset: 0,
                 slash_open: false,
+                newline_hint: "⌥↵/Ctrl+J",
+                mouse_capture_enabled: true,
                 cursor_on,
                 anim_tick,
                 tool_feed: &[],
@@ -844,10 +920,62 @@ mod cursor_tests {
     }
 
     #[test]
+    fn composer_hint_lists_newline_fallback_and_mouse_toggle() {
+        let text = render("", false);
+        assert!(
+            text.contains("⌥↵/Ctrl+J newline"),
+            "newline fallback hint missing:
+{text}"
+        );
+        assert!(
+            text.contains("F6 enable mouse capture"),
+            "mouse capture hint missing:
+{text}"
+        );
+
+        let captured = render_with_mouse_capture("", false, true);
+        assert!(
+            captured.contains("F6 release mouse capture"),
+            "mouse release hint missing when capture is enabled:
+{captured}"
+        );
+    }
+
+    #[test]
     fn caret_painted_with_input_during_blink() {
         assert!(
             render("hello", true).contains('\u{258f}'),
             "expected composer caret when typing during blink-on"
+        );
+    }
+
+    fn caret_position(rendered: &str) -> (usize, usize) {
+        rendered
+            .lines()
+            .enumerate()
+            .find_map(|(row, line)| {
+                line.chars()
+                    .position(|ch| ch == '\u{258f}')
+                    .map(|col| (row, col))
+            })
+            .expect("rendered composer should contain a caret")
+    }
+
+    #[test]
+    fn caret_advances_after_trailing_space() {
+        let before = render("hello", true);
+        let after = render("hello ", true);
+        let (before_row, before_col) = caret_position(&before);
+        let (after_row, after_col) = caret_position(&after);
+
+        assert_eq!(
+            after_row, before_row,
+            "single trailing space should stay on the same visual composer row:\n{after}"
+        );
+        assert_eq!(
+            after_col,
+            before_col + 1,
+            "caret should visibly advance one cell after a trailing space:\nBEFORE:\n{before}\nAFTER:\n{after}"
         );
     }
 
@@ -860,11 +988,19 @@ mod cursor_tests {
     }
 
     #[test]
-    fn caret_hidden_on_empty_input() {
-        // Empty composer shows the placeholder, not an edit caret.
+    fn caret_painted_on_empty_input_during_blink() {
+        let text = render("", true);
         assert!(
-            !render("", true).contains('\u{258f}'),
-            "expected no caret on empty composer (placeholder shown)"
+            text.contains("▏message…"),
+            "expected empty composer to show the focused caret before the placeholder:\n{text}"
+        );
+    }
+
+    #[test]
+    fn caret_hidden_on_empty_input_during_blink_off() {
+        assert!(
+            !render("", false).contains('\u{258f}'),
+            "expected empty composer caret to blink off during the off half-cycle"
         );
     }
 
@@ -912,6 +1048,8 @@ mod cursor_tests {
                 stream_state: StreamState::Idle,
                 scroll_offset: 0,
                 slash_open: true,
+                newline_hint: "⌥↵/Ctrl+J",
+                mouse_capture_enabled: true,
                 cursor_on: false,
                 anim_tick: 0,
                 tool_feed: &[],
@@ -974,6 +1112,8 @@ mod autoscroll_tests {
                 stream_state: StreamState::Idle,
                 scroll_offset,
                 slash_open: false,
+                newline_hint: "⌥↵/Ctrl+J",
+                mouse_capture_enabled: true,
                 cursor_on: false,
                 anim_tick: 0,
                 tool_feed: &[],
@@ -1092,6 +1232,8 @@ mod markdown_bleed_tests {
                 stream_state: StreamState::Idle,
                 scroll_offset: 0,
                 slash_open: false,
+                newline_hint: "⌥↵/Ctrl+J",
+                mouse_capture_enabled: true,
                 cursor_on: false,
                 anim_tick: 0,
                 tool_feed: &[],
@@ -1115,6 +1257,8 @@ mod markdown_bleed_tests {
                 stream_state: StreamState::Idle,
                 scroll_offset: 0,
                 slash_open: false,
+                newline_hint: "⌥↵/Ctrl+J",
+                mouse_capture_enabled: true,
                 cursor_on: false,
                 anim_tick: 0,
                 tool_feed: &[],
@@ -1155,6 +1299,8 @@ mod markdown_bleed_tests {
                 stream_state: StreamState::Queued,
                 scroll_offset: 0,
                 slash_open: false,
+                newline_hint: "⌥↵/Ctrl+J",
+                mouse_capture_enabled: true,
                 cursor_on: false,
                 anim_tick: 0,
                 tool_feed: &[],
@@ -1287,6 +1433,8 @@ mod markdown_bleed_tests {
                 stream_state: StreamState::Idle,
                 scroll_offset: 0,
                 slash_open: false,
+                newline_hint: "⌥↵/Ctrl+J",
+                mouse_capture_enabled: true,
                 cursor_on: false,
                 anim_tick: 0,
                 tool_feed: &[],
@@ -1322,6 +1470,8 @@ mod markdown_bleed_tests {
                 stream_state: StreamState::Idle,
                 scroll_offset: 0,
                 slash_open: false,
+                newline_hint: "⌥↵/Ctrl+J",
+                mouse_capture_enabled: true,
                 cursor_on: false,
                 anim_tick: 0,
                 tool_feed: &[],
@@ -1408,6 +1558,8 @@ mod markdown_bleed_tests {
                 stream_state: StreamState::Streaming,
                 scroll_offset: 0,
                 slash_open: false,
+                newline_hint: "⌥↵/Ctrl+J",
+                mouse_capture_enabled: true,
                 cursor_on: false,
                 anim_tick: 0,
                 tool_feed: &[ToolFeedItem {

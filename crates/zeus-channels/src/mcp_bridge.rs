@@ -498,7 +498,7 @@ mod tests {
         });
         assert!(
             bridge
-                .validate_args(&schema, &serde_json::json!({"count": 3.14}))
+                .validate_args(&schema, &serde_json::json!({"count": std::f64::consts::PI}))
                 .is_ok()
         );
         assert!(
@@ -529,7 +529,7 @@ mod tests {
         // which is_i64()/is_u64() returns false for.
         assert!(
             bridge
-                .validate_args(&schema, &serde_json::json!({"n": 3.14}))
+                .validate_args(&schema, &serde_json::json!({"n": std::f64::consts::PI}))
                 .is_err()
         );
     }

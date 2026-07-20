@@ -281,6 +281,8 @@ pub async fn fetch_models(provider_id: &str, api_key: &str) -> Result<Vec<String
                 Ok(models)
             }
         }
+        "glm-coding" => Ok(vec!["glm-5.2".into(), "glm-5-turbo".into(), "glm-4.7".into()]),
+        "minimax-coding" => Ok(vec!["MiniMax-M2.5".into(), "MiniMax-M3".into(), "MiniMax-M2.7".into()]),
         "glm" => {
             // GLM / z.ai (Zhipu) — OpenAI-compatible surface on the `/api/paas/v4`
             // platform. Endpoint sourced from zeus-llm's `resolve_zai_base_url`

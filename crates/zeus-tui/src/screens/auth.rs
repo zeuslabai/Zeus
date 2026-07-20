@@ -130,6 +130,9 @@ impl AuthScreen {
         cy += 1;
 
         let is_ollama = self.provider_id == "ollama";
+        let is_kimi_code = self.provider_id == "kimi-code";
+        let is_glm_coding = self.provider_id == "glm-coding";
+        let is_minimax_coding = self.provider_id == "minimax-coding";
 
         // Subtitle
         let subtitle = if is_ollama {
@@ -141,6 +144,51 @@ impl AuthScreen {
                 Span::styled("OLLAMA_HOST", Style::default().fg(theme::ACCENT_BRIGHT)),
                 Span::styled(
                     " and polls /api/tags for models.",
+                    Style::default().fg(theme::DIM),
+                ),
+            ])
+        } else if is_kimi_code {
+            Line::from(vec![
+                Span::styled(
+                    "Kimi subscription key persists as ",
+                    Style::default().fg(theme::DIM),
+                ),
+                Span::styled(
+                    "KIMI_CODE_API_KEY",
+                    Style::default().fg(theme::ACCENT_BRIGHT),
+                ),
+                Span::styled(
+                    " — separate from PAYG Kimi/Moonshot.",
+                    Style::default().fg(theme::DIM),
+                ),
+            ])
+        } else if is_glm_coding {
+            Line::from(vec![
+                Span::styled(
+                    "GLM Coding subscription key persists as ",
+                    Style::default().fg(theme::DIM),
+                ),
+                Span::styled(
+                    "GLM_CODING_API_KEY",
+                    Style::default().fg(theme::ACCENT_BRIGHT),
+                ),
+                Span::styled(
+                    " — separate from PAYG GLM/Zai.",
+                    Style::default().fg(theme::DIM),
+                ),
+            ])
+        } else if is_minimax_coding {
+            Line::from(vec![
+                Span::styled(
+                    "MiniMax Coding subscription key persists as ",
+                    Style::default().fg(theme::DIM),
+                ),
+                Span::styled(
+                    "MINIMAX_CODING_API_KEY",
+                    Style::default().fg(theme::ACCENT_BRIGHT),
+                ),
+                Span::styled(
+                    " — separate from PAYG MiniMax.",
                     Style::default().fg(theme::DIM),
                 ),
             ])
@@ -226,6 +274,12 @@ impl AuthScreen {
         if self.selected_mode <= 1 {
             let field_label = if is_ollama {
                 "Ollama URL/Port"
+            } else if is_kimi_code && self.selected_mode == 0 {
+                "Kimi subscription API key"
+            } else if is_glm_coding && self.selected_mode == 0 {
+                "GLM Coding subscription API key"
+            } else if is_minimax_coding && self.selected_mode == 0 {
+                "MiniMax Coding subscription API key"
             } else if self.selected_mode == 0 {
                 "API Key"
             } else {
@@ -243,6 +297,12 @@ impl AuthScreen {
             // JSX renders `API KEY` / `SETUP TOKEN` letter-spaced above the field.
             let section = if is_ollama {
                 "O L L A M A   H O S T"
+            } else if is_kimi_code && self.selected_mode == 0 {
+                "K I M I   S U B S C R I P T I O N   K E Y"
+            } else if is_glm_coding && self.selected_mode == 0 {
+                "G L M   C O D I N G   S U B S C R I P T I O N   K E Y"
+            } else if is_minimax_coding && self.selected_mode == 0 {
+                "M I N I M A X   C O D I N G   S U B S C R I P T I O N   K E Y"
             } else if self.selected_mode == 0 {
                 "A P I   K E Y"
             } else {
@@ -763,6 +823,55 @@ mod tests {
         assert!(
             !rendered.contains("***1434"),
             "Ollama URL must not be masked like a secret; got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn kimi_code_auth_field_is_subscription_key_not_payg_kimi() {
+        let rendered = render_auth_to_string(120, "sk-kimicode-123456789", "kimi-code", "sk-...");
+        assert!(
+            rendered.contains("Kimi subscription key persists as"),
+            "Kimi Code auth screen must explain subscription-key storage; got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("KIMI_CODE_API_KEY"),
+            "Kimi Code auth preview must use subscription credential key; got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("Kimi subscription API key")
+                || rendered.contains("KIMI SUBSCRIPTION KEY"),
+            "Kimi Code auth field must be labeled as the subscription key; got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("MOONSHOT_API_KEY"),
+            "Kimi Code auth must not reuse the PAYG Kimi/Moonshot key; got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn minimax_coding_auth_uses_subscription_key_copy() {
+        let rendered = render_auth_to_string(
+            120,
+            "sk-api-minimaxcoding-123456789",
+            "minimax-coding",
+            "sk-api-...",
+        );
+        assert!(
+            rendered.contains("MiniMax Coding subscription key persists as"),
+            "MiniMax Coding auth screen must explain subscription-key storage; got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("MINIMAX_CODING_API_KEY"),
+            "MiniMax Coding auth preview must use subscription credential key; got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("MiniMax Coding subscription API key")
+                || rendered.contains("MINIMAX CODING SUBSCRIPTION KEY"),
+            "MiniMax Coding auth field must be labeled as the subscription key; got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("MINIMAX_API_KEY"),
+            "MiniMax Coding auth must not reuse the PAYG MiniMax key; got:\n{rendered}"
         );
     }
 

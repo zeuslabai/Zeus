@@ -64,6 +64,28 @@ use crate::prod::{
     ToolsTab,
 };
 
+fn chat_role_from_session_role(role: &str) -> Option<Role> {
+    match role.trim().to_ascii_lowercase().as_str() {
+        "system" => Some(Role::System),
+        "user" => Some(Role::User),
+        "assistant" => Some(Role::Assistant),
+        "tool" | "toolcall" | "tool_call" => Some(Role::ToolCall),
+        _ => None,
+    }
+}
+
+fn session_message_to_chat_message(message: crate::api::SessionMessage) -> Option<ChatMessage> {
+    let role = chat_role_from_session_role(&message.role)?;
+    if message.content.trim().is_empty() {
+        return None;
+    }
+    Some(ChatMessage {
+        role,
+        text: message.content,
+        tool_name: None,
+    })
+}
+
 /// Onboarding step index — indexes into widgets::top_bar::STEPS.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Step {
@@ -337,6 +359,13 @@ pub struct App {
     /// Current cook iteration count (from `iter` SSE events).
     prod_iter_count: u32,
     prod_slash_open: bool,
+    /// True while the TUI owns terminal mouse events. Defaults off so native
+    /// terminal mouse/trackpad selection + copy works without the TUI swallowing
+    /// drag events; F6 toggles capture on only when mouse scrolling is wanted.
+    prod_mouse_capture_enabled: bool,
+    /// True when the terminal accepted crossterm/kitty keyboard enhancement
+    /// flags, allowing Shift+Enter to arrive distinctly from bare Enter.
+    prod_keyboard_enhancement_enabled: bool,
     prod_queue_count: usize,
     prod_tools_selected_category: Option<String>,
     prod_tools_selected_tool: String,
@@ -481,6 +510,8 @@ impl App {
             prod_tool_feed: Vec::new(),
             prod_iter_count: 0,
             prod_slash_open: false,
+            prod_mouse_capture_enabled: false,
+            prod_keyboard_enhancement_enabled: false,
             prod_queue_count: 0,
             prod_tools_selected_category: None,
             prod_tools_selected_tool: "shell".to_string(),
@@ -599,6 +630,44 @@ impl App {
         if !cfg.enabled_skills.is_empty() {
             self.skills_screen.installed = cfg.enabled_skills.clone();
         }
+
+        // ── security (aegis sandbox level) — #401 follow-up: pre-select the
+        //    card matching a real existing `cfg.aegis.sandbox_level` so an
+        //    interactive re-run of onboarding on a configured box reflects the
+        //    operator's actual prior choice, and so `collect_and_persist()`'s
+        //    gated write (see `touched()`) preserves it on a no-op press-through
+        //    instead of silently downgrading it to the wizard's "standard"
+        //    default. ──
+        if let Some(aegis) = cfg.aegis.as_ref() {
+            self.security_screen.hydrate_from_id(&aegis.sandbox_level);
+        }
+    }
+
+    /// Hydrate the visible production chat from persisted session messages.
+    ///
+    /// The TUI uses a stable gateway session (`agent:main:main`) for chat, so a
+    /// reopened TUI should mirror that transcript instead of rendering an empty
+    /// composer. Hydration is intentionally no-op once live messages exist: a
+    /// slow gateway fetch must not clobber text the operator has already sent in
+    /// this run.
+    pub fn hydrate_chat_history_if_empty<I>(&mut self, messages: I)
+    where
+        I: IntoIterator<Item = crate::api::SessionMessage>,
+    {
+        if !self.prod_chat_messages.is_empty() {
+            return;
+        }
+
+        let messages = messages
+            .into_iter()
+            .filter_map(session_message_to_chat_message)
+            .collect::<Vec<_>>();
+        if messages.is_empty() {
+            return;
+        }
+
+        self.prod_chat_messages = messages;
+        self.prod_chat_scroll = 0;
     }
 
     /// Append a user message synchronously before dispatching to the async
@@ -752,8 +821,29 @@ impl App {
             .sum()
     }
 
+    fn chat_input_focused(&self) -> bool {
+        self.onboarding_complete
+            && self.prod_active_tab == 0
+            && self.prod_active_adv.is_none()
+            && self.prod_adv_detail.is_none()
+    }
+
+    fn chat_newline_hint(&self) -> &'static str {
+        if self.prod_keyboard_enhancement_enabled {
+            "⇧↵/⌥↵/Ctrl+J"
+        } else {
+            "⌥↵/Ctrl+J"
+        }
+    }
+
+    fn toggle_mouse_capture(&mut self) -> bool {
+        self.prod_mouse_capture_enabled = !self.prod_mouse_capture_enabled;
+        self.prod_mouse_capture_enabled
+    }
+
     fn handle_mouse_prod(&mut self, kind: MouseEventKind) {
-        if !self.onboarding_complete
+        if !self.prod_mouse_capture_enabled
+            || !self.onboarding_complete
             || self.prod_active_tab != 0
             || self.prod_active_adv.is_some()
             || self.prod_adv_detail.is_some()
@@ -894,12 +984,12 @@ impl App {
                     self.prod_office_show_memo = false;
                 }
             }
-            KeyCode::Char('/') => {
-                if self.prod_active_tab == 0 && self.prod_chat_input.is_empty() {
-                    // Open slash command overlay
+            KeyCode::Char('/') if self.prod_active_tab == 0 && self.prod_active_adv.is_none() => {
+                let was_empty = self.prod_chat_input.is_empty();
+                self.prod_chat_input.push('/');
+                if was_empty {
+                    // Keep slash commands discoverable without swallowing the literal slash.
                     self.prod_slash_open = true;
-                } else {
-                    self.prod_chat_input.push('/');
                 }
             }
             // Memory tab — endpoint sub-tab switch (1–3) + h/l cycle.
@@ -1248,6 +1338,30 @@ impl App {
             }
         }
 
+        // ── security (aegis sandbox level) ──
+        // #401: the security screen's selection previously rendered in the
+        // review-summary line ("aegis level: X") but was NEVER written to
+        // `cfg.aegis.sandbox_level` here — collect_and_persist() had zero
+        // `cfg.aegis` writes at all, so choosing "Strict" on this screen was
+        // purely cosmetic and every onboarding run silently kept whatever
+        // sandbox_level (or the AegisConfig::default() "none") was already on
+        // disk. `config_level_value()` is now identity-mapped to one of the 5
+        // real `SandboxLevel` strings, so this write is a direct passthrough.
+        //
+        // Gated on `touched()` (mirrors the image_gen/memory "none" skip
+        // idiom): the screen is hydrated from a real existing
+        // `cfg.aegis.sandbox_level` in `hydrate_from_config` (which marks it
+        // touched), so this only no-ops when there's genuinely no prior value
+        // AND the user never moved the selector — it must NOT fabricate a
+        // brand-new `[aegis]` section from the wizard's cosmetic default on
+        // an unrelated no-op press-through (caught by
+        // onb_startup_routing::forced_onboarding_press_through_preserves_existing_config_bytes).
+        if self.security_screen.touched() {
+            let level = self.security_screen.config_level_value();
+            let aegis = cfg.aegis.get_or_insert_with(Default::default);
+            aegis.sandbox_level = level.to_string();
+        }
+
         // ── channels (relay creds) — for each TOGGLED channel, build its
         //    per-channel config from the collected field values and write it
         //    into cfg.channels.<channel>. Parent ChannelsConfig derives Default
@@ -1400,14 +1514,21 @@ impl App {
             if toggled.iter().any(|c| c == "instagram") {
                 let opt = |k: &str| {
                     let value = val(k);
-                    if value.trim().is_empty() { None } else { Some(value) }
+                    if value.trim().is_empty() {
+                        None
+                    } else {
+                        Some(value)
+                    }
                 };
                 let poll_interval_secs = val("instagram.poll_interval_secs")
                     .trim()
                     .parse::<u64>()
                     .ok();
                 let auto_reply = matches!(
-                    val("instagram.auto_reply").trim().to_ascii_lowercase().as_str(),
+                    val("instagram.auto_reply")
+                        .trim()
+                        .to_ascii_lowercase()
+                        .as_str(),
                     "1" | "true" | "on" | "yes"
                 );
                 let ch = cfg.channels.get_or_insert_with(Default::default);
@@ -1444,6 +1565,11 @@ impl App {
                     access_token_secret: val("x_twitter.access_token_secret"),
                     client_id: val("x_twitter.client_id"),
                     client_secret: val("x_twitter.client_secret"),
+                    oauth2_access_token: val("x_twitter.oauth2_access_token"),
+                    oauth2_refresh_token: val("x_twitter.oauth2_refresh_token"),
+                    oauth2_expires_at: val("x_twitter.oauth2_expires_at")
+                        .parse::<u64>()
+                        .unwrap_or(0),
                     poll_interval_secs: None,
                     auto_reply: false,
                     policy: None,
@@ -1473,7 +1599,11 @@ impl App {
                 let token = val("webchat.auth_token");
                 let ch = cfg.channels.get_or_insert_with(Default::default);
                 ch.webchat = Some(zeus_core::WebChatChannelConfig {
-                    websocket_path: if ws_path.is_empty() { None } else { Some(ws_path) },
+                    websocket_path: if ws_path.is_empty() {
+                        None
+                    } else {
+                        Some(ws_path)
+                    },
                     auth_token: if token.is_empty() { None } else { Some(token) },
                     allowed_origins: Vec::new(),
                     max_message_size: None,
@@ -1493,7 +1623,11 @@ impl App {
                     credentials_path: Some(val("googlechat.credentials_path")),
                     access_token: None,
                     webhook_path: None,
-                    project_id: if project.is_empty() { None } else { Some(project) },
+                    project_id: if project.is_empty() {
+                        None
+                    } else {
+                        Some(project)
+                    },
                     policy: None,
                 });
             }
@@ -1536,7 +1670,11 @@ impl App {
                 let ch = cfg.channels.get_or_insert_with(Default::default);
                 ch.line = Some(zeus_core::LineChannelConfig {
                     channel_access_token: val("line.channel_access_token"),
-                    channel_secret: if secret.is_empty() { None } else { Some(secret) },
+                    channel_secret: if secret.is_empty() {
+                        None
+                    } else {
+                        Some(secret)
+                    },
                     webhook_path: None,
                     policy: None,
                 });
@@ -1549,7 +1687,11 @@ impl App {
                     app_id: val("feishu.app_id"),
                     app_secret: val("feishu.app_secret"),
                     encrypt_key: None,
-                    verification_token: if vtoken.is_empty() { None } else { Some(vtoken) },
+                    verification_token: if vtoken.is_empty() {
+                        None
+                    } else {
+                        Some(vtoken)
+                    },
                     webhook_path: None,
                     use_lark: false,
                     policy: None,
@@ -1562,7 +1704,11 @@ impl App {
                 ch.zalo = Some(zeus_core::ZaloChannelConfig {
                     app_id: val("zalo.app_id"),
                     secret_key: val("zalo.secret_key"),
-                    access_token: if atoken.is_empty() { None } else { Some(atoken) },
+                    access_token: if atoken.is_empty() {
+                        None
+                    } else {
+                        Some(atoken)
+                    },
                     refresh_token: None,
                     webhook_path: None,
                     policy: None,
@@ -1600,7 +1746,11 @@ impl App {
                     account_sid: val("voice.account_sid"),
                     auth_token: val("voice.auth_token"),
                     from_number: val("voice.from_number"),
-                    webhook_base_url: if base_url.is_empty() { None } else { Some(base_url) },
+                    webhook_base_url: if base_url.is_empty() {
+                        None
+                    } else {
+                        Some(base_url)
+                    },
                     webhook_port: None,
                     tts_voice: None,
                     incoming_greeting: None,
@@ -2018,18 +2168,16 @@ impl App {
             return;
         }
 
-        // #348: when the terminal can report Shift+Enter distinctly (kitty
-        // keyboard protocol / CSI-u), chat uses it for a literal newline while
-        // plain Enter keeps the existing send behavior. Terminals that cannot
-        // distinguish Shift+Enter never set this modifier on Enter, so they
-        // gracefully degrade to plain Enter-to-send.
-        if self.onboarding_complete
-            && self.prod_active_tab == 0
-            && self.prod_active_adv.is_none()
-            && self.prod_adv_detail.is_none()
-            && key == KeyCode::Enter
-            && mods.contains(KeyModifiers::SHIFT)
-        {
+        // #369: Shift+Enter is still the preferred multiline binding when
+        // the terminal can report it (kitty keyboard protocol / CSI-u via
+        // KeyboardEnhancementFlags). Plain Terminal.app-class emulators often
+        // deliver Shift+Enter as bare Enter, so keep universal fallbacks that
+        // crossterm can see in raw mode: Alt+Enter and Ctrl+J.
+        let newline_combo = (key == KeyCode::Enter
+            && (mods.contains(KeyModifiers::SHIFT) || mods.contains(KeyModifiers::ALT)))
+            || (matches!(key, KeyCode::Char('j') | KeyCode::Char('J'))
+                && mods.contains(KeyModifiers::CONTROL));
+        if self.chat_input_focused() && newline_combo {
             self.prod_chat_input.push('\n');
             return;
         }
@@ -2195,7 +2343,7 @@ impl App {
                     // level card (not step-nav). Enter advances; Esc backs out.
                     self.security_screen.select_next();
                 } else if Step::from_index(self.current_step) == Some(Step::Gateway) {
-                    // Gateway service picker is a 4-col grid → → moves the
+                    // Gateway service picker is a service-card row → → moves the
                     // selected service card (not step-nav). Esc backs out.
                     self.gateway_screen.move_right();
                 } else if Step::from_index(self.current_step) == Some(Step::Orchestration) {
@@ -2301,7 +2449,7 @@ impl App {
                     // level card (not step-back). Esc backs out of the step.
                     self.security_screen.select_prev();
                 } else if Step::from_index(self.current_step) == Some(Step::Gateway) {
-                    // Gateway service picker is a 4-col grid → ← moves the
+                    // Gateway service picker is a service-card row → ← moves the
                     // selected service card (not step-back). Esc backs out.
                     self.gateway_screen.move_left();
                 } else if Step::from_index(self.current_step) == Some(Step::Orchestration) {
@@ -2975,6 +3123,8 @@ fn frame_prod(f: &mut ratatui::Frame, app: &App, area: ratatui::layout::Rect) {
             stream_state: app.prod_stream_state,
             scroll_offset: app.prod_chat_scroll,
             slash_open: app.prod_slash_open,
+            newline_hint: app.chat_newline_hint(),
+            mouse_capture_enabled: app.prod_mouse_capture_enabled,
             cursor_on: app.cursor_visible(),
             anim_tick: app.anim_tick,
             tool_feed: &app.prod_tool_feed,
@@ -3204,14 +3354,17 @@ pub fn run_loop(app: std::sync::Arc<std::sync::Mutex<App>>) -> io::Result<()> {
     crossterm::execute!(
         stdout,
         crossterm::terminal::EnterAlternateScreen,
-        EnableMouseCapture,
         crossterm::cursor::Hide
     )?;
     if keyboard_enhancement_enabled {
-        crossterm::execute!(
-            stdout,
-            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-        )?;
+        let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+            | KeyboardEnhancementFlags::REPORT_EVENT_TYPES;
+        crossterm::execute!(stdout, PushKeyboardEnhancementFlags(flags))?;
+    }
+    {
+        let mut a = app.lock().unwrap_or_else(|e| e.into_inner());
+        a.prod_keyboard_enhancement_enabled = keyboard_enhancement_enabled;
+        a.prod_mouse_capture_enabled = false;
     }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -3251,6 +3404,18 @@ pub fn run_loop(app: std::sync::Arc<std::sync::Mutex<App>>) -> io::Result<()> {
                         && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('q'))
                     {
                         break;
+                    }
+                    if key.code == KeyCode::F(6) {
+                        let mouse_enabled = app
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .toggle_mouse_capture();
+                        if mouse_enabled {
+                            crossterm::execute!(terminal.backend_mut(), EnableMouseCapture)?;
+                        } else {
+                            crossterm::execute!(terminal.backend_mut(), DisableMouseCapture)?;
+                        }
+                        continue;
                     }
                     app.lock()
                         .unwrap_or_else(|e| e.into_inner())
@@ -3336,7 +3501,10 @@ mod persist_tests {
         }
     }
 
-    fn zeus_home_and_home_guard(zeus_home: &std::path::Path, home: &std::path::Path) -> ZeusHomeGuard {
+    fn zeus_home_and_home_guard(
+        zeus_home: &std::path::Path,
+        home: &std::path::Path,
+    ) -> ZeusHomeGuard {
         let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let previous = std::env::var_os("ZEUS_HOME");
         let previous_home = std::env::var_os("HOME");
@@ -3406,8 +3574,11 @@ mod persist_tests {
             "selected persona tone must appear in SOUL.md; got:\n{healed}"
         );
 
-        std::fs::write(workspace.join("SOUL.md"), "# SOUL.md — Custom\n\nDo not overwrite me.\n")
-            .unwrap();
+        std::fs::write(
+            workspace.join("SOUL.md"),
+            "# SOUL.md — Custom\n\nDo not overwrite me.\n",
+        )
+        .unwrap();
         app.agent_screen.select_persona_name("Coordinator");
         app.collect_and_persist().expect("persist should succeed");
         let preserved = std::fs::read_to_string(workspace.join("SOUL.md")).unwrap();
@@ -3686,6 +3857,120 @@ persona = "Innovator"
     /// pre-existing `.env` is left completely untouched — config.toml is the
     /// only source, no mirror.
     #[test]
+    fn kimi_code_subscription_key_persists_separately_from_payg_kimi() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _env = zeus_home_guard(tmp.path());
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            "model = \"anthropic/claude-opus-4-8\"\n",
+        )
+        .unwrap();
+
+        let mut app = App::new();
+        app.provider_selected = crate::screens::providers::PROVIDERS
+            .iter()
+            .position(|p| p.id == "kimi-code")
+            .expect("Kimi Code provider must be selectable");
+        app.set_auth_api_key("sk-kimicode-subscription-123");
+
+        let cfg = app.collect_and_persist().expect("persist should succeed");
+
+        assert_eq!(
+            cfg.credentials.get("KIMI_CODE_API_KEY").map(String::as_str),
+            Some("sk-kimicode-subscription-123"),
+            "Kimi Code subscription key must persist to the provider slot #410 reads"
+        );
+        assert!(
+            !cfg.credentials.contains_key("MOONSHOT_API_KEY"),
+            "subscription Kimi Code auth must not overwrite the PAYG Kimi/Moonshot key"
+        );
+
+        let written = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(
+            written.contains("KIMI_CODE_API_KEY = \"sk-kimicode-subscription-123\""),
+            "saved config.toml must contain KIMI_CODE_API_KEY; got:\n{written}"
+        );
+        assert!(
+            !written.contains("MOONSHOT_API_KEY"),
+            "saved config.toml must keep Kimi subscription separate from PAYG Kimi; got:\n{written}"
+        );
+    }
+
+    #[test]
+    fn minimax_coding_subscription_persists_to_dedicated_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _env = zeus_home_guard(tmp.path());
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            "model = \"anthropic/claude-opus-4-8\"\n",
+        )
+        .unwrap();
+
+        let mut app = App::new();
+        app.provider_selected = crate::screens::providers::PROVIDERS
+            .iter()
+            .position(|p| p.id == "minimax-coding")
+            .expect("MiniMax Coding provider must be selectable");
+        app.model_screen = crate::screens::ModelScreen::new("minimax-coding".to_string());
+        app.set_auth_api_key("sk-api-minimaxcoding-subscription-123");
+
+        let cfg = app.collect_and_persist().expect("persist should succeed");
+        assert_eq!(
+            cfg.credentials
+                .get("MINIMAX_CODING_API_KEY")
+                .map(String::as_str),
+            Some("sk-api-minimaxcoding-subscription-123"),
+            "MiniMax Coding subscription key must persist to the provider slot #415 reads"
+        );
+        assert!(
+            !cfg.credentials.contains_key("MINIMAX_API_KEY"),
+            "subscription MiniMax Coding auth must not overwrite the PAYG MiniMax key"
+        );
+
+        let written = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
+        assert!(
+            written.contains(
+                "MINIMAX_CODING_API_KEY = \"sk-api-minimaxcoding-subscription-123\""
+            ),
+            "saved config.toml must contain MINIMAX_CODING_API_KEY; got:\n{written}"
+        );
+        assert!(
+            !written.contains("MINIMAX_API_KEY"),
+            "saved config.toml must keep MiniMax subscription separate from PAYG MiniMax; got:\n{written}"
+        );
+    }
+
+    #[test]
+    fn payg_kimi_still_persists_to_moonshot_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _env = zeus_home_guard(tmp.path());
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            "model = \"anthropic/claude-opus-4-8\"\n",
+        )
+        .unwrap();
+
+        let mut app = App::new();
+        app.provider_selected = crate::screens::providers::PROVIDERS
+            .iter()
+            .position(|p| p.id == "kimi")
+            .expect("PAYG Kimi provider must remain selectable");
+        app.set_auth_api_key("sk-payg-kimi-123");
+
+        let cfg = app.collect_and_persist().expect("persist should succeed");
+
+        assert_eq!(
+            cfg.credentials.get("MOONSHOT_API_KEY").map(String::as_str),
+            Some("sk-payg-kimi-123"),
+            "PAYG Kimi must keep using the Moonshot credential slot"
+        );
+        assert!(
+            !cfg.credentials.contains_key("KIMI_CODE_API_KEY"),
+            "PAYG Kimi auth must not populate the Kimi Code subscription key"
+        );
+    }
+
+    #[test]
     fn plain_api_key_persists_to_config_credentials_not_env() {
         let tmp = tempfile::tempdir().unwrap();
         let _env = zeus_home_guard(tmp.path());
@@ -3781,7 +4066,10 @@ persona = "Innovator"
         .unwrap();
 
         let mut app = App::new();
-        app.provider_selected = 8; // MiniMax in screens/providers.rs
+        app.provider_selected = crate::screens::providers::PROVIDERS
+            .iter()
+            .position(|p| p.id == "minimax")
+            .expect("MiniMax provider must be selectable");
         app.model_screen.set_provider("minimax");
         app.auth_api_key = "sk-api-minimax-realkey-123".to_string();
         app.collect_and_persist().expect("persist should succeed");
@@ -3815,23 +4103,20 @@ persona = "Innovator"
     /// auth path.
     #[test]
     fn non_anthropic_oauth_routes_to_provider_credentials_not_dropped() {
-
-        // (provider-screen index, canonical section id, the provider's env_key.
-        //  Indices match screens/providers.rs PROVIDERS order: gemini-cli=4,
-        //  qwen=7, minimax=8, mimo=9. collect_and_persist canonicalizes the
-        //  screen id via from_prefix — gemini-cli must resolve, not default to
-        //  Anthropic.)
+        // (provider-screen id, canonical section id, the provider's env_key.
+        //  collect_and_persist canonicalizes the screen id via from_prefix —
+        //  gemini-cli must resolve, not default to Anthropic.)
         // section = the SERDE rename used in [provider_credentials.{section}]
         // (hyphenated for gemini-cli per #[serde(rename="google-gemini-cli")]),
         // NOT the Rust field name.
         let cases = [
-            (4usize, "google-gemini-cli", ""),
-            (7, "qwen", "QWEN_API_KEY"),
-            (8, "minimax", "MINIMAX_API_KEY"),
-            (9, "xiaomimimo", "XIAOMIMIMO_API_KEY"),
+            ("gemini-cli", "google-gemini-cli", ""),
+            ("qwen", "qwen", "QWEN_API_KEY"),
+            ("minimax", "minimax", "MINIMAX_API_KEY"),
+            ("mimo", "xiaomimimo", "XIAOMIMIMO_API_KEY"),
         ];
 
-        for (provider_idx, section, env_key) in cases {
+        for (provider_id, section, env_key) in cases {
             let tmp = tempfile::tempdir().unwrap();
             let _env = zeus_home_guard(tmp.path());
             std::fs::write(
@@ -3843,6 +4128,10 @@ persona = "Innovator"
             let mut app = App::new();
             // Select the provider via the real onboarding field — cfg.model is
             // rebuilt from provider_selected (+model_screen), NOT the file.
+            let provider_idx = crate::screens::providers::PROVIDERS
+                .iter()
+                .position(|p| p.id == provider_id)
+                .unwrap_or_else(|| panic!("provider {provider_id} must be selectable"));
             app.provider_selected = provider_idx;
             // Setup-Token mode (1) — explicit OAuth choice. The token here does
             // NOT start with sk-ant-oat, proving routing is auth_mode-driven.
@@ -4241,7 +4530,10 @@ persona = "Innovator"
     #[test]
     fn minimax_skapi_key_passes() {
         let (mut app, mut rx) = app_on_auth_with_fetch();
-        app.provider_selected = 8; // MiniMax (key_fmt now `sk-api-...`)
+        app.provider_selected = crate::screens::providers::PROVIDERS
+            .iter()
+            .position(|p| p.id == "minimax")
+            .expect("MiniMax provider must be selectable");
         // Fake sample key with the correct `sk-api-` prefix (NOT a real key).
         app.set_auth_api_key("sk-api-TESTtoken123");
         app.advance_step();
@@ -4338,6 +4630,89 @@ persona = "Innovator"
     }
 
     #[test]
+    fn chat_tab_empty_slash_inserts_and_opens_commands() {
+        let mut app = App::new();
+        app.onboarding_complete = true;
+        app.prod_active_tab = 0;
+        app.prod_active_adv = None;
+
+        app.handle_key_prod(KeyCode::Char('/'));
+
+        assert_eq!(app.prod_chat_input, "/");
+        assert!(
+            app.prod_slash_open,
+            "first slash should still open the command overlay"
+        );
+    }
+
+    #[test]
+    fn chat_tab_non_empty_slash_appends_as_text() {
+        let mut app = App::new();
+        app.onboarding_complete = true;
+        app.prod_active_tab = 0;
+        app.prod_active_adv = None;
+        app.prod_chat_input = "run".to_string();
+
+        app.handle_key_prod(KeyCode::Char('/'));
+
+        assert_eq!(app.prod_chat_input, "run/");
+        assert!(
+            !app.prod_slash_open,
+            "slash in existing text should not open command overlay"
+        );
+    }
+
+    fn persisted_session_msg(role: &str, content: &str) -> crate::api::SessionMessage {
+        crate::api::SessionMessage {
+            role: role.to_string(),
+            content: content.to_string(),
+            timestamp: String::new(),
+            channel_source: None,
+        }
+    }
+
+    #[test]
+    fn hydrate_chat_history_maps_persisted_session_messages() {
+        let mut app = App::new();
+
+        app.hydrate_chat_history_if_empty(vec![
+            persisted_session_msg("System", "context"),
+            persisted_session_msg("User", "hello"),
+            persisted_session_msg("Assistant", "hi there"),
+            persisted_session_msg("Tool", "read_file ok"),
+            persisted_session_msg("unknown", "skip me"),
+            persisted_session_msg("user", "   "),
+        ]);
+
+        assert_eq!(app.prod_chat_messages.len(), 4);
+        assert_eq!(app.prod_chat_messages[0].role, Role::System);
+        assert_eq!(app.prod_chat_messages[0].text, "context");
+        assert_eq!(app.prod_chat_messages[1].role, Role::User);
+        assert_eq!(app.prod_chat_messages[1].text, "hello");
+        assert_eq!(app.prod_chat_messages[2].role, Role::Assistant);
+        assert_eq!(app.prod_chat_messages[2].text, "hi there");
+        assert_eq!(app.prod_chat_messages[3].role, Role::ToolCall);
+        assert_eq!(app.prod_chat_messages[3].text, "read_file ok");
+        assert!(app.prod_chat_messages.iter().all(|m| m.tool_name.is_none()));
+    }
+
+    #[test]
+    fn hydrate_chat_history_does_not_clobber_live_chat() {
+        let mut app = App::new();
+        app.prod_chat_messages.push(ChatMessage {
+            role: Role::User,
+            text: "already typed".to_string(),
+            tool_name: None,
+        });
+
+        app.hydrate_chat_history_if_empty(vec![persisted_session_msg("Assistant", "old reply")]);
+
+        assert_eq!(app.prod_chat_messages.len(), 1);
+        assert_eq!(app.prod_chat_messages[0].role, Role::User);
+        assert_eq!(app.prod_chat_messages[0].text, "already typed");
+    }
+
+    #[test]
     fn chat_shift_enter_inserts_newline_and_plain_enter_sends() {
         let mut app = App::new();
         app.onboarding_complete = true;
@@ -4407,6 +4782,44 @@ persona = "Innovator"
     }
 
     #[test]
+    fn chat_alt_enter_and_ctrl_j_insert_newline_fallbacks() {
+        let mut app = App::new();
+        app.onboarding_complete = true;
+        app.prod_active_tab = 0;
+        app.prod_active_adv = None;
+        app.prod_adv_detail = None;
+
+        for c in "alpha".chars() {
+            app.handle_key_mods(KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        app.handle_key_mods(KeyCode::Enter, KeyModifiers::ALT);
+        for c in "beta".chars() {
+            app.handle_key_mods(KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        app.handle_key_mods(KeyCode::Char('j'), KeyModifiers::CONTROL);
+        for c in "gamma".chars() {
+            app.handle_key_mods(KeyCode::Char(c), KeyModifiers::NONE);
+        }
+
+        assert_eq!(
+            app.prod_chat_input,
+            "alpha
+beta
+gamma"
+        );
+        assert!(app.prod_chat_messages.is_empty());
+    }
+
+    #[test]
+    fn chat_newline_hint_tracks_keyboard_enhancement_support() {
+        let mut app = App::new();
+        assert_eq!(app.chat_newline_hint(), "⌥↵/Ctrl+J");
+
+        app.prod_keyboard_enhancement_enabled = true;
+        assert_eq!(app.chat_newline_hint(), "⇧↵/⌥↵/Ctrl+J");
+    }
+
+    #[test]
     fn chat_mouse_wheel_scrolls_chat_only() {
         let mut app = App::new();
         app.onboarding_complete = true;
@@ -4419,6 +4832,13 @@ persona = "Innovator"
         });
 
         app.handle_mouse_prod(MouseEventKind::ScrollUp);
+        assert_eq!(
+            app.prod_chat_scroll, 0,
+            "wheel events are ignored until mouse capture is enabled"
+        );
+
+        assert!(app.toggle_mouse_capture());
+        app.handle_mouse_prod(MouseEventKind::ScrollUp);
         assert_eq!(app.prod_chat_scroll, 3);
 
         app.handle_mouse_prod(MouseEventKind::ScrollDown);
@@ -4429,6 +4849,38 @@ persona = "Innovator"
         assert_eq!(
             app.prod_chat_scroll, 0,
             "wheel scrolling is chat-tab only for now"
+        );
+    }
+
+    #[test]
+    fn chat_mouse_capture_toggle_releases_native_selection_path() {
+        let mut app = App::new();
+        app.onboarding_complete = true;
+        app.prod_active_tab = 0;
+        app.prod_active_adv = None;
+        app.prod_adv_detail = None;
+        app.prod_chat_messages.push(ChatMessage {
+            role: Role::Assistant,
+            text: (0..80).map(|i| format!("line{i}\n")).collect::<String>(),
+            tool_name: None,
+        });
+
+        assert!(!app.prod_mouse_capture_enabled);
+        app.handle_mouse_prod(MouseEventKind::ScrollUp);
+        assert_eq!(
+            app.prod_chat_scroll, 0,
+            "mouse events are ignored while capture is released"
+        );
+
+        assert!(app.toggle_mouse_capture());
+        app.handle_mouse_prod(MouseEventKind::ScrollUp);
+        assert_eq!(app.prod_chat_scroll, 3);
+
+        assert!(!app.toggle_mouse_capture());
+        app.handle_mouse_prod(MouseEventKind::ScrollUp);
+        assert_eq!(
+            app.prod_chat_scroll, 3,
+            "mouse events stop changing scroll after capture is released again"
         );
     }
 
@@ -4556,6 +5008,8 @@ persona = "Innovator"
                 stream_state: app.prod_stream_state,
                 scroll_offset: 0,
                 slash_open: false,
+                newline_hint: "⌥↵/Ctrl+J",
+                mouse_capture_enabled: true,
                 cursor_on: false,
                 anim_tick: 0,
                 tool_feed: &[],
@@ -4575,7 +5029,7 @@ persona = "Innovator"
             for x in 0..buf.area.width {
                 let cell = &buf[(x, y)];
                 let symbol = cell.symbol();
-                if symbol.starts_with('F') {
+                if field_style.is_none() && symbol.starts_with('F') {
                     field_style = Some(cell.style());
                 }
                 text.push_str(symbol);
@@ -4758,7 +5212,11 @@ persona = "The Strategist"
         // DIRTY: Providers (long list) -> clear_body_region -> Welcome, all into
         // one persistent buffer (replicating the dispatcher's body[1] path).
         let mut dirty = Buffer::empty(area);
-        ProviderScreen { selected: 0, ollama_detected: None }.render(area, &mut dirty);
+        ProviderScreen {
+            selected: 0,
+            ollama_detected: None,
+        }
+        .render(area, &mut dirty);
         clear_body_region(area, &mut dirty);
         WelcomeScreen {
             existing_config: false,
@@ -5069,5 +5527,4 @@ onboarding_complete = false
         app.handle_key_prod(KeyCode::Char('h'));
         assert_eq!(app.prod_memory_subtab, prod::MemorySubTab::Workspace);
     }
-
 }

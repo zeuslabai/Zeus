@@ -6,7 +6,7 @@
 //!     Port field + port-in-use error line,
 //!   • FEATURES: 3 pill toggles (Agent Processing Loop ON · WebUI Co-host ON ·
 //!     MCP Server OFF) with labels+descs, 1/2/3 toggle them,
-//!   • INSTALL AS SERVICE: 4-col card grid (launchd/systemd/rc.d/Manual) +
+//!   • INSTALL AS SERVICE: service card grid (launchd/systemd/rc.d/WIN/Manual) +
 //!     "WILL INSTALL {path}" box reflecting the selected service,
 //!   • ←/→ moves the service-grid selection (NOT the step),
 //!   • ESC backs out one step (does not quit),
@@ -18,6 +18,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use zeus_tui::App;
 use zeus_tui::app::frame;
+use zeus_tui::screens::gateway::GatewayScreen;
 
 use crossterm::event::KeyCode;
 
@@ -48,6 +49,26 @@ fn goto_gateway(app: &mut App) {
     assert_eq!(
         app.current_step, GATEWAY_STEP,
         "failed to reach Gateway step"
+    );
+}
+
+fn service_mode(id: &str) -> usize {
+    GatewayScreen::service_mode_for_id(id)
+        .unwrap_or_else(|| panic!("gateway service id `{id}` must exist"))
+}
+
+fn select_service(app: &mut App, id: &str) {
+    let target = service_mode(id);
+    while app.gateway_screen.service_mode < target {
+        app.handle_key(KeyCode::Right);
+    }
+    while app.gateway_screen.service_mode > target {
+        app.handle_key(KeyCode::Left);
+    }
+    assert_eq!(
+        app.gateway_screen.service_mode,
+        target,
+        "should select gateway service `{id}`"
     );
 }
 
@@ -196,27 +217,48 @@ fn gateway_feature_toggle_keys_flip_pills() {
     );
 }
 
-// ── INSTALL AS SERVICE: 4-col grid + WILL INSTALL box ──────────────────────
+// ── INSTALL AS SERVICE: service grid + WILL INSTALL box ────────────────────
 
 #[test]
 fn gateway_service_grid_and_will_install_box() {
     let mut app = App::new();
     goto_gateway(&mut app);
     let screen = render(&app);
-    // All 4 service glyphs render (4-col grid).
-    for glyph in ["MAC", "LIN", "BSD"] {
+    // Service glyphs render, including the Windows card added after the original 4-card set.
+    for glyph in ["MAC", "LIN", "BSD", "WIN"] {
         assert!(screen.contains(glyph), "service glyph {glyph} missing");
     }
     assert!(screen.contains("launchd"), "launchd service name missing");
     assert!(screen.contains("systemd"), "systemd service name missing");
     assert!(screen.contains("rc.d"), "rc.d service name missing");
+    assert!(screen.contains("Task Scheduler"), "Task Scheduler service name missing");
     assert!(screen.contains("Manual"), "Manual service name missing");
-    // Default selection = launchd (idx 0) → WILL INSTALL box shows its path.
-    assert!(screen.contains("WILL INSTALL"), "WILL INSTALL box missing");
-    assert!(
-        screen.contains("ai.zeuslab.gateway.plist"),
-        "launchd install path missing from WILL INSTALL box"
+    // Default selection follows the current OS and should show that service's install path.
+    assert_eq!(
+        app.gateway_screen.service_mode,
+        GatewayScreen::default_service_mode(),
+        "default service mode should match the platform default"
     );
+    let default_path = match app.gateway_screen.service_mode {
+        idx if idx == service_mode("launchd") => GatewayScreen::service_path_for_id("launchd"),
+        idx if idx == service_mode("systemd") => GatewayScreen::service_path_for_id("systemd"),
+        idx if idx == service_mode("rcd") => GatewayScreen::service_path_for_id("rcd"),
+        idx if idx == service_mode("schtasks") => GatewayScreen::service_path_for_id("schtasks"),
+        idx if idx == service_mode("manual") => GatewayScreen::service_path_for_id("manual"),
+        idx => panic!("unexpected default service mode {idx}"),
+    };
+    if let Some(path) = default_path {
+        assert!(screen.contains("WILL INSTALL"), "WILL INSTALL box missing");
+        assert!(
+            screen.contains(path),
+            "default service install path missing from WILL INSTALL box"
+        );
+    } else {
+        assert!(
+            !screen.contains("WILL INSTALL"),
+            "manual default should not render WILL INSTALL"
+        );
+    }
 }
 
 // ── ←/→ moves the service-grid selection, NOT the step ─────────────────────
@@ -225,20 +267,23 @@ fn gateway_service_grid_and_will_install_box() {
 fn gateway_arrow_moves_service_not_step() {
     let mut app = App::new();
     goto_gateway(&mut app);
-    assert_eq!(
-        app.gateway_screen.service_mode, 0,
-        "default service = launchd"
-    );
-    // → moves to systemd (idx 1), step unchanged.
+    select_service(&mut app, "launchd");
+    assert_eq!(app.current_step, GATEWAY_STEP, "service selection must not step-nav");
+    // → moves to systemd, step unchanged.
     app.handle_key(KeyCode::Right);
     assert_eq!(
-        app.gateway_screen.service_mode, 1,
+        app.gateway_screen.service_mode,
+        service_mode("systemd"),
         "→ should select systemd"
     );
     assert_eq!(app.current_step, GATEWAY_STEP, "→ must not step-nav");
-    // → again to rc.d (idx 2). Its install path replaces the WILL INSTALL box.
+    // → again to rc.d. Its install path replaces the WILL INSTALL box.
     app.handle_key(KeyCode::Right);
-    assert_eq!(app.gateway_screen.service_mode, 2, "→ should select rc.d");
+    assert_eq!(
+        app.gateway_screen.service_mode,
+        service_mode("rcd"),
+        "→ should select rc.d"
+    );
     let screen = render(&app);
     assert!(
         screen.contains("zeus_gateway"),
@@ -247,7 +292,8 @@ fn gateway_arrow_moves_service_not_step() {
     // ← moves back to systemd, step still unchanged.
     app.handle_key(KeyCode::Left);
     assert_eq!(
-        app.gateway_screen.service_mode, 1,
+        app.gateway_screen.service_mode,
+        service_mode("systemd"),
         "← should move back to systemd"
     );
     assert_eq!(app.current_step, GATEWAY_STEP, "← must not step-back");
@@ -257,11 +303,8 @@ fn gateway_arrow_moves_service_not_step() {
 fn gateway_manual_service_has_no_install_box() {
     let mut app = App::new();
     goto_gateway(&mut app);
-    // Walk to Manual (idx 3) — it has path=None → no WILL INSTALL box.
-    app.handle_key(KeyCode::Right);
-    app.handle_key(KeyCode::Right);
-    app.handle_key(KeyCode::Right);
-    assert_eq!(app.gateway_screen.service_mode, 3, "should reach Manual");
+    // Select Manual by service id — it has path=None → no WILL INSTALL box.
+    select_service(&mut app, "manual");
     let screen = render(&app);
     assert!(
         !screen.contains("WILL INSTALL"),

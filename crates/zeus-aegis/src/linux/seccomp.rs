@@ -236,6 +236,16 @@ impl SeccompFilter {
             libc::SYS_uname,
             libc::SYS_sysinfo,
             libc::SYS_ioctl,
+            // Post-glibc-2.33 arrivals that glibc issues unconditionally at
+            // startup or in common paths. libc::SYS_* resolves per-target at
+            // compile time (verified: statx 291/332, rseq 293/334,
+            // clone3 435/435, faccessat2 439/439, epoll_pwait2 441/441 on
+            // aarch64/x86-64 respectively), so no per-arch cfg is needed.
+            libc::SYS_statx,        // statx(); missing this crash-loops glibc stat fallback
+            libc::SYS_rseq,         // restartable sequences; glibc registers at startup (2.35+)
+            libc::SYS_clone3,       // modern clone; used by posix_spawn / fork paths
+            libc::SYS_faccessat2,   // access()/eaccess() on glibc 2.33+
+            libc::SYS_epoll_pwait2, // epoll_wait with timespec timeout
         ];
 
         for syscall in standard {
@@ -288,6 +298,12 @@ impl SeccompFilter {
             // Misc
             libc::SYS_getrandom,
             libc::SYS_futex,
+            // Post-glibc-2.33 glibc-essential arrivals (see Standard for numbers)
+            libc::SYS_statx,
+            libc::SYS_rseq,
+            libc::SYS_clone3,
+            libc::SYS_faccessat2,
+            libc::SYS_epoll_pwait2,
         ];
 
         for syscall in strict {
@@ -357,12 +373,36 @@ impl SeccompFilter {
                 // Allow action
                 filter.push(Self::bpf_ret(SECCOMP_RET_ALLOW));
             }
-            SandboxLevel::Standard | SandboxLevel::Strict | SandboxLevel::Paranoid => {
-                // Allowlist mode: only allow specific syscalls
-                // Load syscall number
+            SandboxLevel::Standard => {
+                // Allowlist mode, but a miss degrades to a *failed operation*
+                // (EPERM) instead of killing the whole gateway. A sandbox should
+                // deny an op, not nuke the process — an un-allowlisted syscall
+                // returns EPERM and the caller sees a normal -1/EPERM failure.
                 filter.push(Self::bpf_load_syscall_nr());
 
-                // Build allowlist checks
+                let syscalls: Vec<i64> = self.allowed_syscalls.iter().copied().collect();
+                let total = syscalls.len();
+
+                for (i, &syscall) in syscalls.iter().enumerate() {
+                    let remaining = total - i;
+                    filter.push(Self::bpf_jeq(
+                        syscall as u32,
+                        (remaining) as u8, // jt: jump to allow
+                        0,                 // jf: continue checking
+                    ));
+                }
+
+                // Default: deny with EPERM (not kill)
+                filter.push(Self::bpf_ret(Self::errno_ret(libc::EPERM as u32)));
+                // Allow action
+                filter.push(Self::bpf_ret(SECCOMP_RET_ALLOW));
+            }
+            SandboxLevel::Strict | SandboxLevel::Paranoid => {
+                // Allowlist mode: only allow specific syscalls, kill on miss.
+                // Strict/Paranoid are for locked-down payloads where an unexpected
+                // syscall indicates a real compromise, so the hard kill is correct.
+                filter.push(Self::bpf_load_syscall_nr());
+
                 let syscalls: Vec<i64> = self.allowed_syscalls.iter().copied().collect();
                 let total = syscalls.len();
 
@@ -412,6 +452,15 @@ impl SeccompFilter {
             jf: 0,
             k: value,
         }
+    }
+
+    /// Compose a SECCOMP_RET_ERRNO return value carrying the given errno.
+    ///
+    /// The errno travels in the low 16 bits of the return value; the kernel
+    /// delivers it to the syscall caller as a normal -1/errno failure
+    /// (captured in a SIGSYS-free way), so the process survives.
+    fn errno_ret(errno: u32) -> u32 {
+        SECCOMP_RET_ERRNO | (errno & 0x0000_ffff)
     }
 }
 
@@ -582,5 +631,121 @@ mod tests {
         let status = status();
         // On most systems, seccomp should be available
         assert!(status.available || status.mode == SeccompMode::Unknown);
+    }
+
+    // --- #400: post-glibc-2.39 syscalls + Standard EPERM-on-deny ---
+
+    /// The default action of a built filter is the `k` of the second-to-last
+    /// RET instruction (last is always SECCOMP_RET_ALLOW).
+    fn default_action(filter: &SeccompFilter) -> u32 {
+        let prog = filter.build_filter();
+        // Expect at least [load, <checks...>, default-ret, allow-ret]
+        assert!(prog.len() >= 3, "filter program too short: {}", prog.len());
+        let allow = &prog[prog.len() - 1];
+        assert_eq!(allow.k, SECCOMP_RET_ALLOW, "final insn must be ALLOW");
+        prog[prog.len() - 2].k
+    }
+
+    #[test]
+    fn test_standard_includes_post_glibc_239_syscalls() {
+        let filter = SeccompFilter::new(SandboxLevel::Standard);
+        for sc in [
+            libc::SYS_statx,
+            libc::SYS_rseq,
+            libc::SYS_clone3,
+            libc::SYS_faccessat2,
+            libc::SYS_epoll_pwait2,
+        ] {
+            assert!(
+                filter.allowed_syscalls.contains(&sc),
+                "Standard must allow syscall {}",
+                sc
+            );
+        }
+    }
+
+    #[test]
+    fn test_strict_includes_post_glibc_239_syscalls() {
+        let filter = SeccompFilter::new(SandboxLevel::Strict);
+        for sc in [
+            libc::SYS_statx,
+            libc::SYS_rseq,
+            libc::SYS_clone3,
+            libc::SYS_faccessat2,
+            libc::SYS_epoll_pwait2,
+        ] {
+            assert!(
+                filter.allowed_syscalls.contains(&sc),
+                "Strict must allow syscall {}",
+                sc
+            );
+        }
+    }
+
+    #[test]
+    fn test_standard_default_action_is_eperm_not_kill() {
+        let filter = SeccompFilter::new(SandboxLevel::Standard);
+        let action = default_action(&filter);
+        assert_eq!(
+            action,
+            SeccompFilter::errno_ret(libc::EPERM as u32),
+            "Standard default must be ERRNO(EPERM), got {:#x}",
+            action
+        );
+        // And it must NOT be the process-killing action.
+        assert_ne!(action, SECCOMP_RET_KILL_PROCESS);
+    }
+
+    #[test]
+    fn test_standard_non_allowlisted_syscall_falls_to_eperm() {
+        // ptrace is NOT in the Standard allowlist; the program must still end
+        // in ERRNO(EPERM) (deny) rather than KILL_PROCESS.
+        let filter = SeccompFilter::new(SandboxLevel::Standard);
+        assert!(
+            !filter.allowed_syscalls.contains(&libc::SYS_ptrace),
+            "test premise: ptrace must not be Standard-allowed"
+        );
+        assert_eq!(
+            default_action(&filter),
+            SeccompFilter::errno_ret(libc::EPERM as u32)
+        );
+    }
+
+    #[test]
+    fn test_strict_and_paranoid_still_kill_on_miss() {
+        // Strict/Paranoid keep the hard kill — an unexpected syscall there
+        // signals a real compromise.
+        for level in [SandboxLevel::Strict, SandboxLevel::Paranoid] {
+            let filter = SeccompFilter::new(level);
+            assert_eq!(
+                default_action(&filter),
+                SECCOMP_RET_KILL_PROCESS,
+                "{:?} must still kill on non-allowlisted syscall",
+                level
+            );
+        }
+    }
+
+    #[test]
+    fn test_errno_ret_layout() {
+        // ERRNO return carries the errno in the low 16 bits.
+        assert_eq!(
+            SeccompFilter::errno_ret(libc::EPERM as u32),
+            SECCOMP_RET_ERRNO | (libc::EPERM as u32)
+        );
+        // High 16 bits hold the action class.
+        assert_eq!(
+            SeccompFilter::errno_ret(libc::EPERM as u32) & 0xffff_0000,
+            SECCOMP_RET_ERRNO
+        );
+    }
+
+    #[test]
+    fn test_statx_flows_through_standard() {
+        // "statx flows through" == statx is in the allowlist AND the default
+        // action (which statx will never hit) is non-fatal anyway.
+        let filter = SeccompFilter::new(SandboxLevel::Standard);
+        assert!(filter.allowed_syscalls.contains(&libc::SYS_statx));
+        assert_ne!(default_action(&filter), SECCOMP_RET_KILL_PROCESS);
     }
 }

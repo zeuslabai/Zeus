@@ -38,16 +38,31 @@ struct SecurityLevel {
     recommended: bool,
 }
 
-/// All 4 security levels from the JSX prototype.
+/// All 5 real `zeus_aegis::sandbox::SandboxLevel` values, in the enum's own
+/// ascending-strictness order (None < Basic < Standard < Strict < Paranoid —
+/// see zeus-aegis/src/sandbox.rs). #401: the prior 4-entry list here
+/// (strict/standard/permissive/custom) was a UI-only vocabulary that could
+/// never reach "basic" or "paranoid", and "custom" had no real aegis mapping
+/// at all — `config_level_value()` silently fell back to "standard" for it.
 const SECURITY_LEVELS: &[SecurityLevel] = &[
     SecurityLevel {
-        id: "strict",
-        name: "Strict",
-        glyph: "STR",
-        color: theme::RED,
-        sub: "Shared-machine fleet bots",
-        blocked: &["shell", "web_fetch", "apply_patch", "fs_write outside workspace"],
-        allowed: &["fs_read in workspace", "memory ops", "channel send"],
+        id: "none",
+        name: "None",
+        glyph: "NON",
+        color: theme::DIM,
+        sub: "Development only — no sandboxing",
+        blocked: &[],
+        allowed: &["everything", "approval pipeline still active"],
+        recommended: false,
+    },
+    SecurityLevel {
+        id: "basic",
+        name: "Basic",
+        glyph: "BSC",
+        color: theme::YELLOW,
+        sub: "Block dangerous operations",
+        blocked: &["known-destructive shell patterns"],
+        allowed: &["all read/write", "shell (filtered)", "web_fetch", "apply_patch"],
         recommended: false,
     },
     SecurityLevel {
@@ -61,23 +76,23 @@ const SECURITY_LEVELS: &[SecurityLevel] = &[
         recommended: true,
     },
     SecurityLevel {
-        id: "permissive",
-        name: "Permissive",
-        glyph: "PRM",
-        color: theme::YELLOW,
-        sub: "Sandbox / research",
-        blocked: &[],
-        allowed: &["everything", "approval pipeline still active"],
+        id: "strict",
+        name: "Strict",
+        glyph: "STR",
+        color: theme::RED,
+        sub: "Shared-machine fleet bots",
+        blocked: &["shell", "web_fetch", "apply_patch", "fs_write outside workspace"],
+        allowed: &["fs_read in workspace", "memory ops", "channel send"],
         recommended: false,
     },
     SecurityLevel {
-        id: "custom",
-        name: "Custom",
-        glyph: "CST",
-        color: theme::DIM,
-        sub: "Per-tool allowlist",
-        blocked: &["..."],
-        allowed: &["..."],
+        id: "paranoid",
+        name: "Paranoid",
+        glyph: "PAR",
+        color: theme::RED,
+        sub: "Minimal permissions — network allowlist only",
+        blocked: &["shell", "web_fetch", "apply_patch", "fs_write anywhere"],
+        allowed: &["fs_read in workspace", "memory ops"],
         recommended: false,
     },
 ];
@@ -86,6 +101,13 @@ const SECURITY_LEVELS: &[SecurityLevel] = &[
 pub struct SecurityScreen {
     /// Index of the currently selected security level.
     selected: usize,
+    /// #401: true once the user has actually interacted with this screen
+    /// (moved the selection) OR the screen was hydrated from a real existing
+    /// `cfg.aegis.sandbox_level` on disk. `collect_and_persist()` gates its
+    /// `[aegis]` write on this flag so that a no-op press-through on a config
+    /// with no `[aegis]` section (or one the user never touched) does not
+    /// fabricate a new section out of the wizard's cosmetic default.
+    touched: bool,
 }
 
 impl Default for SecurityScreen {
@@ -96,13 +118,15 @@ impl Default for SecurityScreen {
 
 impl SecurityScreen {
     pub fn new() -> Self {
-        // Default to "standard" (recommended: true) — index 1
-        Self { selected: 1 }
+        // Default to "standard" (recommended: true) — index 2 in the 5-level
+        // ordering (none, basic, standard, strict, paranoid).
+        Self { selected: 2, touched: false }
     }
 
     /// Move selection up (left in the grid).
     pub fn select_prev(&mut self) {
         self.selected = self.selected.saturating_sub(1);
+        self.touched = true;
     }
 
     /// Move selection down (right in the grid).
@@ -110,6 +134,7 @@ impl SecurityScreen {
         if self.selected < SECURITY_LEVELS.len() - 1 {
             self.selected += 1;
         }
+        self.touched = true;
     }
 
     /// Get the currently selected level id (UI identity).
@@ -117,16 +142,30 @@ impl SecurityScreen {
         SECURITY_LEVELS[self.selected].id
     }
 
-    /// Map the UI level id to a value aegis's `SandboxLevel` enum actually accepts
-    /// (none/basic/standard/strict/paranoid — see zeus-aegis/src/sandbox.rs FromStr).
-    /// `permissive` (nothing blocked) maps to "none"; `custom` has no enum variant
-    /// yet, so it falls back to the safe default "standard".
+    /// The UI level id IS the aegis `SandboxLevel` value — identity passthrough.
+    /// (none/basic/standard/strict/paranoid — see zeus-aegis/src/sandbox.rs
+    /// FromStr.) #401: this used to be a lossy 4→3 remap for a UI vocabulary
+    /// that didn't match the enum; now `SECURITY_LEVELS` IS the enum's 5
+    /// values so no translation is needed.
     pub fn config_level_value(&self) -> &'static str {
-        match self.selected_id() {
-            "strict" => "strict",
-            "standard" => "standard",
-            "permissive" => "none",
-            _ => "standard",
+        self.selected_id()
+    }
+
+    /// Whether the screen's current selection should be persisted — either
+    /// the user explicitly moved it, or it was hydrated from a real existing
+    /// `cfg.aegis.sandbox_level` on disk (see `hydrate_from_id`).
+    pub fn touched(&self) -> bool {
+        self.touched
+    }
+
+    /// Pre-select the card matching an existing on-disk `sandbox_level`
+    /// string, if it names one of the 5 real levels. Marks the screen
+    /// touched so `collect_and_persist()` preserves (rather than silently
+    /// overwrites) the operator's real prior choice on a no-op press-through.
+    pub fn hydrate_from_id(&mut self, id: &str) {
+        if let Some(idx) = SECURITY_LEVELS.iter().position(|l| l.id == id) {
+            self.selected = idx;
+            self.touched = true;
         }
     }
 
@@ -140,7 +179,7 @@ impl SecurityScreen {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),  // header + sub
-                Constraint::Length(14), // 4 level cards in a row
+                Constraint::Length(14), // 5 level cards in a row
                 Constraint::Min(4),    // selected detail panel
             ])
             .split(area);

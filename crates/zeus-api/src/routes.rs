@@ -16,6 +16,7 @@ use tower_http::services::ServeDir;
 
 use crate::SharedState;
 use crate::api_key::ApiKeyValidator;
+use crate::identity::{IdentityStore, Principal, Role};
 use crate::docs;
 use crate::handlers;
 use crate::node_ws;
@@ -67,10 +68,12 @@ pub fn create_router_with_auth(
 
     match auth_token {
         Some(token) => {
+            let identity_store = state_for_identity(&state);
             router = router.layer(middleware::from_fn(move |req, next| {
                 let token = token.clone();
                 let keys = api_keys.clone();
-                auth_middleware(req, next, token, keys)
+                let id_store = identity_store.clone();
+                auth_middleware(req, next, token, keys, id_store)
             }));
         }
         None => {
@@ -241,6 +244,22 @@ fn build_base_router(state: SharedState, rate_limit_config: Option<RateLimitConf
             "/v1/voice/recording-status",
             post(handlers::receive_recording_status),
         )
+        // STT / audio transcriptions (#421)
+        .route("/v1/stt", post(handlers::transcribe_audio_endpoint))
+        .route(
+            "/v1/audio/transcriptions",
+            post(handlers::openai_transcriptions),
+        )
+        // Twilio outbound calling control plane (#422)
+        .route("/v1/voice/call", post(handlers::create_call))
+        .route("/v1/voice/call/:id", get(handlers::get_call))
+        .route("/v1/voice/call/:id/hangup", post(handlers::hangup_call))
+        .route("/v1/voice/call/:id/say", post(handlers::say_on_call))
+        .route("/v1/voice/call/:id/dtmf", post(handlers::send_dtmf))
+        // Voice-meet — Google Meet via chrome or twilio dial-in (#428)
+        .route("/v1/voice/meet", post(handlers::create_meet))
+        .route("/v1/voice/meet/:id", get(handlers::get_meet))
+        .route("/v1/voice/meet/:id/leave", post(handlers::leave_meet))
         // Config
         .route("/v1/config", get(handlers::get_config))
         .route("/v1/config", put(handlers::update_config))
@@ -633,6 +652,7 @@ fn build_base_router(state: SharedState, rate_limit_config: Option<RateLimitConf
         // Gateway control (#178)
         .route("/v1/gateway/restart", post(handlers::gateway_handlers::gateway_restart))
         .route("/v1/gateway/status", get(handlers::gateway_handlers::gateway_status))
+        .route("/v1/daemon/install", post(handlers::gateway_handlers::daemon_install))
         .route("/v1/onboarding/setup", post(handlers::onboarding_setup))
         .route("/v1/onboarding/config", get(handlers::onboarding_config))
         .route("/v1/onboarding/personalities", get(handlers::onboarding_personalities))
@@ -964,6 +984,10 @@ fn build_base_router(state: SharedState, rate_limit_config: Option<RateLimitConf
             get(handlers::onchain_transactions),
         )
         .route(
+            "/v1/wallet/onchain/transfer/preview",
+            post(handlers::onchain_transfer_preview),
+        )
+        .route(
             "/v1/wallet/onchain/transfer",
             post(handlers::onchain_transfer),
         )
@@ -1022,6 +1046,15 @@ fn build_base_router(state: SharedState, rate_limit_config: Option<RateLimitConf
             "/v1/security/rotation-status",
             get(key_middleware::handle_rotation_status),
         )
+        // Org — multi-identity management (#432)
+        .route("/v1/org/invite", post(handlers::org::create_invite))
+        .route("/v1/org/accept", post(handlers::org::accept_invite))
+        .route("/v1/org/members", get(handlers::org::list_members))
+        .route(
+            "/v1/org/members/:id",
+            delete(handlers::org::remove_member),
+        )
+        .route("/v1/org/tokens", post(handlers::org::mint_token))
         // Cron jobs (Prometheus scheduler)
         .route("/v1/cron/jobs", get(handlers::cron::list_cron_jobs))
         .route("/v1/cron/jobs", post(handlers::cron::create_cron_job))
@@ -1285,6 +1318,7 @@ fn is_public_path(path: &str, method: &Method) -> bool {
         || normalized.starts_with("/docs")
         || (normalized.starts_with("/v1/auth/") && normalized.len() > "/v1/auth/".len())
         || (normalized.starts_with("/v1/onboarding/") && normalized.len() > "/v1/onboarding/".len())
+        || normalized == "/v1/org/accept"
         || normalized == "/v1/providers"
         || normalized == "/v1/config/providers"
         || normalized == "/v1/config/test"
@@ -1368,11 +1402,58 @@ async fn totp_2fa_middleware(
 /// Accepts either:
 /// - `Authorization: Bearer <token>` header (existing)
 /// - `X-Zeus-Api-Key: <key>` header (new)
+/// Extract the identity store from shared state (sync snapshot for middleware closures).
+fn state_for_identity(state: &SharedState) -> Option<IdentityStore> {
+    // SharedState is Arc<RwLock<AppState>>; we're on a sync path here so use
+    // try_read to avoid blocking — store is set once at startup.
+    state.try_read().ok().and_then(|s| s.identity_store.clone())
+}
+
+/// #432 role → route-class scope enforcement (coarse-grained).
+///
+/// Route classes:
+/// - admin+  : /v1/security/*, /v1/admin/*, /v1/org/* (invite/members management)
+/// - member+ : any mutating method (POST/PUT/PATCH/DELETE)
+/// - readonly: GET/HEAD/OPTIONS anywhere
+///
+/// Returns Err(403) when the principal's role is insufficient.
+fn enforce_scope(path: &str, method: &Method, principal: &Principal) -> Result<(), StatusCode> {
+    let admin_path = path.starts_with("/v1/security/")
+        || path.starts_with("/v1/admin/")
+        || (path.starts_with("/v1/org/")
+            && !path.starts_with("/v1/org/accept")
+            && !path.starts_with("/v1/org/tokens"));
+    if admin_path && principal.role < Role::Admin {
+        tracing::warn!(
+            principal = %principal.id,
+            role = principal.role.as_str(),
+            path,
+            "insufficient role for admin route"
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let is_mutation = matches!(
+        *method,
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    );
+    if is_mutation && principal.role < Role::Member {
+        tracing::warn!(
+            principal = %principal.id,
+            role = principal.role.as_str(),
+            path,
+            "insufficient role for mutation"
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(())
+}
+
 async fn auth_middleware(
     req: Request,
     next: Next,
     expected_token: String,
     api_keys: ApiKeyValidator,
+    identity_store: Option<IdentityStore>,
 ) -> Result<Response, StatusCode> {
     // Allow public endpoints without auth (using normalized path)
     if is_public_path(req.uri().path(), req.method()) {
@@ -1388,7 +1469,17 @@ async fn auth_middleware(
     if let Some(value) = auth_header
         && let Some(token) = value.strip_prefix("Bearer ")
     {
-        // Constant-time comparison to prevent timing attacks
+        // #432: identity store first — resolve token → principal (+ role)
+        if let Some(store) = &identity_store
+            && let Ok(Some(principal)) = store.resolve_token(token)
+        {
+            enforce_scope(req.uri().path(), req.method(), &principal)?;
+            let mut req = req;
+            req.extensions_mut().insert(principal);
+            return Ok(next.run(req).await);
+        }
+
+        // Fallback: root token (constant-time comparison to prevent timing attacks)
         if token.len() == expected_token.len()
             && token
                 .as_bytes()
@@ -1397,6 +1488,12 @@ async fn auth_middleware(
                 .fold(0u8, |acc, (a, b)| acc | (a ^ b))
                 == 0
         {
+            let mut req = req;
+            req.extensions_mut().insert(Principal {
+                id: "root".to_string(),
+                display_name: "root".to_string(),
+                role: Role::Root,
+            });
             return Ok(next.run(req).await);
         }
     }
@@ -1621,5 +1718,234 @@ mod c3_economy_gate_tests {
                 None => std::env::remove_var("ZEUS_MINT_ADMIN_TOKEN"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod multi_identity_tests {
+    use super::*;
+    use crate::identity::{IdentityStore, Principal, Role};
+    use axum::{body::Body, http::Request};
+
+    fn root_principal() -> Principal {
+        Principal {
+            id: "root".into(),
+            display_name: "root".into(),
+            role: Role::Root,
+        }
+    }
+
+    // ---- enforce_scope: role → route-class matrix ----
+
+    #[test]
+    fn scope_admin_routes_require_admin() {
+        let member = Principal {
+            id: "p1".into(),
+            display_name: "m".into(),
+            role: Role::Member,
+        };
+        // /v1/security/* = admin+
+        assert!(enforce_scope("/v1/security/rotate-key", &Method::POST, &member).is_err());
+        assert!(enforce_scope("/v1/security/rotate-key", &Method::POST, &root_principal()).is_ok());
+        let admin = Principal {
+            id: "p2".into(),
+            display_name: "a".into(),
+            role: Role::Admin,
+        };
+        assert!(enforce_scope("/v1/security/rotate-key", &Method::POST, &admin).is_ok());
+    }
+
+    #[test]
+    fn scope_org_management_requires_admin_but_accept_and_tokens_open() {
+        let member = Principal {
+            id: "p1".into(),
+            display_name: "m".into(),
+            role: Role::Member,
+        };
+        // invite + members = admin+
+        assert!(enforce_scope("/v1/org/invite", &Method::POST, &member).is_err());
+        assert!(enforce_scope("/v1/org/members", &Method::GET, &member).is_err());
+        // accept is public (exempted from admin class)
+        assert!(enforce_scope("/v1/org/accept", &Method::POST, &member).is_ok());
+        // tokens = any authenticated principal (self-mint)
+        assert!(enforce_scope("/v1/org/tokens", &Method::POST, &member).is_ok());
+    }
+
+    #[test]
+    fn scope_readonly_cannot_mutate_but_can_read() {
+        let ro = Principal {
+            id: "p3".into(),
+            display_name: "ro".into(),
+            role: Role::Readonly,
+        };
+        assert!(enforce_scope("/v1/sessions", &Method::GET, &ro).is_ok());
+        assert!(enforce_scope("/v1/sessions", &Method::POST, &ro).is_err());
+        assert!(enforce_scope("/v1/goals", &Method::DELETE, &ro).is_err());
+        assert!(enforce_scope("/v1/goals", &Method::PUT, &ro).is_err());
+        // member CAN mutate
+        let member = Principal {
+            id: "p4".into(),
+            display_name: "m".into(),
+            role: Role::Member,
+        };
+        assert!(enforce_scope("/v1/goals", &Method::POST, &member).is_ok());
+    }
+
+    // ---- middleware resolution order ----
+
+    fn req_with_bearer(path: &str, token: &str) -> Request<Body> {
+        Request::builder()
+            .uri(path)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    async fn ok_handler() -> &'static str {
+        "ok"
+    }
+
+    #[tokio::test]
+    async fn middleware_resolves_store_token_to_principal() {
+        let store = IdentityStore::in_memory().unwrap();
+        let (principal, raw) = store.create_principal("alice", Role::Member, None).unwrap();
+
+        let svc = axum::Router::new()
+            .route("/v1/x", axum::routing::get(ok_handler))
+            .layer(middleware::from_fn(move |req, next| {
+                auth_middleware(
+                    req,
+                    next,
+                    "root-token".to_string(),
+                    ApiKeyValidator::from_env(),
+                    Some(store.clone()),
+                )
+            }));
+
+        // Valid member token → GET allowed (readonly+ can GET)
+        let resp = tower::ServiceExt::oneshot(svc.clone(), req_with_bearer("/v1/x", &raw))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let _ = principal;
+    }
+
+    #[tokio::test]
+    async fn middleware_root_fallback_still_works() {
+        let store = IdentityStore::in_memory().unwrap();
+        let svc = axum::Router::new()
+            .route("/v1/x", axum::routing::get(ok_handler))
+            .layer(middleware::from_fn(move |req, next| {
+                auth_middleware(
+                    req,
+                    next,
+                    "root-token".to_string(),
+                    ApiKeyValidator::from_env(),
+                    Some(store.clone()),
+                )
+            }));
+
+        let resp = tower::ServiceExt::oneshot(svc, req_with_bearer("/v1/x", "root-token"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn middleware_rejects_unknown_token_401() {
+        let store = IdentityStore::in_memory().unwrap();
+        let svc = axum::Router::new()
+            .route("/v1/x", axum::routing::get(ok_handler))
+            .layer(middleware::from_fn(move |req, next| {
+                auth_middleware(
+                    req,
+                    next,
+                    "root-token".to_string(),
+                    ApiKeyValidator::from_env(),
+                    Some(store.clone()),
+                )
+            }));
+
+        let resp = tower::ServiceExt::oneshot(svc, req_with_bearer("/v1/x", "zk_bogus"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn middleware_disabled_principal_token_rejected() {
+        let store = IdentityStore::in_memory().unwrap();
+        let (p, raw) = store.create_principal("bob", Role::Member, None).unwrap();
+        store.disable_principal(&p.id).unwrap();
+
+        let svc = axum::Router::new()
+            .route("/v1/x", axum::routing::get(ok_handler))
+            .layer(middleware::from_fn(move |req, next| {
+                auth_middleware(
+                    req,
+                    next,
+                    "root-token".to_string(),
+                    ApiKeyValidator::from_env(),
+                    Some(store.clone()),
+                )
+            }));
+
+        let resp = tower::ServiceExt::oneshot(svc, req_with_bearer("/v1/x", &raw))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn middleware_member_forbidden_on_admin_route_403() {
+        let store = IdentityStore::in_memory().unwrap();
+        let (_p, raw) = store.create_principal("carol", Role::Member, None).unwrap();
+
+        let svc = axum::Router::new()
+            .route("/v1/security/rotate-key", axum::routing::post(ok_handler))
+            .layer(middleware::from_fn(move |req, next| {
+                auth_middleware(
+                    req,
+                    next,
+                    "root-token".to_string(),
+                    ApiKeyValidator::from_env(),
+                    Some(store.clone()),
+                )
+            }));
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/security/rotate-key")
+            .header(header::AUTHORIZATION, format!("Bearer {raw}"))
+            .body(Body::empty())
+            .unwrap();
+        let resp = tower::ServiceExt::oneshot(svc, req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn middleware_works_without_store_legacy_mode() {
+        // identity_store: None → root-token only (legacy single-token deploys unchanged)
+        let svc = axum::Router::new()
+            .route("/v1/x", axum::routing::get(ok_handler))
+            .layer(middleware::from_fn(move |req, next| {
+                auth_middleware(
+                    req,
+                    next,
+                    "root-token".to_string(),
+                    ApiKeyValidator::from_env(),
+                    None,
+                )
+            }));
+
+        let resp = tower::ServiceExt::oneshot(svc.clone(), req_with_bearer("/v1/x", "root-token"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let resp = tower::ServiceExt::oneshot(svc, req_with_bearer("/v1/x", "zk_anything"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }

@@ -617,15 +617,25 @@ pub async fn ws_handler(
     // WebSocket must check independently since it's upgraded before middleware runs.
     if let Ok(expected_token) = std::env::var("ZEUS_API_TOKEN") {
         let provided = params.get("token").map(|s| s.as_str()).unwrap_or("");
-        // Constant-time comparison
-        let valid = provided.len() == expected_token.len()
+
+        // #432 WS parity: identity-store tokens authenticate too.
+        let store_valid = {
+            let s = state.read().await;
+            match &s.identity_store {
+                Some(store) => matches!(store.resolve_token(provided), Ok(Some(_))),
+                None => false,
+            }
+        };
+
+        // Constant-time comparison against root token
+        let root_valid = provided.len() == expected_token.len()
             && provided
                 .as_bytes()
                 .iter()
                 .zip(expected_token.as_bytes())
                 .fold(0u8, |acc, (a, b)| acc | (a ^ b))
                 == 0;
-        if !valid {
+        if !root_valid && !store_valid {
             return Response::builder()
                 .status(axum::http::StatusCode::UNAUTHORIZED)
                 .body(axum::body::Body::from("Unauthorized"))

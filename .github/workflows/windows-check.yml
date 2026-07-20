@@ -1,0 +1,42 @@
+name: Windows Check
+
+on:
+  push:
+    branches: ["main", "feat/windows-*"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows-check:
+    name: "cargo check (Windows / tier1 crates)"
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-check
+
+      - name: cargo check tier1 crates (Windows MSVC)
+        run: >
+          cargo check --locked --target x86_64-pc-windows-msvc
+          -p zeus-core
+          -p zeus-tui
+          -p zeus-memory
+          -p zeus-wallet
+          -p zeus-sandbox
+          -p zeus-llm
+          -p zeus-api
+          -p zeus-prometheus
+          -p zeus-aegis
+          -p zeus-talos

@@ -87,8 +87,8 @@ tokio = { version = "1.43", features = ["full"] }
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["compat"] }
 tokio-native-tls = "0.3"
-tokio-rustls = "0.26"
-rustls = "0.23"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 webpki-roots = "0.26"
 futures = "0.3"
 futures-util = "0.3"
@@ -142,6 +142,7 @@ hostname = "0.4"
 hex = "0.4"
 tempfile = "3"
 libc = "0.2"
+windows-sys = { version = "0.61", features = ["Win32_System_Console", "Win32_Foundation"] }
 
 # OAuth/Crypto
 sha2 = "0.10"
@@ -167,7 +168,7 @@ rusqlite = { version = "0.31", features = ["bundled", "functions"] }
 
 # Chat adapters
 serenity = { version = "0.12", features = ["voice"] }
-songbird = { version = "0.4", default-features = false, features = ["driver", "receive", "gateway", "serenity", "native"] }
+songbird = { version = "0.4", default-features = false, features = ["driver", "receive", "gateway", "serenity", "rustls"] }
 slack-morphism = "2.0"
 lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "tokio1", "builder", "hostname", "pool", "smtp-transport"] }
 async-imap = "0.10"
@@ -229,7 +230,8 @@ name = "zeus"
 path = "src/main.rs"
 
 [features]
-default = ["audio", "mcp"]
+default = ["audio", "mcp", "voice"]
+voice = ["zeus-channels/voice", "zeus-agent/voice"]
 audio = [
     "zeus-agent/audio",
     "zeus-api/audio",
@@ -286,6 +288,11 @@ hostname.workspace = true
 libc.workspace = true
 serde = { workspace = true }
 base64 = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# #308: vendored openssl for windows cross-builds (transitive via solana-secp256r1-program)
+openssl = { version = "0.10", features = ["vendored"] }
+windows-sys.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

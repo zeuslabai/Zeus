@@ -359,24 +359,26 @@ else
             fi
             ;;
         FreeBSD)
-            # #333 invariants: name which check failed; never leave rc.d
-            # enabled around a nohup gateway (reboot would start a SECOND
-            # writer via rc.d while the nohup one still runs).
+            # #333/#409 invariants: FreeBSD rc.d restart must be supervised
+            # and must fail loud. Do not mask an rc.d failure with nohup: the
+            # rc.d prestart creates root-owned log files, so a non-root start
+            # can stop the old gateway and then silently fail to bring it back.
             FBSD_RCD=/usr/local/etc/rc.d/zeus_gateway
             if [ -f "$FBSD_RCD" ]; then
+                if [ "$(id -u)" -ne 0 ] && [ -z "$SUDO" ]; then
+                    fail "FreeBSD rc.d gateway restart requires root or sudo; sudo not found, refusing to leave gateway half-restarted"
+                fi
                 $SUDO sysrc zeus_gateway_enable=YES >/dev/null 2>&1 || \
-                    warn "sysrc zeus_gateway_enable=YES failed (sudo denied?)"
-                if $SUDO service zeus_gateway restart >/dev/null 2>&1; then
+                    fail "FreeBSD rc.d gateway restart failed: could not enable zeus_gateway (try: sudo sysrc zeus_gateway_enable=YES)"
+
+                # Prefer explicit stop+sudo start over `service restart` so the
+                # start half is definitely escalated and its failure is not
+                # hidden by rc.d restart semantics.
+                $SUDO service zeus_gateway stop >/dev/null 2>&1 || true
+                if $SUDO service zeus_gateway start >/dev/null 2>&1; then
                     ok "Gateway restarted via rc.d (zeus_gateway)"
                 else
-                    warn "rc.d path unavailable: 'service zeus_gateway restart' failed (sudo denied or rc script error — check: sudo service zeus_gateway restart)"
-                    # Stop any half-started service copy and DISABLE rc.d so a
-                    # reboot doesn't spawn a duplicate alongside the nohup one.
-                    $SUDO service zeus_gateway stop >/dev/null 2>&1 || true
-                    $SUDO sysrc zeus_gateway_enable=NO >/dev/null 2>&1 || \
-                        warn "could not disable rc.d (zeus_gateway_enable stays YES) — a reboot may start a DUPLICATE gateway"
-                    nohup zeus gateway >"$ZEUS_HOME/logs/gateway.out.log" 2>"$ZEUS_HOME/logs/gateway.err.log" &
-                    warn "Gateway started via nohup — UNSUPERVISED: rc.d disabled to prevent reboot duplicates; re-enable with: sudo sysrc zeus_gateway_enable=YES && sudo service zeus_gateway start"
+                    fail "FreeBSD rc.d gateway start failed after update; gateway may be down (check: sudo service zeus_gateway status; sudo service zeus_gateway start)"
                 fi
             else
                 warn "rc.d path unavailable: rc script missing ($FBSD_RCD)"
@@ -422,7 +424,10 @@ else
         sleep 2
         i=$((i + 1))
     done
-    if echo "$HEALTH" | grep -q '"ok"'; then
+    HEALTH_OK=false
+    echo "$HEALTH" | grep -q '"ok"' && HEALTH_OK=true
+
+    if $HEALTH_OK; then
         # #333: count gateway processes — head -1 on the PID list masked
         # duplicate writers. >1 gateway = two processes sharing state dirs.
         # NOTE: ps-based matching, not pgrep -f — verified on macOS that
@@ -434,14 +439,26 @@ else
         if [ "$GWCOUNT" -gt 1 ]; then
             warn "DUPLICATE GATEWAYS: $GWCOUNT 'zeus gateway' processes running (PIDs: $(printf '%s' "$GWPIDS" | tr '\n' ' '))"
             warn "Two gateways sharing ~/.zeus state — kill the unmanaged one: pkill -f 'zeus gateway' then restart via the service manager"
+            if [ "$OS" = "FreeBSD" ]; then
+                fail "FreeBSD gateway restart failed invariant: duplicate zeus gateway processes after restart"
+            fi
         else
             GWPID=$(printf '%s' "$GWPIDS" | head -1)
+            if [ -z "$GWPID" ] && [ "$OS" = "FreeBSD" ]; then
+                fail "FreeBSD gateway restart failed invariant: /health is OK but no 'zeus gateway' PID was found"
+            fi
             [ -n "$GWPID" ] || GWPID="?"
             ok "Health check OK (gateway PID $GWPID)"
         fi
     else
-        warn "Health check failed — gateway may still be starting"
-        info "Logs: tail -f $ZEUS_HOME/logs/gateway.err.log"
+        if [ "$OS" = "FreeBSD" ]; then
+            GWPIDS=$(ps ax -o pid=,args= 2>/dev/null | awk '/[z]eus gateway/ {print $1}')
+            GWCOUNT=$(printf '%s\n' "$GWPIDS" | grep -c . || true)
+            fail "FreeBSD gateway restart failed: /health did not return ok after restart (gateway pid count: $GWCOUNT). Check: sudo service zeus_gateway status; tail -f $ZEUS_HOME/logs/gateway.err.log"
+        else
+            warn "Health check failed — gateway may still be starting"
+            info "Logs: tail -f $ZEUS_HOME/logs/gateway.err.log"
+        fi
     fi
 fi
 
